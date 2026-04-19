@@ -2766,20 +2766,41 @@ def _check_result_task_condition_html(gdz_task_condition: str) -> str:
 
 
 async def _run_homework_text_answer_check(
-    update: Update,
+    update: Update | None,
     context: ContextTypes.DEFAULT_TYPE,
     *,
     user_id: int,
     chat_id: int,
     profile: user_storage.UserProfile,
     answer_plain: str,
+    engine: str = "auto",
 ) -> None:
-    """Отправка текстового ответа на POST /check как text/plain (тот же пайплайн, что и для файла)."""
-    reply_mid = update.message.message_id if update.message else None
+    """Отправка текстового ответа на POST /check как text/plain (тот же пайплайн, что и для файла).
+
+    `update` опционален: при первой отправке (callback `await_text_answer` → MessageHandler)
+    он есть, и статус-сообщение цепляется reply'ом к сообщению ученика; при повторной проверке
+    через кнопку «Проверить ещё раз (Cursor)» (callback `recheck_cursor`) update.message нет,
+    тогда сообщение шлётся без reply.
+    """
+    # Запоминаем последний текстовый ответ для кнопки «Проверить ещё раз (Cursor)»;
+    # если был фото-батч — снимаем его, чтобы recheck не пытался искать «лишние» file_id.
+    context.user_data[_LAST_CHECK_TEXT_ANSWER] = answer_plain
+    context.user_data.pop(_LAST_CHECK_FILE_IDS, None)
+    engine_norm = (engine or "auto").strip().lower() or "auto"
+    reply_mid = (
+        update.message.message_id if update is not None and update.message is not None else None
+    )
     bot = context.bot
+    if engine_norm == "cursor":
+        intro_html = (
+            "<b>Проверяю текстовый ответ через Cursor…</b>\n"
+            "<i>Cursor отвечает медленнее основной модели — пара минут это нормально.</i>"
+        )
+    else:
+        intro_html = "<b>Проверяю текстовый ответ…</b>\n<i>Подождите минуту.</i>"
     status_msg = await bot.send_message(
         chat_id,
-        "<b>Проверяю текстовый ответ…</b>\n<i>Подождите минуту.</i>",
+        intro_html,
         reply_to_message_id=reply_mid,
         parse_mode=ParseMode.HTML,
     )
@@ -2811,6 +2832,7 @@ async def _run_homework_text_answer_check(
         "gdz_verif_pages": gdz_vp,
         "gdz_verif_works": gdz_vw,
         "gdz_task_condition": gdz_tc,
+        "engine": engine_norm,
     }
     _check_url = f"{SERVER_URL.rstrip('/')}/check"
     outs: list[str] = []
@@ -2834,8 +2856,9 @@ async def _run_homework_text_answer_check(
             )
             elapsed = time.perf_counter() - t0
             logger.info(
-                "check text user_id=%s status=%s elapsed_s=%.2f chars=%s",
+                "check text user_id=%s engine=%s status=%s elapsed_s=%.2f chars=%s",
                 user_id,
+                engine_norm,
                 response.status_code,
                 elapsed,
                 len(answer_plain),
@@ -2899,7 +2922,11 @@ async def _run_homework_text_answer_check(
         raw_plain = raw_plain[: max(80, len(raw_plain) - max(50, len(full_html) - 4088))] + "..."
         body_html = telegram_format.markdownish_to_telegram_html(raw_plain)
         full_html = prefix + cond_html + body_html + suffix
-    check_kb = get_check_result_keyboard(prof, user_id)
+    check_kb = get_check_result_keyboard(
+        prof,
+        user_id,
+        cursor_recheck=_cursor_recheck_available(),
+    )
     try:
         await status_msg.edit_text(
             full_html,
@@ -2913,11 +2940,25 @@ async def _run_homework_text_answer_check(
             reply_markup=check_kb,
             parse_mode=ParseMode.HTML,
         )
-    # После основной (qwen) проверки стикер не отправляем — см. развилку
-    # в `_run_homework_check`. Стикер-награда теперь только за recheck/Cursor.
+    # Та же логика, что и в фото-флоу: стикер только при cursor+correct, иначе
+    # короткое уведомление; за основную (qwen) проверку — ничего.
+    if engine_norm == "cursor":
+        verdict = homework_check_status.homework_check_stats_result(body_raw)
+        sticker_sent = False
+        if verdict == "correct":
+            with suppress(Exception):
+                sticker_sent = await _send_recheck_reward_sticker(context, chat_id, user_id)
+        if not sticker_sent:
+            with suppress(Exception):
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="Повторная проверка завершена. См. результат выше.",
+                )
 
 
 _LAST_CHECK_FILE_IDS = "last_check_file_ids"
+# Последний текстовый ответ ученика (для кнопки «Проверить ещё раз (Cursor)» в text-flow).
+_LAST_CHECK_TEXT_ANSWER = "last_check_text_answer"
 
 
 async def _run_homework_check(
@@ -2932,8 +2973,10 @@ async def _run_homework_check(
 ) -> None:
     n_img = len(file_ids)
     # Запоминаем батч, чтобы пользователь мог нажать «Проверить ещё раз (Cursor)»
-    # — без этого кнопка не сможет восстановить тот же набор фото.
+    # — без этого кнопка не сможет восстановить тот же набор фото. Если был
+    # текстовый ответ — снимаем, чтобы recheck шёл по самой свежей попытке.
     context.user_data[_LAST_CHECK_FILE_IDS] = list(file_ids)
+    context.user_data.pop(_LAST_CHECK_TEXT_ANSWER, None)
     engine_norm = (engine or "auto").strip().lower() or "auto"
     if engine_norm == "cursor":
         intro = (
@@ -3147,8 +3190,7 @@ async def _run_homework_check(
         check_kb = get_check_result_keyboard(
             prof,
             user_id,
-            cursor_recheck=_cursor_recheck_available()
-            and bool(context.user_data.get(_LAST_CHECK_FILE_IDS)),
+            cursor_recheck=_cursor_recheck_available(),
         )
         try:
             await query.edit_message_text(
@@ -4357,23 +4399,35 @@ async def _button_callback_dispatch(
                 reply_markup=grade_keyboard(back_to_main=False),
             )
             return
-        cached = context.user_data.get(_LAST_CHECK_FILE_IDS) or []
-        file_ids = [str(x) for x in cached if x]
-        if not file_ids:
-            await _answer_query_once(
+        cached_files = context.user_data.get(_LAST_CHECK_FILE_IDS) or []
+        file_ids = [str(x) for x in cached_files if x]
+        cached_text = (context.user_data.get(_LAST_CHECK_TEXT_ANSWER) or "").strip()
+        if file_ids:
+            await _run_homework_check(
                 query,
-                text="Не нашёл фото последней проверки — загрузи их заново.",
-                show_alert=True,
+                context,
+                user_id=user_id,
+                chat_id=chat_id,
+                profile=profile,
+                file_ids=file_ids,
+                engine="cursor",
             )
             return
-        await _run_homework_check(
+        if cached_text:
+            await _run_homework_text_answer_check(
+                None,
+                context,
+                user_id=user_id,
+                chat_id=chat_id,
+                profile=profile,
+                answer_plain=cached_text,
+                engine="cursor",
+            )
+            return
+        await _answer_query_once(
             query,
-            context,
-            user_id=user_id,
-            chat_id=chat_id,
-            profile=profile,
-            file_ids=file_ids,
-            engine="cursor",
+            text="Не нашёл последнюю попытку — загрузи фото или ответь текстом ещё раз.",
+            show_alert=True,
         )
         return
 
