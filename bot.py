@@ -217,6 +217,28 @@ def _cursor_recheck_available() -> bool:
     return bool((os.getenv("VLLM_FALLBACK_BASE_URL") or "").strip())
 
 
+def _check_request_timeout_s(engine: str) -> float:
+    """Httpx-таймаут одного POST /check (или /check/summarize). Cursor-bridge заметно
+    медленнее основной модели — был случай ответа сервера за 151 с (см. логи 18:19),
+    а клиент с дефолтными 120 с уже отваливался по таймауту и терял почти готовый
+    результат. Поэтому для **engine=cursor** ждём дольше; значения переопределяются
+    через **`BOT_CHECK_TIMEOUT_AUTO_SEC`** / **`BOT_CHECK_TIMEOUT_CURSOR_SEC`**.
+    """
+    if (engine or "auto").strip().lower() == "cursor":
+        env_key, default_s = "BOT_CHECK_TIMEOUT_CURSOR_SEC", 360.0
+    else:
+        env_key, default_s = "BOT_CHECK_TIMEOUT_AUTO_SEC", 120.0
+    raw = (os.getenv(env_key) or "").strip()
+    if not raw:
+        return default_s
+    try:
+        v = float(raw)
+    except ValueError:
+        logger.warning("invalid %s=%r, falling back to %s s", env_key, raw, default_s)
+        return default_s
+    return v if v > 0 else default_s
+
+
 _FEEDBACK_WAITING = "feedback_waiting"
 _FEEDBACK_STAFF_WAIT = "feedback_staff_wait"
 _POLL_AWAIT_CAREER = "poll_await_career"
@@ -2839,7 +2861,7 @@ async def _run_homework_text_answer_check(
 
     try:
         async with httpx.AsyncClient(
-            timeout=120.0,
+            timeout=_check_request_timeout_s(engine_norm),
             transport=async_http_transport_ipv4_lookup(),
         ) as client:
             t0 = time.perf_counter()
@@ -3036,7 +3058,7 @@ async def _run_homework_check(
         outs: list[str] = []
 
         async with httpx.AsyncClient(
-            timeout=120.0,
+            timeout=_check_request_timeout_s(engine_norm),
             transport=async_http_transport_ipv4_lookup(),
         ) as client:
             for idx, file_id in enumerate(file_ids):
