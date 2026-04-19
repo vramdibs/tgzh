@@ -28,13 +28,6 @@ def _clear_env_for_unit_tests(monkeypatch: pytest.MonkeyPatch) -> None:
         # из юнитов; тесты, которым preocr нужен, включают переменную сами или мокают
         # `preocr_client.fetch_preocr_block`.
         "PREOCR_URL",
-        # IMAGE_GEN_* — аналогично VLLM_FALLBACK_*: иначе тесты на «not configured»
-        # ложно пройдут как «configured», если в .env уже задан реальный ключ.
-        "IMAGE_GEN_BASE_URL",
-        "IMAGE_GEN_API_KEY",
-        "IMAGE_GEN_MODEL",
-        "IMAGE_GEN_SIZE",
-        "IMAGE_GEN_TIMEOUT_SEC",
         # CHAT_MEMORY_* / MEMORY_DIR_BASE — иначе тесты «сна памяти» подхватят
         # реальные настройки (например, кастомный путь к каталогу памяти),
         # и unit-тесты, изолированные через tmp_path, начнут видеть «лишние»

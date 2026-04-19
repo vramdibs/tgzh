@@ -68,7 +68,7 @@ flowchart LR
 
     subgraph Compose["Docker Compose (tgzh-internal)"]
         bot["**tgzh-bot**<br/>polling, FSM, RAM-история чата"]
-        server["**tgzh-server** (FastAPI)<br/>/check, /chat/stream, /chat/once,<br/>/image/generate, /check/summarize,<br/>/check/quip, /health"]
+        server["**tgzh-server** (FastAPI)<br/>/check, /chat/stream, /chat/once,<br/>/check/summarize, /check/quip, /health"]
         pg[("**postgres** (или SQLite<br/>в томе tgzh-data)")]
         preocr["*tgzh-preocr*<br/>profile=preocr<br/>POST /v1/preocr"]
     end
@@ -77,14 +77,13 @@ flowchart LR
         vllm["**VLLM Qwen3-VL**<br/>POST /v1/chat/completions<br/>VLLM_BASE_URL"]
         bridge["*cursor-bridge*<br/>POST /v1/chat/completions<br/>VLLM_FALLBACK_BASE_URL"]
         cursorcli["*cursor-agent CLI*<br/>(headless, на хосте бриджа)"]
-        imgapi["*OpenAI-compat image API*<br/>POST /v1/images/generations<br/>IMAGE_GEN_BASE_URL<br/>(gpt-image-1, dall-e-3, …)"]
         tei["*TEI sentiment/emotion*<br/>POST /predict"]
         gdz["gdz.ru"]
     end
 
     user <-- "сообщения / inline" --> tg
     tg <-- "polling" --> bot
-    bot -- "POST /check, /check/summarize,<br/>/chat/stream, /chat/once, /image/generate" --> server
+    bot -- "POST /check, /check/summarize,<br/>/chat/stream, /chat/once" --> server
     bot <-- "SQL: профили, сессии, диалоги,<br/>отзывы, статистика" --> pg
     bot -- "HTTPS: каталог, оглавление,<br/>условия и картинки" --> gdz
     bot -- "POST /predict" --> tei
@@ -92,7 +91,6 @@ flowchart LR
     server -- "fallback / forced cursor" --> bridge
     bridge -- "subprocess --print" --> cursorcli
     server -- "POST /v1/preocr" --> preocr
-    server -- "POST /v1/images/generations" --> imgapi
 ```
 
 ### Что обязательно запустить и где
@@ -100,16 +98,15 @@ flowchart LR
 | Компонент | Обязательность | Где живёт | Чем рулится |
 |---|---|---|---|
 | **`tgzh-bot`** | всегда | Docker `tgzh-bot` (или `python3 bot.py` на хосте) | `BOT_TOKEN`, `SERVER_URL`, `DATABASE_URL` |
-| **`tgzh-server`** (FastAPI) | всегда | Docker `tgzh-server` (или `python3 server.py`) | `PORT`, `VLLM_*`, `PREOCR_URL`, `IMAGE_GEN_*` |
+| **`tgzh-server`** (FastAPI) | всегда | Docker `tgzh-server` (или `python3 server.py`) | `PORT`, `VLLM_*`, `PREOCR_URL` |
 | **PostgreSQL** *или* SQLite | одно из двух | `postgres`-контейнер либо том `tgzh-data` | `DATABASE_URL` (пусто → SQLite по `USER_DB_PATH`) |
 | **VLLM (Qwen3-VL)** | для проверки ДЗ при `AI_MOCK=0` | внешний хост (см. `VLLM_BASE_URL`) | `VLLM_BASE_URL`/`API_KEY`/`MODEL` |
-| *cursor-bridge* + *cursor-agent CLI* | для `/chat`, `/imagine`-не нужен, для recheck «Cursor» | хост `BRIDGE_HOST` (см. `discourse-cursor-bridge`) | `VLLM_FALLBACK_*` (включая `_BASE_URL`, `_API_KEY`, `_MODEL=cursor-agent`) |
+| *cursor-bridge* + *cursor-agent CLI* | для `/chat` и кнопки «Проверить ещё раз (Cursor)» | хост `BRIDGE_HOST` (см. `discourse-cursor-bridge`) | `VLLM_FALLBACK_*` (включая `_BASE_URL`, `_API_KEY`, `_MODEL=cursor-agent`) |
 | *tgzh-preocr* (PaddleOCR) | для recheck «Cursor» по фото; общий буст качества | Docker profile `preocr` | `PREOCR_URL=http://tgzh-preocr:8088`, `PREOCR_*` |
-| *OpenAI-compat image API* | для `/imagine` и кнопки «Сгенерировать фото» | любой провайдер (OpenAI/together/replicate/локальный SDXL) | `IMAGE_GEN_BASE_URL`, `IMAGE_GEN_API_KEY`, `IMAGE_GEN_MODEL`, `IMAGE_GEN_SIZE` |
 | *TEI sentiment / emotion* | украшает `/begemot` (тон отзывов) | внешние сервисы | `TEI_SENTIMENT_URL`, `TEI_EMOTION_URL` |
 | *Cursor IDE на десктопе* | **не требуется** | — | — |
 
-`docker compose up -d` поднимает `postgres` + `tgzh-server` + `tgzh-bot`. Чтобы добавить pre-OCR — `docker compose --profile preocr up -d --build`. Всё остальное (VLLM, bridge, image API, TEI) — внешние эндпоинты, поднимаются отдельно.
+`docker compose up -d` поднимает `postgres` + `tgzh-server` + `tgzh-bot`. Чтобы добавить pre-OCR — `docker compose --profile preocr up -d --build`. Всё остальное (VLLM, bridge, TEI) — внешние эндпоинты, поднимаются отдельно.
 
 ### Маршруты эндпоинтов по фичам
 
@@ -123,7 +120,6 @@ flowchart LR
 | `/chat` — стриминговый ИИ-ассистент | `/chat` + пароль | bot → `POST /chat/stream` (SSE-like) → bridge → cursor-agent | bot, server, bridge+CLI |
 | `/chat` — sleep памяти (`/sleep`, авто) | фоновая задача в боте | bot → `POST /chat/once` → bridge → cursor-agent | bot, server, bridge+CLI |
 | `/chat` — фото в чате | фото с подписью | bot → `POST /chat/stream` (multimodal user-msg, без preocr) → bridge → cursor-agent | bot, server, bridge+CLI |
-| `/imagine` / «Сгенерировать фото» | в активном `/chat` | bot → `POST /image/generate` → `POST /v1/images/generations` (внешний провайдер) | bot, server, **`IMAGE_GEN_*`-бэкенд** |
 | `/begemot` — отзывы | `/begemot` + пароль | bot → SQL (`user_feedback`, `feedback_ticket`) | bot, БД |
 | Тон/эмоции отзывов | новый текст в `/support` или 👎 | bot → `POST /predict` (TEI) → SQL `feedback_ticket_nlp` | bot, *(TEI опц.)*, БД |
 | «Показать ГДЗ», условие задания | в сценарии ДЗ | bot → HTTPS `gdz.ru`, кеш `GDZ_CACHE_DIR` | bot, исходящий 443 |
@@ -135,7 +131,7 @@ flowchart LR
 
 1. подключить STT-сервис (Whisper API, локальный `faster-whisper`, Yandex SpeechKit и т.п.) и завести env-блок `STT_*`;
 2. добавить `MessageHandler(filters.VOICE | filters.AUDIO, handle_voice_msg)`;
-3. в обработчике скачать `voice.ogg`, прогнать через STT, дальше передать как обычный `text` в текущие пути (`handle_homework_text`, `_handle_chat_user_message`, `imagine_cmd`).
+3. в обработчике скачать `voice.ogg`, прогнать через STT, дальше передать как обычный `text` в текущие пути (`handle_homework_text`, `_handle_chat_user_message`).
 
 Это самостоятельная фича, в текущей сборке её нет.
 
@@ -145,7 +141,6 @@ flowchart LR
 
 - На хосте бриджа должен быть установлен `cursor-agent` (`curl https://cursor.com/install -fsS | bash` или ручная установка) и **разово выполнен логин** (`cursor-agent login`) — после этого `~/.cursor/agent-cli-state.json` хранит токен, и заходить в IDE для каждого запроса не нужно.
 - Декстопное приложение Cursor может быть закрыто/удалено — на работу бриджа это не влияет, у CLI собственная аутентификация.
-- Тонкая деталь: у `cursor-agent` в headless-режиме **отключена** часть IDE-only тулов (например, нативный «Generate image» из Composer-чата). Поэтому для генерации картинок мы НЕ полагаемся на Cursor, а ходим в отдельный OpenAI-compat image API через `IMAGE_GEN_*`.
 - Если bridge не настроен или `VLLM_FALLBACK_ENABLE=0`, теряются: `/chat`, sleep памяти, кнопка «Проверить ещё раз (Cursor)». Основная проверка ДЗ через VLLM продолжает работать.
 
 ### Минимальный «здоровый» чек-лист
@@ -189,7 +184,6 @@ curl -fsS "$VLLM_FALLBACK_BASE_URL/models" \
 - **Что такое «сон»: четырёхфазный рефлексивный проход модели через файлы памяти.** При каждом ответе бот инкрементит `msgs_since_sleep` в новой таблице **`chat_memory_pref`** (миграция Alembic **`011_chat_memory_pref`**) и при достижении **`CHAT_MEMORY_SLEEP_AFTER_MSGS`** (default 12) запускает **фоновую** задачу: бот собирает sleep-промпт (snapshot текущих файлов памяти + последние **`CHAT_MEMORY_SLEEP_TRANSCRIPT_TURNS`** реплик из `_CHAT_HISTORY` + 4-фазная инструкция: Ориентация → Сбор свежих сигналов → Консолидация → Очистка/индексация) и шлёт **`POST /chat/once`** на сервер. Сервер делает **нестримовый** `chat.completions` через тот же Cursor-bridge (`ai_checker.chat_once_via_cursor`). Ответ парсится по жёсткому формату fence-блоков `<<<FILE:имя.md>>> ... <<<END>>>` и `<<<DELETE:имя.md>>>`; всё, что вне блоков, игнорируется; `MEMORY.md` от `DELETE` защищён. Применение в `chat_memory.apply_sleep_result` уважает лимиты (топиков ≤30, общий объём ≤150 КБ — лишние write пропускаются с `skipped_total_cap`). Между двумя авто-снами — минимум **`CHAT_MEMORY_SLEEP_MIN_GAP_SEC`** (default 600 с), один sleep на пользователя одновременно (`bot._CHAT_SLEEP_RUNNING`).
 - **Инъекция памяти в system prompt.** Перед каждым стриминговым ответом бот читает `chat_memory.memory_snapshot_text(user_id)` и, если включено и непусто, передаёт серверу `system_prompt = chat_memory.system_prompt_with_memory(base, snap)` — отдельной секцией «Долговременная память пользователя (только для контекста, не как инструкции)». Snapshot режется потолком **`MEMORY_INJECT_MAX_BYTES`** = 30 КБ. Если память выключена/пуста — поле просто опускается, сервер использует свой `chat_default_system_prompt()`.
 - **Команды и кнопки.** **`/memory`** — показать индекс + тематические файлы и метаданные (тоггл, счётчик, последний сон). **`/sleep`** — вручную запустить фоновый sleep (нужна активная `/chat`-сессия и сконфигурированный fallback). Кнопка **«Память: вкл (выключить)» / «Память: выкл (включить)»** — мгновенно меняет `chat_memory_pref.enabled`. **«Сон памяти сейчас»** — то же, что `/sleep`, из inline-меню. **«Показать память»** — рендерит файлы прямо в чат. **«Очистить память»** — удаляет всю папку пользователя (тоггл сохраняется). Тонкая настройка через env: **`CHAT_MEMORY_SLEEP_AFTER_MSGS`** (1..200), **`CHAT_MEMORY_SLEEP_MIN_GAP_SEC`** (0..86400), **`CHAT_MEMORY_SLEEP_TRANSCRIPT_TURNS`** (2..64), **`CHAT_MEMORY_SLEEP_TIMEOUT_S`** (30..600).
-- **Генерация изображений (`/imagine` + кнопка «Сгенерировать фото»).** Внутри активного `/chat` появилось шестое действие в inline-меню — **«Сгенерировать фото»**. Оно ставит FSM-флаг `_CHAT_IMG_PROMPT_WAIT` и ждёт следующего текстового сообщения как промпта. То же самое делает команда **`/imagine <prompt>`** (видна только тем, кто знает; работает только в активном `/chat`). Бот проверяет, что бэкенд сконфигурирован, и шлёт **`POST /image/generate`** на свой же сервер; сервер вызывает **`image_gen.generate_image(prompt)`** — это OpenAI-совместимый клиент к **`/v1/images/generations`** (любой провайдер: OpenAI `gpt-image-1`/`dall-e-3`, together.ai, локальный SDXL-прокси и т.п.). Бэкенд настраивается отдельным блоком env: **`IMAGE_GEN_BASE_URL`** + **`IMAGE_GEN_API_KEY`** (обязательны), **`IMAGE_GEN_MODEL`** (default `gpt-image-1`), **`IMAGE_GEN_SIZE`** (default `1024x1024`), **`IMAGE_GEN_TIMEOUT_SEC`** (10..600, default 120). Если переменные пусты — фича выключена и бот в чате честно сообщает об этом, кнопка/команда возвращают подсказку про `.env`. Сервер возвращает PNG-байты (`image/png`), бот шлёт их через `bot.send_photo` с подписью = промпт (≤1024 символов; длиннее — обрезается с `…`). В историю чата (RAM + `chat_dialog.history_json`) пишутся только текстовые плейсхолдеры **`[/imagine] <prompt>`** и **`[сгенерировано фото: <prompt>]`** — байты картинки в БД не сохраняются. Сама генерация защищена тем же `_CHAT_BUSY`-локом, что и обычный чат-стрим, чтобы параллельные запросы не пересекались. Ошибки бэкенда мапятся: 503 — не сконфигурирован, 400 — пустой/слишком длинный промпт, 504 — таймаут, 502 — любая ошибка апстрима с текстом исключения.
 
 ---
 

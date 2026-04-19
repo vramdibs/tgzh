@@ -168,7 +168,6 @@ import chat_memory
 import feedback_tei
 import gdz_solution
 import homework_check_status
-import image_gen
 import photo_prepare
 import telegram_format
 import tgzh_metrics
@@ -287,14 +286,6 @@ _CHAT_HISTORY_RUNTIME_CAP = 24
 # (сбрасывается → следующий ответ создаст новую запись), при открытии истории
 # из «Мои чаты» (берём id из БД), при logout (сбрасывается).
 _CHAT_DIALOG_ID = "chat_dialog_id"
-# Кнопка «Сгенерировать фото» переводит чат в режим ожидания одного текстового
-# промпта; следующий апдейт текста уходит в `/image/generate`. Любой другой шаг
-# (другая кнопка, /chat_logout, фото) сбрасывает флаг.
-_CHAT_IMG_PROMPT_WAIT = "chat_img_prompt_wait"
-# Caption у Telegram-фото: лимит 1024 символа.
-_TG_PHOTO_CAPTION_MAX_LEN = 1024
-
-
 def _admin_password_expected() -> str:
     return (os.getenv("ADMIN_PASSWORD") or "").strip()
 
@@ -1385,9 +1376,6 @@ def _chat_menu_keyboard(
         rows.append(
             [InlineKeyboardButton("Мои чаты — очистить", callback_data="chat:purge")],
         )
-        rows.append(
-            [InlineKeyboardButton("Сгенерировать фото", callback_data="chat:imagine")],
-        )
         # Долговременная память + «сон». Подпись кнопки тоггла зависит от текущего состояния.
         mem_label = (
             "Память: вкл (выключить)" if memory_enabled else "Память: выкл (включить)"
@@ -1534,7 +1522,6 @@ async def _handle_chat_callback(
         context.user_data.pop(_CHAT_HISTORY, None)
         context.user_data.pop(_CHAT_BUSY, None)
         context.user_data.pop(_CHAT_DIALOG_ID, None)
-        context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
         await _answer_query_once(query, "Сессия закрыта.")
         with suppress(BadRequest, Exception):
             await query.edit_message_text("Сессия /chat закрыта. Открой заново через /chat.")
@@ -1635,29 +1622,6 @@ async def _handle_chat_callback(
                 "чтобы продолжить.</i>"
             ),
         )
-        return
-    if action == "imagine":
-        if not _is_image_gen_enabled():
-            await _answer_query_once(query, "Генерация изображений не настроена.")
-            with suppress(BadRequest, Exception):
-                await query.edit_message_text(
-                    "<i>Генерация изображений не настроена: задайте "
-                    "<code>IMAGE_GEN_BASE_URL</code> и <code>IMAGE_GEN_API_KEY</code> "
-                    "в .env.</i>",
-                    reply_markup=_chat_menu_keyboard_for_user(True, user_id),
-                    parse_mode=ParseMode.HTML,
-                )
-            return
-        context.user_data[_CHAT_IMG_PROMPT_WAIT] = True
-        await _answer_query_once(query, "Опиши, что нарисовать.")
-        with suppress(BadRequest, Exception):
-            await query.edit_message_text(
-                "<b>Опиши, что нарисовать</b> — пришли промпт одним сообщением "
-                f"(до {image_gen.PROMPT_MAX_LEN} символов). "
-                "Команда <code>/imagine</code> работает так же.",
-                reply_markup=_chat_menu_keyboard_for_user(True, user_id),
-                parse_mode=ParseMode.HTML,
-            )
         return
     if action == "purge":
         deleted = await asyncio.to_thread(
@@ -1829,7 +1793,6 @@ async def chat_logout_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     context.user_data.pop(_CHAT_HISTORY, None)
     context.user_data.pop(_CHAT_BUSY, None)
     context.user_data.pop(_CHAT_DIALOG_ID, None)
-    context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
     msg = "Сессия /chat закрыта." if existed else "Сессии /chat не было."
     await update.message.reply_text(msg)
 
@@ -3029,7 +2992,6 @@ async def handle_homework_text(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data[_CHAT_ACTIVE] = True
         context.user_data.pop(_CHAT_HISTORY, None)
         context.user_data.pop(_CHAT_DIALOG_ID, None)
-        context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
         await _send_chat_menu(
             context.bot,
             update.effective_chat.id,
@@ -3103,21 +3065,11 @@ async def handle_homework_text(update: Update, context: ContextTypes.DEFAULT_TYP
                 context.user_data.pop(_CHAT_ACTIVE, None)
                 context.user_data.pop(_CHAT_HISTORY, None)
                 context.user_data.pop(_CHAT_DIALOG_ID, None)
-                context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
                 await update.message.reply_text(
                     "Сессия чата истекла. Открой её заново через /chat.",
                 )
                 return
             cid = update.effective_chat.id
-            if context.user_data.get(_CHAT_IMG_PROMPT_WAIT):
-                await _handle_chat_imagine_request(
-                    update,
-                    context,
-                    user_id=user_id,
-                    chat_id=cid,
-                    prompt=text,
-                )
-                return
             await _handle_chat_user_message(
                 update,
                 context,
@@ -3870,10 +3822,6 @@ async def _handle_chat_photo(
     )
 
 
-def _is_image_gen_enabled() -> bool:
-    return image_gen.is_image_gen_configured()
-
-
 # ====================== /chat: память + сон ======================
 #
 # Долговременная память пользователя живёт на диске (см. `chat_memory.py`),
@@ -4136,189 +4084,6 @@ def _maybe_schedule_auto_sleep(
 
     task = asyncio.create_task(_runner())
     _CHAT_SLEEP_RUNNING[user_id] = task
-
-
-async def _request_image_from_server(*, user_id: int, prompt: str) -> bytes:
-    """POST `/image/generate` -> PNG-байты. Бросает RuntimeError при не-200.
-
-    Httpx-таймаут берём из `IMAGE_GEN_TIMEOUT_SEC` + запас, чтобы клиент не
-    отвалился раньше, чем upstream-провайдер успеет нарисовать картинку.
-    """
-    url = f"{SERVER_URL.rstrip('/')}/image/generate"
-    timeout_s = max(60.0, image_gen.image_gen_timeout_sec() + 30.0)
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(timeout_s),
-        transport=async_http_transport_ipv4_lookup(),
-    ) as client:
-        r = await client.post(url, json={"user_id": user_id, "prompt": prompt})
-        if r.status_code != 200:
-            body = r.text or ""
-            raise RuntimeError(f"server {r.status_code}: {body[:300]}")
-        return r.content
-
-
-async def _handle_chat_imagine_request(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    *,
-    user_id: int,
-    chat_id: int,
-    prompt: str,
-) -> None:
-    """Сгенерировать одну картинку и отправить как Telegram-фото.
-
-    Используется и из FSM-кнопки «Сгенерировать фото», и из команды `/imagine <text>`.
-    Кладёт в RAM/DB-историю плейсхолдеры (`[/imagine] <prompt>` и `[сгенерировано
-    фото: <prompt>]`), чтобы Cursor видел контекст последующих сообщений.
-    """
-    context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
-    if context.user_data.get(_CHAT_BUSY):
-        await update.message.reply_text(
-            "Подожди, чат ещё печатает предыдущий ответ.",
-        )
-        return
-    p = (prompt or "").strip()
-    if not p:
-        await update.message.reply_text("Пустой промпт — нечего генерировать.")
-        return
-    if len(p) > image_gen.PROMPT_MAX_LEN:
-        await update.message.reply_text(
-            f"Промпт слишком длинный (лимит {image_gen.PROMPT_MAX_LEN} символов).",
-        )
-        return
-    if not _is_image_gen_enabled():
-        await update.message.reply_text(
-            "Генерация изображений не настроена: задайте IMAGE_GEN_BASE_URL "
-            "и IMAGE_GEN_API_KEY в .env.",
-        )
-        return
-
-    context.user_data[_CHAT_BUSY] = True
-    placeholder = None
-    try:
-        with suppress(Exception):
-            await context.bot.send_chat_action(chat_id, ChatAction.UPLOAD_PHOTO)
-        with suppress(Exception):
-            placeholder = await context.bot.send_message(
-                chat_id,
-                "Генерирую изображение… Это может занять до пары минут.",
-            )
-        logger.info(
-            "chat imagine user_id=%s prompt_chars=%s model=%s",
-            user_id,
-            len(p),
-            image_gen.image_gen_model(),
-        )
-        try:
-            png_bytes = await _request_image_from_server(user_id=user_id, prompt=p)
-        except Exception as e:
-            logger.exception("chat imagine failed user_id=%s", user_id)
-            err_text = f"Не удалось сгенерировать изображение: {e}"
-            if placeholder is not None:
-                with suppress(BadRequest, Exception):
-                    await context.bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=placeholder.message_id,
-                        text=err_text[:4096],
-                    )
-            else:
-                with suppress(Exception):
-                    await update.message.reply_text(err_text[:4096])
-            return
-
-        if placeholder is not None:
-            with suppress(BadRequest, Exception):
-                await context.bot.delete_message(
-                    chat_id=chat_id,
-                    message_id=placeholder.message_id,
-                )
-        cap = (
-            p
-            if len(p) <= _TG_PHOTO_CAPTION_MAX_LEN
-            else (p[: _TG_PHOTO_CAPTION_MAX_LEN - 1] + "…")
-        )
-        try:
-            await context.bot.send_photo(chat_id, photo=png_bytes, caption=cap)
-        except Exception:
-            logger.exception("chat imagine send_photo failed user_id=%s", user_id)
-            with suppress(Exception):
-                await update.message.reply_text(
-                    "Картинка сгенерирована, но Telegram отверг отправку. "
-                    "Попробуй другой промпт.",
-                )
-            return
-
-        history: list[dict[str, str]] = list(context.user_data.get(_CHAT_HISTORY) or [])
-        history.append({"role": "user", "content": f"[/imagine] {p}"})
-        history.append(
-            {"role": "assistant", "content": f"[сгенерировано фото: {p}]"},
-        )
-        if len(history) > _CHAT_HISTORY_RUNTIME_CAP:
-            history = history[-_CHAT_HISTORY_RUNTIME_CAP:]
-        context.user_data[_CHAT_HISTORY] = history
-
-        dialog_id = context.user_data.get(_CHAT_DIALOG_ID)
-        try:
-            saved_id = await asyncio.to_thread(
-                user_storage.chat_dialog_upsert,
-                USER_DB_PATH,
-                user_id,
-                history,
-                dialog_id if isinstance(dialog_id, int) else None,
-            )
-        except Exception:
-            logger.exception("chat dialog upsert (imagine) failed user_id=%s", user_id)
-        else:
-            if saved_id and not dialog_id:
-                context.user_data[_CHAT_DIALOG_ID] = saved_id
-        await _send_chat_menu(context.bot, chat_id, user_id=user_id)
-    finally:
-        context.user_data.pop(_CHAT_BUSY, None)
-
-
-async def imagine_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """`/imagine <prompt>` — сгенерировать картинку (только в активном /chat)."""
-    if not update.message or not update.effective_user or not update.effective_chat:
-        return
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    if not context.user_data.get(_CHAT_ACTIVE):
-        await update.message.reply_text(
-            "Команда /imagine доступна только из активного /chat.",
-        )
-        return
-    until = await asyncio.to_thread(
-        user_storage.chat_session_active_until,
-        USER_DB_PATH,
-        user_id,
-    )
-    if until is None:
-        context.user_data.pop(_CHAT_ACTIVE, None)
-        context.user_data.pop(_CHAT_HISTORY, None)
-        context.user_data.pop(_CHAT_DIALOG_ID, None)
-        context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
-        await update.message.reply_text(
-            "Сессия чата истекла. Открой её заново через /chat.",
-        )
-        return
-    raw = (update.message.text or "").strip()
-    # Срезаем команду (`/imagine`, `/imagine@bot`) и пробелы.
-    parts = raw.split(maxsplit=1)
-    prompt = parts[1].strip() if len(parts) > 1 else ""
-    if not prompt:
-        context.user_data[_CHAT_IMG_PROMPT_WAIT] = True
-        await update.message.reply_text(
-            "Опиши, что нарисовать — пришли промпт следующим сообщением "
-            f"(до {image_gen.PROMPT_MAX_LEN} символов).",
-        )
-        return
-    await _handle_chat_imagine_request(
-        update,
-        context,
-        user_id=user_id,
-        chat_id=chat_id,
-        prompt=prompt,
-    )
 
 
 async def sleep_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -6217,14 +5982,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             context.user_data.pop(_CHAT_HISTORY, None)
             context.user_data.pop(_CHAT_BUSY, None)
             context.user_data.pop(_CHAT_DIALOG_ID, None)
-            context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
             await update.message.reply_text(
                 "Сессия чата истекла. Открой её заново через /chat.",
             )
             return
-        # Фото в /chat сбрасывает «ожидание промпта»: пользователь решил
-        # вернуться к multimodal-картинкам, а не к /imagine.
-        context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
         chat_id = update.effective_chat.id
         await _handle_chat_photo(
             update,
@@ -6386,7 +6147,6 @@ def main() -> None:
     app.add_handler(CommandHandler("begemot_logout", begemot_logout_cmd))
     app.add_handler(CommandHandler("chat", chat_cmd))
     app.add_handler(CommandHandler("chat_logout", chat_logout_cmd))
-    app.add_handler(CommandHandler("imagine", imagine_cmd))
     app.add_handler(CommandHandler("sleep", sleep_cmd))
     app.add_handler(CommandHandler("memory", memory_cmd))
     app.add_handler(CallbackQueryHandler(button_callback))
