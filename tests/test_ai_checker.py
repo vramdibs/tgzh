@@ -45,14 +45,16 @@ def test_mime_from_bytes_utf8_cyrillic_text_plain() -> None:
     assert ai_checker._mime_from_bytes(data) == "text/plain"
 
 
-def test_mime_from_bytes_invalid_utf8_falls_back_to_jpeg() -> None:
+def test_mime_from_bytes_invalid_utf8_returns_octet_stream() -> None:
+    # Раньше неузнанные байты считались image/jpeg — это вело к лишней нагрузке на VL.
+    # Теперь — application/octet-stream: дальше попадёт в ветку «неподдерживаемый MIME».
     data = b"\xff\xfe" * 120
-    assert ai_checker._mime_from_bytes(data) == "image/jpeg"
+    assert ai_checker._mime_from_bytes(data) == "application/octet-stream"
 
 
-def test_mime_from_bytes_null_prefix_falls_back_to_jpeg() -> None:
+def test_mime_from_bytes_null_prefix_returns_octet_stream() -> None:
     data = b"hello\x00world"
-    assert ai_checker._mime_from_bytes(data) == "image/jpeg"
+    assert ai_checker._mime_from_bytes(data) == "application/octet-stream"
 
 
 def test_mime_from_bytes_webp() -> None:

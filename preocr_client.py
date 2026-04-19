@@ -20,12 +20,12 @@ def _preocr_url() -> str:
 
 
 def _timeout_s() -> float:
-    raw = (os.getenv("PREOCR_TIMEOUT_SEC") or "120").strip()
+    raw = (os.getenv("PREOCR_TIMEOUT_SEC") or "60").strip()
     try:
         v = float(raw)
-        return max(5.0, min(600.0, v))
+        return max(5.0, min(120.0, v))
     except ValueError:
-        return 120.0
+        return 60.0
 
 
 def _max_chars() -> int:

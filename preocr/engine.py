@@ -18,7 +18,15 @@ from PIL import Image, ImageOps
 # request-хендлера paddlex (3.x) даёт RuntimeError "PDX has already been initialized"
 # из-за реентерабельности _initialize() при загрузке под uvicorn worker-потоком.
 # Импорт на уровне модуля гарантирует одноразовую инициализацию в main thread.
-from paddleocr import PaddleOCR, PPStructureV3  # noqa: E402
+# Локально (тесты на хосте без paddleocr) допускаем отсутствие пакета —
+# ленивый фолбэк остаётся в _get_ocr / _get_structure.
+try:
+    from paddleocr import PaddleOCR, PPStructureV3  # noqa: F401
+    _PADDLEOCR_IMPORT_ERROR: Exception | None = None
+except Exception as _e:  # pragma: no cover
+    PaddleOCR = None  # type: ignore[assignment]
+    PPStructureV3 = None  # type: ignore[assignment]
+    _PADDLEOCR_IMPORT_ERROR = _e
 
 from preocr.schemas import PreOcrRegion, PreOcrResponse, RegionType  # noqa: E402
 
@@ -83,6 +91,10 @@ def _get_ocr():
     if _ocr_singleton is None:
         with _singleton_lock:
             if _ocr_singleton is None:
+                if PaddleOCR is None:
+                    raise RuntimeError(
+                        f"paddleocr is not installed: {_PADDLEOCR_IMPORT_ERROR!r}"
+                    )
                 _ocr_singleton = PaddleOCR(
                     lang=_lang(),
                     use_doc_orientation_classify=False,
@@ -96,6 +108,10 @@ def _get_structure():
     if _structure_singleton is None:
         with _singleton_lock:
             if _structure_singleton is None:
+                if PPStructureV3 is None:
+                    raise RuntimeError(
+                        f"paddleocr is not installed: {_PADDLEOCR_IMPORT_ERROR!r}"
+                    )
                 _structure_singleton = PPStructureV3(
                     lang=_lang(),
                     use_doc_orientation_classify=False,

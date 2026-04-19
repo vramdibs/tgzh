@@ -2,7 +2,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: tgzh-postgres
-    restart: unless-stopped
+    restart: always
     ports:
       - "127.0.0.1:15432:5432"
     networks:
@@ -33,6 +33,12 @@ services:
       - "127.0.0.1:8000:8000"
     env_file:
       - .env
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
     # При активном профиле preocr сервер стартует после pre-OCR (имя хоста tgzh-preocr из PREOCR_URL)
     depends_on:
       tgzh-preocr:
@@ -40,20 +46,21 @@ services:
         required: false
 
   # Опционально: docker compose --profile preocr up -d --build (см. README). В .env: PREOCR_URL=http://tgzh-preocr:8088
-  # По умолчанию сборка GPU (Dockerfile.preocr.gpu); без видеокарты: в .env PREOCR_DOCKERFILE=Dockerfile.preocr и закомментируй блок gpus ниже (или docker-compose.override.yml)
+  # По умолчанию сборка CPU (Dockerfile.preocr) — работает на любой машине, без CUDA.
+  # Для GPU: создай docker-compose.override.yml с PREOCR_DOCKERFILE=Dockerfile.preocr.gpu
+  # и блоком gpus: all (см. README). PaddlePaddle 3.2.2 поддерживает sm_75…90; на sm_120 (Blackwell) — пока CPU.
   tgzh-preocr:
     profiles:
       - preocr
     build:
       context: .
-      dockerfile: ${PREOCR_DOCKERFILE:-Dockerfile.preocr.gpu}
+      dockerfile: ${PREOCR_DOCKERFILE:-Dockerfile.preocr}
       network: host
       args:
         PADDLE_GPU_IMAGE: ${PADDLE_GPU_IMAGE:-paddlepaddle/paddle:3.2.2-gpu-cuda12.6-cudnn9.5}
     image: tgzh-preocr:latest
     container_name: tgzh-preocr
     restart: always
-    gpus: all
     networks:
       - tgzh-internal
     ports:
@@ -62,6 +69,12 @@ services:
       - .env
     volumes:
       - tgzh-preocr-models:/root/.paddlex
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8088/health', timeout=3).status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
 
   tgzh-bot:
     build:
@@ -88,8 +101,10 @@ services:
       # Альтернатива — каталог на хосте, например: - ./data:/app/data
       - tgzh-data:/app/data
     depends_on:
-      - postgres
-      - tgzh-server
+      postgres:
+        condition: service_healthy
+      tgzh-server:
+        condition: service_healthy
     # PostgreSQL: DATABASE_URL в .env (например postgresql://tgzh:tgzh@postgres:5432/tgzh). USER_DB_PATH в compose не задаем — иначе перекрывает смысл Postgres
 
 networks:

@@ -88,7 +88,7 @@ def maybe_start_http_server() -> None:
         return
     if port <= 0:
         return
-    bind = (os.getenv("METRICS_BIND") or "0.0.0.0").strip() or "0.0.0.0"
+    bind = (os.getenv("METRICS_BIND") or "127.0.0.1").strip() or "127.0.0.1"
     start_http_server(port, addr=bind)
     logger.info("prometheus metrics on http://%s:%s/metrics", bind, port)
 

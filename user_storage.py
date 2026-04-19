@@ -1050,20 +1050,19 @@ def set_disclaimer_accepted(path: str, user_id: int, version: int) -> None:
     now = datetime.now(timezone.utc).isoformat()
     conn = connect(path)
     try:
-        cur = _e(
+        # PRIMARY KEY = user_id; UPSERT по user_id, версию обновляем (новая версия = новый «приём»).
+        _e(
             conn,
-            "UPDATE user_consent SET accepted_at = ? WHERE user_id = ? AND disclaimer_version = ?",
-            (now, user_id, version),
+            """
+            INSERT INTO user_consent (user_id, disclaimer_version, quiz_passed_at, accepted_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                disclaimer_version = excluded.disclaimer_version,
+                accepted_at = excluded.accepted_at,
+                quiz_passed_at = COALESCE(user_consent.quiz_passed_at, excluded.quiz_passed_at)
+            """,
+            (user_id, version, now, now),
         )
-        if getattr(cur, "rowcount", 0) == 0:
-            _e(
-                conn,
-                """
-                INSERT INTO user_consent (user_id, disclaimer_version, quiz_passed_at, accepted_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                (user_id, version, now, now),
-            )
         conn.commit()
     finally:
         conn.close()
@@ -1246,6 +1245,7 @@ def blocked_state(path: str, user_id: int) -> dict[str, Any] | None:
     """
     None - нет блока или истекла временная.
     Иначе {"kind": "temp"|"permanent", "reason": str|None, "until_utc": str|None}.
+    Истёкший temp удаляется атомарно в той же транзакции, что и SELECT.
     """
     if not db_path_usable(path):
         return None
@@ -1256,29 +1256,35 @@ def blocked_state(path: str, user_id: int) -> dict[str, Any] | None:
             "SELECT block_type, reason, until_utc FROM user_block WHERE user_id = ?",
             (user_id,),
         ).fetchone()
+        if row is None:
+            return None
+        typ = str(row[0])
+        reason = row[1]
+        until_s = row[2]
+        if typ == USER_BLOCK_TEMP:
+            until_dt = _parse_until_utc(until_s)
+            now = datetime.now(timezone.utc)
+            if until_dt is None or now >= until_dt:
+                # атомарно удаляем только этот же истёкший блок (ровно ту же строку),
+                # чтобы не затереть свежепоставленный блок гонкой
+                _e(
+                    conn,
+                    "DELETE FROM user_block WHERE user_id = ? AND block_type = ? "
+                    "AND COALESCE(until_utc, '') = ?",
+                    (user_id, USER_BLOCK_TEMP, until_s or ""),
+                )
+                conn.commit()
+                return None
+            return {
+                "kind": USER_BLOCK_TEMP,
+                "reason": (str(reason).strip() if reason else None) or None,
+                "until_utc": until_dt.isoformat(),
+            }
+        if typ == USER_BLOCK_PERMANENT:
+            return {"kind": USER_BLOCK_PERMANENT, "reason": None, "until_utc": None}
+        return None
     finally:
         conn.close()
-    if row is None:
-        return None
-    typ = str(row[0])
-    reason = row[1]
-    until_s = row[2]
-    if typ == USER_BLOCK_TEMP:
-        until_dt = _parse_until_utc(until_s)
-        if until_dt is None:
-            _clear_user_block_row(path, user_id)
-            return None
-        if datetime.now(timezone.utc) >= until_dt:
-            _clear_user_block_row(path, user_id)
-            return None
-        return {
-            "kind": USER_BLOCK_TEMP,
-            "reason": (str(reason).strip() if reason else None) or None,
-            "until_utc": until_dt.isoformat(),
-        }
-    if typ == USER_BLOCK_PERMANENT:
-        return {"kind": USER_BLOCK_PERMANENT, "reason": None, "until_utc": None}
-    return None
 
 
 def _clear_user_block_row(path: str, user_id: int) -> None:

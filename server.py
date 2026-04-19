@@ -75,6 +75,13 @@ async def check_summarize(body: SummarizeRequest) -> CheckResponse:
     return CheckResponse(result=result)
 
 
+def _max_check_upload_bytes() -> int:
+    raw = (os.getenv("CHECK_MAX_UPLOAD_BYTES") or "").strip()
+    if raw.isdigit():
+        return max(64 * 1024, min(64 * 1024 * 1024, int(raw)))
+    return 25 * 1024 * 1024
+
+
 @app.post("/check", response_model=CheckResponse)
 async def check_photo(
     photo: UploadFile = File(...),
@@ -97,7 +104,11 @@ async def check_photo(
             "jpeg, png, webp, gif, pdf, txt, html, markdown, doc, docx, rtf",
         )
 
-    data = await photo.read()
+    cap = _max_check_upload_bytes()
+    data = await photo.read(cap + 1)
+    if len(data) > cap:
+        logger.warning("check reject too large bytes=%s cap=%s", len(data), cap)
+        raise HTTPException(413, f"Файл больше лимита {cap} байт")
     page_val: int | None = None
     if page.strip().isdigit():
         page_val = int(page.strip())

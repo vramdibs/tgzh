@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import os
 from collections import defaultdict
 from typing import Any, Final
@@ -18,6 +19,17 @@ from homework_check_status import (
 )
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+
+def _vllm_request_timeout_s() -> float:
+    raw = (os.getenv("VLLM_REQUEST_TIMEOUT_SEC") or "").strip()
+    try:
+        v = float(raw)
+        return max(5.0, min(900.0, v))
+    except ValueError:
+        return 180.0
 
 # Параметры модели (документация / лимиты)
 VLLM_MODEL_DEFAULT: Final = "qwen/qwen3-vl-8b"
@@ -261,13 +273,15 @@ def _mime_from_bytes(data: bytes) -> str:
         return "application/pdf"
     # Текстовые ответы в multipart иногда приходят без MIME или как octet-stream;
     # не считать их JPEG - иначе ветка image/ + preOCR и лишняя нагрузка на VL.
+    # Если данные не похожи на UTF-8 текст, возвращаем application/octet-stream:
+    # дальше в _check_vllm это попадёт в ветку «неподдерживаемый MIME» и не будет угадывания JPEG.
     head = data[:4096]
     if b"\x00" in head:
-        return "image/jpeg"
+        return "application/octet-stream"
     try:
         data.decode("utf-8")
     except UnicodeDecodeError:
-        return "image/jpeg"
+        return "application/octet-stream"
     return "text/plain"
 
 
@@ -596,7 +610,11 @@ async def _check_vllm(
     max_tokens = int(os.getenv("VLLM_MAX_TOKENS", "4096"))
     max_tokens = min(max_tokens, VLLM_CONTEXT_WINDOW // 4)
 
-    client = AsyncOpenAI(base_url=base_url, api_key=api_key or "EMPTY")
+    client = AsyncOpenAI(
+        base_url=base_url,
+        api_key=api_key or "EMPTY",
+        timeout=_vllm_request_timeout_s(),
+    )
 
     ct = (content_type or "").split(";")[0].strip().lower()
     if not ct or ct == "application/octet-stream":
@@ -746,7 +764,11 @@ async def summarize_check_parts(parts: list[str]) -> str:
     max_tokens = int(os.getenv("VLLM_MAX_TOKENS", "4096"))
     max_tokens = min(max_tokens, 2048)
 
-    client = AsyncOpenAI(base_url=base_url, api_key=api_key or "EMPTY")
+    client = AsyncOpenAI(
+        base_url=base_url,
+        api_key=api_key or "EMPTY",
+        timeout=_vllm_request_timeout_s(),
+    )
     instr = _append_no_think_to_prompt(_multi_summary_user_text(clean))
 
     foot = _analysis_result_footer(model=model, preocr_used=preocr_in_parts)
@@ -797,7 +819,11 @@ async def generate_check_quip(*, excerpt: str) -> str:
     quip_fields: dict[str, str] = defaultdict(str)
     quip_fields["excerpt"] = ex
     instr = _append_no_think_to_prompt(quip_t.format_map(quip_fields))
-    client = AsyncOpenAI(base_url=base_url, api_key=api_key or "EMPTY")
+    client = AsyncOpenAI(
+        base_url=base_url,
+        api_key=api_key or "EMPTY",
+        timeout=min(60.0, _vllm_request_timeout_s()),
+    )
     try:
         response = await client.chat.completions.create(
             **_vllm_chat_completion_kwargs(
@@ -806,7 +832,8 @@ async def generate_check_quip(*, excerpt: str) -> str:
                 max_tokens=150,
             ),
         )
-    except Exception:
+    except Exception as e:
+        logger.warning("generate_check_quip failed: %s", e)
         return ""
     msg = response.choices[0].message
     out = (msg.content or "").strip().split("\n")[0].strip()

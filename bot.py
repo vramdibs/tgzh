@@ -944,13 +944,35 @@ def _blocked_user_reply_markup(st: dict) -> InlineKeyboardMarkup | None:
     return None
 
 
+_BLOCKED_STATE_DB_ERROR_HTML = (
+    "Временная техническая ошибка. Попробуй ещё раз через минуту."
+)
+
+
+async def _safe_blocked_state(uid: int) -> tuple[dict | None, bool]:
+    """
+    Возвращает (state, ok). ok=False — БД недоступна/ошибка; политика fail-closed:
+    вызывающий должен прервать обработку и показать пользователю сообщение об ошибке.
+    """
+    try:
+        st = await asyncio.to_thread(user_storage.blocked_state, USER_DB_PATH, uid)
+        return st, True
+    except Exception:
+        logger.exception("blocked_state failed user_id=%s", uid)
+        return None, False
+
+
 async def _reply_if_blocked_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     if not update.message or not update.effective_user:
         return False
     if context.user_data.get(_BEGEMOT_OK) or context.user_data.get(_BEGEMOT_PW_WAIT):
         return False
     uid = update.effective_user.id
-    st = await asyncio.to_thread(user_storage.blocked_state, USER_DB_PATH, uid)
+    st, ok = await _safe_blocked_state(uid)
+    if not ok:
+        with suppress(Exception):
+            await update.message.reply_text(_BLOCKED_STATE_DB_ERROR_HTML)
+        return True
     if st is None:
         return False
     await update.message.reply_text(
@@ -961,13 +983,48 @@ async def _reply_if_blocked_cmd(update: Update, context: ContextTypes.DEFAULT_TY
     return True
 
 
+async def _reply_if_blocked_callback(
+    query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE
+) -> bool:
+    """Аналог _reply_if_blocked_cmd для callback-запросов. Используется в начале button_callback."""
+    if not query or not query.message or not query.from_user:
+        return False
+    if context.user_data.get(_BEGEMOT_OK) or context.user_data.get(_BEGEMOT_PW_WAIT):
+        return False
+    uid = query.from_user.id
+    st, ok = await _safe_blocked_state(uid)
+    if not ok:
+        with suppress(Exception):
+            await query.answer(_BLOCKED_STATE_DB_ERROR_HTML, show_alert=True)
+        return True
+    if st is None:
+        return False
+    with suppress(Exception):
+        await query.answer()
+    with suppress(Exception):
+        await query.message.reply_text(
+            _blocked_user_message_html(st),
+            reply_markup=_blocked_user_reply_markup(st),
+            parse_mode=ParseMode.HTML,
+        )
+    return True
+
+
 async def _handle_ban_lift(query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE) -> None:
     uid = query.from_user.id if query.from_user else 0
-    st = await asyncio.to_thread(user_storage.blocked_state, USER_DB_PATH, uid)
+    st, ok = await _safe_blocked_state(uid)
+    if not ok:
+        await query.answer(_BLOCKED_STATE_DB_ERROR_HTML, show_alert=True)
+        return
     if st is None or st.get("kind") != user_storage.USER_BLOCK_TEMP:
         await query.answer("Нет активного временного ограничения.", show_alert=True)
         return
-    await asyncio.to_thread(user_storage.clear_user_block, USER_DB_PATH, uid)
+    try:
+        await asyncio.to_thread(user_storage.clear_user_block, USER_DB_PATH, uid)
+    except Exception:
+        logger.exception("clear_user_block failed user_id=%s", uid)
+        await query.answer(_BLOCKED_STATE_DB_ERROR_HTML, show_alert=True)
+        return
     await query.answer("Ограничение снято.")
     if query.message:
         with suppress(BadRequest):
@@ -1085,6 +1142,8 @@ async def begemot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not update.message or not update.effective_user:
         return
     logger.info("cmd /begemot user_id=%s", update.effective_user.id)
+    if await _reply_if_blocked_cmd(update, context):
+        return
     expected = _admin_password_expected()
     if not expected:
         await update.message.reply_text("Раздел администратора не настроен.")
@@ -1840,7 +1899,11 @@ async def _send_gdz_solution_to_chat(
                     )
         else:
             headers = {"User-Agent": gdz_solution.USER_AGENT}
-            async with httpx.AsyncClient(timeout=45.0, headers=headers) as client:
+            async with httpx.AsyncClient(
+                timeout=45.0,
+                headers=headers,
+                transport=async_http_transport_ipv4_lookup(),
+            ) as client:
                 for i, url in enumerate(res.image_urls[:limit]):
                     try:
                         r = await client.get(url)
@@ -1947,7 +2010,13 @@ async def handle_homework_text(update: Update, context: ContextTypes.DEFAULT_TYP
         or context.user_data.get(_FEEDBACK_STAFF_WAIT)
         or context.user_data.get(_CHECK_DISLIKE_FEEDBACK_WAIT)
     ):
-        st_blk = await asyncio.to_thread(user_storage.blocked_state, USER_DB_PATH, user_id)
+        st_blk, ok_blk = await _safe_blocked_state(user_id)
+        if not ok_blk:
+            flow_note(
+                context,
+                await update.message.reply_text(_BLOCKED_STATE_DB_ERROR_HTML),
+            )
+            return
         if st_blk is not None:
             flow_note(
                 context,
@@ -3061,7 +3130,17 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user_id = query.from_user.id if query.from_user else 0
     data = query.data or ""
     chat_id = query.message.chat_id
-    logger.info("callback user_id=%s data=%s", user_id, data)
+    data_prefix = data.split(":", 1)[0] if data else ""
+    logger.info(
+        "callback user_id=%s prefix=%s len=%s", user_id, data_prefix, len(data)
+    )
+
+    if data == "ban:lift":
+        await _handle_ban_lift(query, context)
+        return
+
+    if await _reply_if_blocked_callback(query, context):
+        return
 
     if data.startswith("cfv:"):
         await _handle_check_feedback_vote(query, context, data)
@@ -3073,10 +3152,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data.startswith("poll:"):
         await _handle_poll_callback(query, context, data)
-        return
-
-    if data == "ban:lift":
-        await _handle_ban_lift(query, context)
         return
 
     if data.startswith("fb:"):
@@ -3439,17 +3514,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     await query.answer()
-
-    if not context.user_data.get(_BEGEMOT_OK):
-        st_block = await asyncio.to_thread(user_storage.blocked_state, USER_DB_PATH, user_id)
-        if st_block is not None:
-            await context.bot.send_message(
-                chat_id,
-                _blocked_user_message_html(st_block),
-                reply_markup=_blocked_user_reply_markup(st_block),
-                parse_mode=ParseMode.HTML,
-            )
-            return
 
     if data == "stats":
         await _send_stats_message(context.bot, chat_id, user_id, context)
@@ -4174,6 +4238,27 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_user or not update.message:
         return
+    user_id = update.effective_user.id
+    if not (
+        context.user_data.get(_BEGEMOT_OK) or context.user_data.get(_BEGEMOT_PW_WAIT)
+    ):
+        st_ph, ok_blk = await _safe_blocked_state(user_id)
+        if not ok_blk:
+            flow_note(
+                context,
+                await update.message.reply_text(_BLOCKED_STATE_DB_ERROR_HTML),
+            )
+            return
+        if st_ph is not None:
+            flow_note(
+                context,
+                await update.message.reply_text(
+                    _blocked_user_message_html(st_ph),
+                    reply_markup=_blocked_user_reply_markup(st_ph),
+                    parse_mode=ParseMode.HTML,
+                ),
+            )
+            return
     step_photo = context.user_data.get(_HW_STEP)
     if step_photo:
         hint = (
@@ -4186,21 +4271,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await update.message.reply_text(hint),
         )
         return
-    user_id = update.effective_user.id
-    if not (
-        context.user_data.get(_BEGEMOT_OK) or context.user_data.get(_BEGEMOT_PW_WAIT)
-    ):
-        st_ph = await asyncio.to_thread(user_storage.blocked_state, USER_DB_PATH, user_id)
-        if st_ph is not None:
-            flow_note(
-                context,
-                await update.message.reply_text(
-                    _blocked_user_message_html(st_ph),
-                    reply_markup=_blocked_user_reply_markup(st_ph),
-                    parse_mode=ParseMode.HTML,
-                ),
-            )
-            return
     profile = await asyncio.to_thread(user_storage.get_profile, USER_DB_PATH, user_id)
     if profile is None:
         flow_note(

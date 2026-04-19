@@ -136,12 +136,37 @@ def main() -> int:
             "check_sticker_reward",
             ["id", "user_id", "kind", "sticker_file_id", "sticker_set_name", "quip", "created_at"],
         )
+        # После UPSERT сиквенсы SERIAL/IDENTITY в Postgres не двигаются: следующая
+        # auto-вставка может уйти в дубликат PK. Ставим setval на MAX(id) каждой таблицы с сиквенсом.
+        _resync_sequences(pg, ["feedback_ticket", "check_sticker_reward"])
         pg.commit()
     finally:
         lite.close()
         pg.close()
     print("import ok")
     return 0
+
+
+def _resync_sequences(pg: Any, tables: list[str]) -> None:
+    with pg.cursor() as c:
+        for table in tables:
+            c.execute(
+                "SELECT pg_get_serial_sequence(%s, %s)",
+                (table, "id"),
+            )
+            row = c.fetchone()
+            seq = row[0] if row else None
+            if not seq:
+                print(f"{table}: no serial sequence, skip setval")
+                continue
+            c.execute(f"SELECT COALESCE(MAX(id), 0) FROM {table}")
+            mx_row = c.fetchone()
+            mx = int(mx_row[0]) if mx_row else 0
+            if mx <= 0:
+                print(f"{table}: empty, skip setval")
+                continue
+            c.execute("SELECT setval(%s, %s, true)", (seq, mx))
+            print(f"{table}: setval({seq}, {mx})")
 
 
 def _copy_table(

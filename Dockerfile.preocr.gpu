@@ -8,6 +8,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# libgl1 / libglib2.0-0 нужны cv2 (opencv-python) внутри paddleocr; без них падает с
+# ImportError: libGL.so.1 (см. логи preocr на первом запросе)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libgl1 \
+        libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY preocr/requirements-common.txt /app/preocr/requirements-common.txt
 # paddleocr может подтянуть пакет paddlepaddle (CPU) — удаляем, оставляем paddlepaddle-gpu из базового образа
 RUN python3 -m pip install --upgrade pip \
