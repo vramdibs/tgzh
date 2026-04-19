@@ -34,6 +34,12 @@ services:
       - tgzh-internal
     ports:
       - "127.0.0.1:8000:8000"
+    # host-gateway даёт `host.docker.internal` -> хост-машина. Нужно для
+    # VLLM_FALLBACK_BASE_URL на локальный bridge (см. .env, блок VLLM_FALLBACK_*).
+    # Когда bridge станет доступен публично через cloudflared tunnel, эту запись
+    # можно безопасно удалить вместе с переключением URL обратно.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file:
       - .env
     healthcheck:
@@ -90,6 +96,9 @@ services:
     restart: always
     networks:
       - tgzh-internal
+    # См. tgzh-server: host.docker.internal нужен fallback'у в ai_checker.py.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file:
       - .env
     environment:

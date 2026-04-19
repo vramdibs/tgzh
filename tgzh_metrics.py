@@ -27,12 +27,13 @@ _server_check_requests_total = None
 _server_check_errors_total = None
 _server_check_duration_seconds = None
 _check_feedback_total = None
+_llm_fallback_total = None
 
 
 def _ensure_metrics() -> None:
     global _bot_updates_total, _bot_handler_errors_total, _poll_completed_total
     global _server_check_requests_total, _server_check_errors_total, _server_check_duration_seconds
-    global _check_feedback_total
+    global _check_feedback_total, _llm_fallback_total
     if Counter is None:
         return
     if _bot_updates_total is None:
@@ -72,6 +73,12 @@ def _ensure_metrics() -> None:
             "tgzh_check_feedback_total",
             "Оценка результата проверки (кнопки под сообщением)",
             ["vote"],
+        )
+    if _llm_fallback_total is None:
+        _llm_fallback_total = Counter(
+            "tgzh_llm_fallback_total",
+            "Сколько раз primary VLLM пришлось заменять fallback-эндпоинтом",
+            ["stage", "reason"],
         )
 
 
@@ -138,6 +145,25 @@ def record_server_check_start() -> None:
     if _server_check_requests_total is None:
         return
     _server_check_requests_total.inc()
+
+
+_LLM_FALLBACK_STAGES: frozenset[str] = frozenset({"check", "summarize", "quip"})
+_LLM_FALLBACK_REASONS: frozenset[str] = frozenset(
+    {"connection", "server_error", "timeout", "empty_choices", "other"}
+)
+
+
+def record_llm_fallback(*, stage: str, reason: str) -> None:
+    """Счётчик `tgzh_llm_fallback_total{stage,reason}`.
+
+    Лейблы валидируем на стороне записи, чтобы случайной строкой не раздуть
+    кардинальность метрики (Prometheus best practice)."""
+    _ensure_metrics()
+    if _llm_fallback_total is None:
+        return
+    safe_stage = stage if stage in _LLM_FALLBACK_STAGES else "other"
+    safe_reason = reason if reason in _LLM_FALLBACK_REASONS else "other"
+    _llm_fallback_total.labels(safe_stage, safe_reason).inc()
 
 
 def observe_server_check(*, elapsed_seconds: float, failed: bool) -> None:

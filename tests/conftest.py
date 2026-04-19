@@ -8,10 +8,21 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _clear_env_for_unit_tests(monkeypatch: pytest.MonkeyPatch) -> None:
-    """
-    1) `DATABASE_URL` — иначе `user_storage.connect(path)` уйдет в Postgres вместо SQLite.
-    2) `CURSOR_CLI_CWD` — `.env` разработчика часто содержит абсолютный путь, которого нет
-       на CI/в чужой машине; без сброса subprocess.exec в тестах падает по `FileNotFoundError`.
+    """`DATABASE_URL` — иначе `user_storage.connect(path)` уйдет в Postgres вместо SQLite.
+
+    `VLLM_FALLBACK_*` — иначе при включенном в dev-`.env` cursor-bridge unit-тесты могут
+    «случайно» успешно сходить в реальный bridge и сломать assert-ы на `""`/mock-ответ
+    (см. `test_generate_check_quip_empty_base_url`). Тесты, которым fallback нужен,
+    включают переменные сами через `_enable_fallback`.
     """
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.delenv("CURSOR_CLI_CWD", raising=False)
+    for key in (
+        "VLLM_FALLBACK_ENABLE",
+        "VLLM_FALLBACK_BASE_URL",
+        "VLLM_FALLBACK_API_KEY",
+        "VLLM_FALLBACK_MODEL",
+        "VLLM_FALLBACK_TIMEOUT_SEC",
+        "VLLM_FALLBACK_DNS_SERVERS",
+        "VLLM_FALLBACK_RESOLVE_HTTP_ECHO_URL",
+    ):
+        monkeypatch.delenv(key, raising=False)

@@ -59,6 +59,71 @@ def test_summarize_mock(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> 
     assert "Модель:" in body["result"]
 
 
+def test_check_rejects_unknown_engine(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
+    """`engine` валидируется до тяжёлой работы, чтобы опечатки не уходили в LLM."""
+    monkeypatch.setenv("AI_MOCK", "1")
+    monkeypatch.setenv("VLLM_BASE_URL", "")
+    jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+    r = client.post(
+        "/check",
+        files={"photo": ("hw.jpg", io.BytesIO(jpeg), "image/jpeg")},
+        data={"paragraph": "1", "engine": "claude"},
+    )
+    assert r.status_code == 400
+    assert "engine" in (r.json().get("detail") or "").lower()
+
+
+def test_check_engine_cursor_routes_to_fallback(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> None:
+    """`engine=cursor` должен доходить до `check_homework(force_fallback=True)`."""
+    monkeypatch.delenv("AI_MOCK", raising=False)
+    monkeypatch.setenv("VLLM_BASE_URL", "http://primary:9/v1")
+
+    captured: dict[str, object] = {}
+
+    async def _fake_check_homework(_data: bytes, **kwargs: object) -> str:
+        captured.update(kwargs)
+        return "ok-from-fake"
+
+    import server
+
+    monkeypatch.setattr(server, "check_homework", _fake_check_homework)
+
+    jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+    r = client.post(
+        "/check",
+        files={"photo": ("hw.jpg", io.BytesIO(jpeg), "image/jpeg")},
+        data={"paragraph": "1", "engine": "cursor"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["result"] == "ok-from-fake"
+    assert captured.get("force_fallback") is True
+
+
+def test_summarize_engine_cursor_propagates_force_fallback(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def _fake_summarize(parts: list[str], *, force_fallback: bool = False) -> str:
+        captured["parts_n"] = len(parts)
+        captured["force_fallback"] = force_fallback
+        return "summary-from-fake"
+
+    import server
+
+    monkeypatch.setattr(server, "summarize_check_parts", _fake_summarize)
+
+    r = client.post(
+        "/check/summarize",
+        json={"parts": ["один", "два"], "engine": "cursor"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["result"] == "summary-from-fake"
+    assert captured == {"parts_n": 2, "force_fallback": True}
+
+
 def test_check_accepts_jpeg_mock(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
     monkeypatch.setenv("AI_MOCK", "1")
     monkeypatch.setenv("VLLM_BASE_URL", "")

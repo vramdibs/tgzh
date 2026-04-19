@@ -5,10 +5,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import os
 from collections import defaultdict
+from contextlib import suppress
 from typing import Any, Final
 
 from dotenv import load_dotenv
@@ -288,6 +290,262 @@ def _normalize_vllm_base_url(raw: str) -> str:
     return u
 
 
+# --- Опциональный fallback на альтернативный OpenAI-совместимый эндпоинт ---
+# Сценарий: основной VLLM (qwen) недоступен, ушёл по таймауту или вернул мусор —
+# пробуем второй эндпоинт (например, cursor-bridge на /v1/chat/completions),
+# чтобы пользователь получил хоть какой-то ответ. Триггерится только когда
+# `VLLM_FALLBACK_ENABLE=1` и заданы `VLLM_FALLBACK_BASE_URL`.
+
+VLLM_FALLBACK_REASONS: Final = (
+    "connection",
+    "server_error",
+    "timeout",
+    "empty_choices",
+    "other",
+    "manual",
+)
+
+
+def _fallback_enabled() -> bool:
+    return (os.getenv("VLLM_FALLBACK_ENABLE") or "").strip() == "1"
+
+
+def _fallback_base_url() -> str:
+    return _normalize_vllm_base_url(os.getenv("VLLM_FALLBACK_BASE_URL") or "")
+
+
+def _fallback_api_key() -> str:
+    return (os.getenv("VLLM_FALLBACK_API_KEY") or "").strip()
+
+
+def _fallback_model() -> str:
+    return (os.getenv("VLLM_FALLBACK_MODEL") or "cursor-agent").strip() or "cursor-agent"
+
+
+def _fallback_timeout_s() -> float:
+    raw = (os.getenv("VLLM_FALLBACK_TIMEOUT_SEC") or "").strip()
+    try:
+        v = float(raw)
+        return max(10.0, min(900.0, v))
+    except ValueError:
+        return 180.0
+
+
+def _fallback_ready() -> bool:
+    return _fallback_enabled() and bool(_fallback_base_url())
+
+
+# httpx.AsyncClient для fallback-эндпоинта с возможной подменой DNS-резолвера
+# (через `VLLM_FALLBACK_DNS_SERVERS`). Один процесс — один клиент: connection pool
+# и DNS-кэш переиспользуются между запросами; закрывать его не нужно (Uvicorn-воркер
+# живет до остановки контейнера, ресурсы освободит ОС).
+_fallback_http_client_lock = asyncio.Lock()
+_fallback_http_client_state: dict[str, Any] = {"servers": None, "client": None}
+
+
+def _fallback_target_host() -> str | None:
+    """Хост из `VLLM_FALLBACK_BASE_URL` — для него и нужно подменять резолв."""
+    from urllib.parse import urlparse
+
+    url = _fallback_base_url()
+    if not url:
+        return None
+    try:
+        host = urlparse(url).hostname
+    except (ValueError, TypeError):
+        return None
+    return (host or "").lower() or None
+
+
+async def _get_fallback_http_client():
+    """Лениво создает (и переиспользует) httpx.AsyncClient с подмененным резолвом
+    хоста `VLLM_FALLBACK_BASE_URL`. Источники IP, в порядке приоритета:
+
+    1. `VLLM_FALLBACK_RESOLVE_HTTP_ECHO_URL` (например, `http://http-echo.example.com`) —
+       echo-сервис, возвращающий публичный IP клиента. Применим, когда bridge стоит
+       за тем же NAT, что и наш контейнер. Самый авторитетный источник, его IP не
+       подвержен кешам публичных DNS.
+    2. `VLLM_FALLBACK_DNS_SERVERS` (CSV IPv4) — UDP-DNS-резолв через указанные
+       сервера, обходя `/etc/resolv.conf`.
+    3. Ничего из вышеперечисленного — None, тогда AsyncOpenAI создает дефолтный
+       клиент с системным резолвером.
+
+    Если задан и echo, и DNS — DNS используется как страховка, когда echo упал.
+    """
+    import httpx
+
+    from tgzh_httpx import (
+        async_http_transport_with_dns_servers,
+        async_http_transport_with_http_echo,
+        parse_dns_servers_env,
+    )
+
+    echo_url = (os.getenv("VLLM_FALLBACK_RESOLVE_HTTP_ECHO_URL") or "").strip()
+    dns_servers = parse_dns_servers_env(os.getenv("VLLM_FALLBACK_DNS_SERVERS"))
+    target_host = _fallback_target_host()
+
+    if not echo_url and not dns_servers:
+        return None
+    if echo_url and not target_host:
+        logger.warning(
+            "VLLM_FALLBACK_RESOLVE_HTTP_ECHO_URL set but VLLM_FALLBACK_BASE_URL has no host; ignoring",
+        )
+        echo_url = ""
+        if not dns_servers:
+            return None
+
+    state_key = (echo_url, target_host or "", dns_servers)
+    if (
+        _fallback_http_client_state["servers"] == state_key
+        and _fallback_http_client_state["client"] is not None
+    ):
+        return _fallback_http_client_state["client"]
+    async with _fallback_http_client_lock:
+        if (
+            _fallback_http_client_state["servers"] == state_key
+            and _fallback_http_client_state["client"] is not None
+        ):
+            return _fallback_http_client_state["client"]
+        old = _fallback_http_client_state["client"]
+        if old is not None:
+            with suppress(Exception):
+                await old.aclose()
+        if echo_url and target_host:
+            transport = async_http_transport_with_http_echo(
+                target_host=target_host,
+                echo_url=echo_url,
+                dns_fallback_servers=dns_servers,
+            )
+            logger.info(
+                "vllm fallback: resolving %s via http-echo %s (dns-fallback=%s)",
+                target_host,
+                echo_url,
+                list(dns_servers) or "system",
+            )
+        else:
+            transport = async_http_transport_with_dns_servers(dns_servers)
+            logger.info("vllm fallback: using upstream DNS servers %s", list(dns_servers))
+        client = httpx.AsyncClient(transport=transport, timeout=_fallback_timeout_s())
+        _fallback_http_client_state["servers"] = state_key
+        _fallback_http_client_state["client"] = client
+        return client
+
+
+async def _chat_with_fallback(
+    *,
+    stage: str,
+    primary_kwargs: dict[str, Any],
+    primary_timeout_s: float | None = None,
+    force_fallback: bool = False,
+):
+    """Попытка primary VLLM, при «жёсткой» ошибке — повторить на fallback-эндпоинте.
+
+    Возвращает кортеж `(response, used_fallback: bool, model_used: str | None)`.
+    Если оба упали — поднимается исходное исключение primary, чтобы вызывающие
+    функции могли отдать пользователю текущее «человеческое» сообщение об ошибке.
+
+    `primary_kwargs` ДОЛЖЕН содержать ключи `model` и `messages`. На fallback они
+    клонируются с подменой `model` на `VLLM_FALLBACK_MODEL`.
+
+    `force_fallback=True` — пропустить primary и сразу пойти в fallback (например,
+    из ручной кнопки «Проверить ещё раз»). Если fallback не сконфигурирован,
+    поднимется RuntimeError, чтобы вызывающие функции отдали явное сообщение.
+    """
+    from openai import APIConnectionError, APIStatusError, AsyncOpenAI
+
+    fallback_reason: str | None = None
+    primary_exc: BaseException | None = None
+    primary_response = None
+
+    if force_fallback:
+        if not _fallback_ready():
+            raise RuntimeError("vllm fallback requested but not configured")
+        fallback_reason = "manual"
+    else:
+        base_url = _normalize_vllm_base_url(os.getenv("VLLM_BASE_URL", ""))
+        api_key = os.getenv("VLLM_API_KEY", "") or "EMPTY"
+        timeout = primary_timeout_s if primary_timeout_s is not None else _vllm_request_timeout_s()
+
+        primary_client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=timeout)
+
+        try:
+            primary_response = await primary_client.chat.completions.create(**primary_kwargs)
+        except APIConnectionError as e:
+            primary_exc = e
+            fallback_reason = "connection"
+        except APIStatusError as e:
+            primary_exc = e
+            status_code = getattr(e, "status_code", 0) or 0
+            if status_code >= 500 or status_code == 408 or status_code == 429:
+                fallback_reason = "server_error"
+            else:
+                # 4xx (400/401/403/404/422) — fallback не поможет, пробрасываем
+                raise
+        except asyncio.TimeoutError as e:
+            primary_exc = e
+            fallback_reason = "timeout"
+        except Exception as e:
+            primary_exc = e
+            fallback_reason = "other"
+
+        if fallback_reason is None:
+            if primary_response is not None and not getattr(primary_response, "choices", None):
+                fallback_reason = "empty_choices"
+            else:
+                return primary_response, False, str(primary_kwargs.get("model") or "")
+
+        # primary не дал валидного ответа — есть ли fallback?
+        if not _fallback_ready():
+            if primary_exc is not None:
+                raise primary_exc
+            return primary_response, False, str(primary_kwargs.get("model") or "")
+
+    fb_url = _fallback_base_url()
+    fb_key = _fallback_api_key() or "EMPTY"
+    fb_model = _fallback_model()
+    fb_timeout = _fallback_timeout_s()
+
+    logger.warning(
+        "vllm fallback used stage=%s reason=%s primary_model=%s fb_model=%s",
+        stage,
+        fallback_reason,
+        primary_kwargs.get("model"),
+        fb_model,
+    )
+    try:
+        import tgzh_metrics as _m
+
+        _m.record_llm_fallback(stage=stage, reason=fallback_reason)
+    except Exception:
+        logger.debug("metrics record_llm_fallback failed", exc_info=True)
+
+    fb_kwargs = dict(primary_kwargs)
+    fb_kwargs["model"] = fb_model
+    fb_http_client = await _get_fallback_http_client()
+    if fb_http_client is not None:
+        fb_client = AsyncOpenAI(
+            base_url=fb_url,
+            api_key=fb_key,
+            timeout=fb_timeout,
+            http_client=fb_http_client,
+        )
+    else:
+        fb_client = AsyncOpenAI(base_url=fb_url, api_key=fb_key, timeout=fb_timeout)
+
+    try:
+        fb_response = await fb_client.chat.completions.create(**fb_kwargs)
+    except Exception as fb_exc:
+        logger.warning(
+            "vllm fallback failed stage=%s reason=%s fb_error=%s",
+            stage, fallback_reason, fb_exc,
+        )
+        if primary_exc is not None:
+            raise primary_exc
+        return primary_response, False, str(primary_kwargs.get("model") or "")
+
+    return fb_response, True, fb_model
+
+
 def _mime_from_bytes(data: bytes) -> str:
     if len(data) >= 3 and data[:3] == b"\xff\xd8\xff":
         return "image/jpeg"
@@ -480,6 +738,7 @@ async def check_homework(
     gdz_verif_pages: str = "",
     gdz_verif_works: str = "",
     gdz_task_condition: str = "",
+    force_fallback: bool = False,
 ) -> str:
     """
     Анализирует вложение (фото ДЗ или поддерживаемый документ).
@@ -503,7 +762,7 @@ async def check_homework(
         )
 
     base_url = os.getenv("VLLM_BASE_URL", "").strip()
-    if not base_url:
+    if not base_url and not (force_fallback and _fallback_ready()):
         return _mock_result(
             data,
             paragraph=paragraph,
@@ -529,6 +788,7 @@ async def check_homework(
         gdz_verif_pages=gdz_verif_pages,
         gdz_verif_works=gdz_verif_works,
         gdz_task_condition=gdz_task_condition,
+        force_fallback=force_fallback,
     )
 
 
@@ -624,23 +884,16 @@ async def _check_vllm(
     gdz_verif_pages: str = "",
     gdz_verif_works: str = "",
     gdz_task_condition: str = "",
+    force_fallback: bool = False,
 ) -> str:
-    from openai import APIConnectionError, APIStatusError, AsyncOpenAI
+    from openai import APIConnectionError, APIStatusError
 
-    base_url = _normalize_vllm_base_url(os.getenv("VLLM_BASE_URL", ""))
-    api_key = os.getenv("VLLM_API_KEY", "")
     model = os.getenv("VLLM_MODEL", VLLM_MODEL_DEFAULT)
     max_tokens = _int_env(
         "VLLM_MAX_TOKENS",
         4096,
         lo=64,
         hi=VLLM_CONTEXT_WINDOW // 4,
-    )
-
-    client = AsyncOpenAI(
-        base_url=base_url,
-        api_key=api_key or "EMPTY",
-        timeout=_vllm_request_timeout_s(),
     )
 
     ct = (content_type or "").split(";")[0].strip().lower()
@@ -707,26 +960,31 @@ async def _check_vllm(
 
     foot = _analysis_result_footer(model=model, preocr_used=preocr_used)
     try:
-        response = await client.chat.completions.create(
-            **_vllm_chat_completion_kwargs(
+        response, used_fb, model_used = await _chat_with_fallback(
+            stage="check",
+            primary_kwargs=_vllm_chat_completion_kwargs(
                 model=model,
                 messages=[{"role": "user", "content": content}],
                 max_tokens=max_tokens,
             ),
+            force_fallback=force_fallback,
         )
     except APIConnectionError as e:
         return f"Не удалось подключиться к VLLM: {e}{foot}"
     except APIStatusError as e:
         return f"Ошибка VLLM ({e.status_code}): {e.message}{foot}"
+    except RuntimeError as e:
+        return f"Cursor-проверка недоступна: {e}{foot}"
     except Exception as e:
         return f"Ошибка при обращении к VLLM: {e}{foot}"
 
+    final_model = model_used or model
     empty_msg = _env_prompt("VLLM_MSG_EMPTY_MODEL_REPLY", _DEFAULT_MSG_EMPTY_MODEL)
     if not getattr(response, "choices", None):
-        logger.warning("vllm check: empty choices in response")
+        logger.warning("vllm check: empty choices in response (used_fb=%s)", used_fb)
         return _append_analysis_footer_to_llm_text(
             "",
-            model=model,
+            model=final_model,
             preocr_used=preocr_used,
             empty_fallback=empty_msg,
         )
@@ -734,7 +992,7 @@ async def _check_vllm(
     out = (msg.content or "").strip()
     return _append_analysis_footer_to_llm_text(
         out,
-        model=model,
+        model=final_model,
         preocr_used=preocr_used,
         empty_fallback=empty_msg,
     )
@@ -764,7 +1022,7 @@ def _multi_summary_user_text(parts: list[str]) -> str:
     return f"{intro}\n\n{cov}\n\n{rem}\n\n{block}"
 
 
-async def summarize_check_parts(parts: list[str]) -> str:
+async def summarize_check_parts(parts: list[str], *, force_fallback: bool = False) -> str:
     """
     Второй вызов LLM: объединить несколько текстовых результатов проверки в одну сводку.
     При одном элементе возвращает его без вызова API.
@@ -786,47 +1044,45 @@ async def summarize_check_parts(parts: list[str]) -> str:
         foot_lines.append(f"Модель: {model} (тестовый режим)")
         return body + "\n\n" + "\n".join(foot_lines)
 
-    from openai import APIConnectionError, APIStatusError, AsyncOpenAI
+    from openai import APIConnectionError, APIStatusError
 
     base_url = _normalize_vllm_base_url(os.getenv("VLLM_BASE_URL", ""))
-    if not base_url:
+    if not base_url and not _fallback_ready():
         return (
             "Сводка недоступна: не задан VLLM_BASE_URL"
             + _analysis_result_footer(model=model, preocr_used=preocr_in_parts)
         )
 
-    api_key = os.getenv("VLLM_API_KEY", "")
     max_tokens = _int_env("VLLM_MAX_TOKENS", 4096, lo=64, hi=2048)
-
-    client = AsyncOpenAI(
-        base_url=base_url,
-        api_key=api_key or "EMPTY",
-        timeout=_vllm_request_timeout_s(),
-    )
     instr = _append_no_think_to_prompt(_multi_summary_user_text(clean))
 
     foot = _analysis_result_footer(model=model, preocr_used=preocr_in_parts)
     try:
-        response = await client.chat.completions.create(
-            **_vllm_chat_completion_kwargs(
+        response, used_fb, model_used = await _chat_with_fallback(
+            stage="summarize",
+            primary_kwargs=_vllm_chat_completion_kwargs(
                 model=model,
                 messages=[{"role": "user", "content": instr}],
                 max_tokens=max_tokens,
             ),
+            force_fallback=force_fallback,
         )
     except APIConnectionError as e:
         return f"Не удалось подключиться к VLLM (сводка): {e}{foot}"
     except APIStatusError as e:
         return f"Ошибка VLLM при сводке ({e.status_code}): {e.message}{foot}"
+    except RuntimeError as e:
+        return f"Cursor-сводка недоступна: {e}{foot}"
     except Exception as e:
         return f"Ошибка при сводке: {e}{foot}"
 
+    final_model = model_used or model
     empty_s = _env_prompt("VLLM_MSG_EMPTY_SUMMARY", _DEFAULT_MSG_EMPTY_SUMMARY)
     if not getattr(response, "choices", None):
-        logger.warning("vllm summary: empty choices in response")
+        logger.warning("vllm summary: empty choices in response (used_fb=%s)", used_fb)
         return _append_analysis_footer_to_llm_text(
             "",
-            model=model,
+            model=final_model,
             preocr_used=preocr_in_parts,
             empty_fallback=empty_s,
         )
@@ -834,7 +1090,7 @@ async def summarize_check_parts(parts: list[str]) -> str:
     out = (msg.content or "").strip()
     return _append_analysis_footer_to_llm_text(
         out,
-        model=model,
+        model=final_model,
         preocr_used=preocr_in_parts,
         empty_fallback=empty_s,
     )
@@ -847,12 +1103,9 @@ async def generate_check_quip(*, excerpt: str) -> str:
     if os.getenv("AI_MOCK") == "1":
         return _env_prompt("VLLM_QUIP_MOCK_TEXT", _DEFAULT_QUIP_MOCK)
     base_url = _normalize_vllm_base_url(os.getenv("VLLM_BASE_URL", ""))
-    if not base_url:
+    if not base_url and not _fallback_ready():
         return ""
 
-    from openai import APIConnectionError, APIStatusError, AsyncOpenAI
-
-    api_key = os.getenv("VLLM_API_KEY", "")
     model = os.getenv("VLLM_MODEL", VLLM_MODEL_DEFAULT)
     ex = (excerpt or "").strip()
     if len(ex) > 2000:
@@ -861,18 +1114,15 @@ async def generate_check_quip(*, excerpt: str) -> str:
     quip_fields: dict[str, str] = defaultdict(str)
     quip_fields["excerpt"] = ex
     instr = _append_no_think_to_prompt(quip_t.format_map(quip_fields))
-    client = AsyncOpenAI(
-        base_url=base_url,
-        api_key=api_key or "EMPTY",
-        timeout=min(60.0, _vllm_request_timeout_s()),
-    )
     try:
-        response = await client.chat.completions.create(
-            **_vllm_chat_completion_kwargs(
+        response, _used_fb, _model_used = await _chat_with_fallback(
+            stage="quip",
+            primary_kwargs=_vllm_chat_completion_kwargs(
                 model=model,
                 messages=[{"role": "user", "content": instr}],
                 max_tokens=150,
             ),
+            primary_timeout_s=min(60.0, _vllm_request_timeout_s()),
         )
     except Exception as e:
         logger.warning("generate_check_quip failed: %s", e)

@@ -3,25 +3,12 @@ FROM python:3.12-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# Cursor Agent CLI (/cursorask) — опционально: docker build --build-arg INSTALL_CURSOR_CLI=1 ...
-# По умолчанию выключено: install-скрипт качается curl-ом без пиннинга — supply-chain риск,
-# в типичном деплое /cursorask не нужен.
-ARG INSTALL_CURSOR_CLI=0
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates \
-    && if [ "$INSTALL_CURSOR_CLI" = "1" ]; then \
-         curl -fsSL https://cursor.com/install | bash; \
-       fi \
-    && rm -rf /var/lib/apt/lists/*
-
-ENV PATH="/root/.local/bin:${PATH}"
-
 WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY bot.py cursor_cli_client.py telegram_format.py logging_config.py gdz_solution.py gdz_cache.py \
+COPY bot.py telegram_format.py logging_config.py gdz_solution.py gdz_cache.py \
     photo_prepare.py user_storage.py homework_check_status.py bot_stats.py \
     tgzh_db.py tgzh_metrics.py tgzh_httpx.py feedback_tei.py ./
 COPY alembic.ini /app/

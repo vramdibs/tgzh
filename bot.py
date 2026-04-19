@@ -13,7 +13,6 @@ import json
 import os
 import random
 import re
-import tempfile
 import time
 from collections import deque
 from contextlib import suppress
@@ -164,7 +163,6 @@ from telegram.ext import (
 from telegram.request import HTTPXRequest
 
 import bot_stats
-import cursor_cli_client
 import feedback_tei
 import gdz_solution
 import homework_check_status
@@ -209,24 +207,15 @@ USER_DB_PATH = os.getenv("USER_DB_PATH", "data/users.sqlite")
 GDZ_CATALOG_PATH = os.getenv("GDZ_CATALOG_PATH", "data/gdz_matematika_textbooks.json")
 
 
-def _cursor_ask_allowlist_ids() -> set[int]:
-    raw = (os.getenv("CURSOR_ASK_ALLOW_TELEGRAM_IDS") or "").strip()
-    if not raw:
-        return set()
-    out: set[int] = set()
-    for part in raw.split(","):
-        p = part.strip()
-        if not p:
-            continue
-        try:
-            out.add(int(p, 10))
-        except ValueError:
-            continue
-    return out
+def _cursor_recheck_available() -> bool:
+    """Кнопка «Проверить ещё раз (Cursor)» доступна, только если на сервере
+    включён fallback OpenAI-эндпоинт (например, cursor-bridge): иначе нажатие
+    вернёт «Cursor-проверка недоступна» и собьёт ученика с толку.
+    """
+    if (os.getenv("VLLM_FALLBACK_ENABLE") or "").strip() != "1":
+        return False
+    return bool((os.getenv("VLLM_FALLBACK_BASE_URL") or "").strip())
 
-
-def _cursor_ask_feature_enabled() -> bool:
-    return bool(_cursor_ask_allowlist_ids() and cursor_cli_client.cli_configured())
 
 _FEEDBACK_WAITING = "feedback_waiting"
 _FEEDBACK_STAFF_WAIT = "feedback_staff_wait"
@@ -790,7 +779,7 @@ def flow_note(context: ContextTypes.DEFAULT_TYPE, message: object | None) -> Non
 
 
 def _bot_commands_list() -> list[BotCommand]:
-    cmds = [
+    return [
         BotCommand("start", "Новое упражнение"),
         BotCommand("support", "Оставить отзыв"),
         BotCommand("my_support", "Активные обращения"),
@@ -798,14 +787,6 @@ def _bot_commands_list() -> list[BotCommand]:
         BotCommand("stats", "Статистика проверок"),
         BotCommand("textbook", "Сменить класс или учебник"),
     ]
-    if _cursor_ask_feature_enabled():
-        cmds.append(
-            BotCommand(
-                "cursorask",
-                "Вопрос через Cursor CLI (agent)",
-            ),
-        )
-    return cmds
 
 
 async def flow_ensure_chat_commands_menu(bot, chat_id: int) -> None:
@@ -1301,49 +1282,37 @@ async def _send_sticker_from_pack(
     return None
 
 
-async def _after_check_stickers_quip_record(
+async def _send_recheck_reward_sticker(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
     user_id: int,
-    _outs: list[str],
-    _body_raw: str,
-    _summary_ok: bool,
-) -> None:
+) -> bool:
+    """Отправить стикер-награду после recheck (Cursor) при «преимущественно
+    правильном» вердикте. Берем только из наградного пула (`tada`), без
+    мотивационных, так как смысл стикера здесь — поздравление, а не подбадривание.
+    Возвращает True, если стикер реально ушел."""
     tada = _tada_sticker_set_name_candidates()
-    motivation = _motivation_sticker_set_name_candidates()
-    merged = list(dict.fromkeys(tada + motivation))
-    random.shuffle(merged)
+    if not tada:
+        return False
     res = await _send_sticker_from_pack(
         context.bot,
         chat_id,
-        merged,
+        tada,
         prefer_tada_emoji=True,
     )
     if not res:
-        res = await _send_sticker_from_pack(
-            context.bot,
-            chat_id,
-            merged,
-            prefer_tada_emoji=False,
-        )
-    if not res:
-        return
+        return False
     fid, sn = res
-    tada_set = set(tada)
-    kind = (
-        user_storage.CHECK_STICKER_KIND_REWARD
-        if sn in tada_set
-        else user_storage.CHECK_STICKER_KIND_MOTIVATION
-    )
     await asyncio.to_thread(
         user_storage.record_check_sticker_reward,
         USER_DB_PATH,
         user_id,
-        kind,
+        user_storage.CHECK_STICKER_KIND_REWARD,
         fid,
         sn,
         None,
     )
+    return True
 
 
 def load_catalog(path: str) -> dict[str, list[dict]]:
@@ -1506,8 +1475,15 @@ def get_main_keyboard(
 def get_check_result_keyboard(
     profile: user_storage.UserProfile,
     user_id: int,
+    *,
+    cursor_recheck: bool = False,
 ) -> InlineKeyboardMarkup:
-    """Меню после проверки: как у загруженного фото без кнопки «Проверить», плюс 👍/👎."""
+    """Меню после проверки: как у загруженного фото без кнопки «Проверить», плюс 👍/👎.
+
+    `cursor_recheck` добавляет кнопку «Проверить ещё раз (Cursor)» — повторный прогон
+    тех же фото через альтернативный OpenAI-эндпоинт (cursor-bridge); показывается
+    только если у бота сохранён последний батч фото и сервер сконфигурирован на fallback.
+    """
     base = get_main_keyboard(
         uploaded=True,
         profile=profile,
@@ -1515,6 +1491,10 @@ def get_check_result_keyboard(
         user_id=user_id,
     )
     rows = [list(r) for r in base.inline_keyboard]
+    if cursor_recheck:
+        rows.append(
+            [InlineKeyboardButton("Проверить ещё раз (Cursor)", callback_data="recheck_cursor")],
+        )
     rows.append(
         [
             InlineKeyboardButton("👍", callback_data="cfv:1"),
@@ -2933,15 +2913,11 @@ async def _run_homework_text_answer_check(
             reply_markup=check_kb,
             parse_mode=ParseMode.HTML,
         )
+    # После основной (qwen) проверки стикер не отправляем — см. развилку
+    # в `_run_homework_check`. Стикер-награда теперь только за recheck/Cursor.
 
-    await _after_check_stickers_quip_record(
-        context,
-        chat_id,
-        user_id,
-        outs,
-        body_raw,
-        summary_ok,
-    )
+
+_LAST_CHECK_FILE_IDS = "last_check_file_ids"
 
 
 async def _run_homework_check(
@@ -2952,15 +2928,28 @@ async def _run_homework_check(
     chat_id: int,
     profile: user_storage.UserProfile,
     file_ids: list[str],
+    engine: str = "auto",
 ) -> None:
     n_img = len(file_ids)
-    await query.edit_message_text(
-        "<b>Проверяю работу…</b>\n"
-        f"Фото: <b>{n_img}</b>.\n"
-        "<i>Скачиваю и отправляю на сервер по очереди.</i>\n"
-        "Ожидайте минуту - статус \"печатает...\" означает, что бот не завис",
-        parse_mode=ParseMode.HTML,
-    )
+    # Запоминаем батч, чтобы пользователь мог нажать «Проверить ещё раз (Cursor)»
+    # — без этого кнопка не сможет восстановить тот же набор фото.
+    context.user_data[_LAST_CHECK_FILE_IDS] = list(file_ids)
+    engine_norm = (engine or "auto").strip().lower() or "auto"
+    if engine_norm == "cursor":
+        intro = (
+            "<b>Проверяю работу через Cursor…</b>\n"
+            f"Фото: <b>{n_img}</b>.\n"
+            "<i>Cursor отвечает медленнее основной модели — пара минут это нормально.</i>\n"
+            "Ожидайте — статус \"печатает...\" означает, что бот не завис"
+        )
+    else:
+        intro = (
+            "<b>Проверяю работу…</b>\n"
+            f"Фото: <b>{n_img}</b>.\n"
+            "<i>Скачиваю и отправляю на сервер по очереди.</i>\n"
+            "Ожидайте минуту - статус \"печатает...\" означает, что бот не завис"
+        )
+    await query.edit_message_text(intro, parse_mode=ParseMode.HTML)
 
     async def _do_check() -> None:
         para = (profile.hw_paragraph or "").strip()
@@ -2997,6 +2986,7 @@ async def _run_homework_check(
             "gdz_verif_pages": gdz_vp,
             "gdz_verif_works": gdz_vw,
             "gdz_task_condition": gdz_tc,
+            "engine": engine_norm,
         }
         _check_url = f"{SERVER_URL.rstrip('/')}/check"
         _summarize_url = f"{SERVER_URL.rstrip('/')}/check/summarize"
@@ -3105,7 +3095,10 @@ async def _run_homework_check(
                 body_raw = final_text
             else:
                 try:
-                    sr = await client.post(_summarize_url, json={"parts": outs})
+                    sr = await client.post(
+                        _summarize_url,
+                        json={"parts": outs, "engine": engine_norm},
+                    )
                     sr.raise_for_status()
                     merged = (sr.json().get("result") or "").strip()
                     bad = (
@@ -3151,7 +3144,12 @@ async def _run_homework_check(
             raw_plain = raw_plain[: max(80, len(raw_plain) - max(50, len(full_html) - 4088))] + "..."
             body_html = telegram_format.markdownish_to_telegram_html(raw_plain)
             full_html = prefix + cond_html + body_html + suffix
-        check_kb = get_check_result_keyboard(prof, user_id)
+        check_kb = get_check_result_keyboard(
+            prof,
+            user_id,
+            cursor_recheck=_cursor_recheck_available()
+            and bool(context.user_data.get(_LAST_CHECK_FILE_IDS)),
+        )
         try:
             await query.edit_message_text(
                 full_html,
@@ -3166,14 +3164,30 @@ async def _run_homework_check(
                 parse_mode=ParseMode.HTML,
             )
 
-        await _after_check_stickers_quip_record(
-            context,
-            chat_id,
-            user_id,
-            outs,
-            body_raw,
-            summary_ok,
-        )
+        if engine_norm == "cursor":
+            # Повторная проверка через Cursor: стикер шлем только при
+            # «преимущественно правильном» вердикте (homework_check_stats_result).
+            # Иначе — короткое уведомление, чтобы пользователь не смотрел
+            # на молчаливый чат после долгого ответа cursor-agent.
+            verdict = homework_check_status.homework_check_stats_result(body_raw)
+            sticker_sent = False
+            if verdict == "correct":
+                with suppress(Exception):
+                    sticker_sent = await _send_recheck_reward_sticker(
+                        context,
+                        chat_id,
+                        user_id,
+                    )
+            if not sticker_sent:
+                with suppress(Exception):
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text="Повторная проверка завершена. См. результат выше.",
+                    )
+        # После основной проверки (engine=auto) стикер не отправляем. Стикер-
+        # «реакция» мог сбивать с толку — пользователь и так видит результат
+        # с верхнеуровневым ✅/❌ в заголовке. Награждение стикером оставлено
+        # только за повторной проверкой через Cursor (см. ветку выше).
 
     async def _do_check_with_safety_net() -> None:
         try:
@@ -4328,6 +4342,41 @@ async def _button_callback_dispatch(
         )
         return
 
+    if data == "recheck_cursor":
+        if not _cursor_recheck_available():
+            await _answer_query_once(
+                query,
+                text="Cursor-проверка не настроена на сервере.",
+                show_alert=True,
+            )
+            return
+        profile = await asyncio.to_thread(user_storage.get_profile, USER_DB_PATH, user_id)
+        if profile is None:
+            await query.edit_message_text(
+                "Сначала выбери учебник: /start",
+                reply_markup=grade_keyboard(back_to_main=False),
+            )
+            return
+        cached = context.user_data.get(_LAST_CHECK_FILE_IDS) or []
+        file_ids = [str(x) for x in cached if x]
+        if not file_ids:
+            await _answer_query_once(
+                query,
+                text="Не нашёл фото последней проверки — загрузи их заново.",
+                show_alert=True,
+            )
+            return
+        await _run_homework_check(
+            query,
+            context,
+            user_id=user_id,
+            chat_id=chat_id,
+            profile=profile,
+            file_ids=file_ids,
+            engine="cursor",
+        )
+        return
+
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_user or not update.message:
@@ -4438,125 +4487,6 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     logger.error("unhandled handler error", exc_info=context.error)
 
 
-def _plain_chunks(s: str, limit: int = 4000) -> list[str]:
-    t = (s or "").strip()
-    if not t:
-        return ["(пустой ответ)"]
-    if len(t) <= limit:
-        return [t]
-    return [t[i : i + limit] for i in range(0, len(t), limit)]
-
-
-async def cursor_ask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.message or not update.effective_user:
-        return
-    uid = update.effective_user.id
-    logger.info("cmd /cursorask user_id=%s", uid)
-    if await _reply_if_blocked_cmd(update, context):
-        return
-    if not await _disclaimer_consent_ok(update, context):
-        return
-    if not cursor_cli_client.cli_configured():
-        await update.message.reply_text(
-            "Cursor CLI недоступен: нет исполняемого <code>agent</code> в PATH "
-            "(или задайте <code>CURSOR_CLI_BIN</code>). Установка: "
-            "<code>curl https://cursor.com/install -fsS | bash</code>",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-    allow = _cursor_ask_allowlist_ids()
-    if not allow or uid not in allow:
-        await update.message.reply_text(
-            "Команда доступна только для user id из списка CURSOR_ASK_ALLOW_TELEGRAM_IDS.",
-        )
-        return
-    text = " ".join(context.args).strip()
-    if not text:
-        await update.message.reply_text(
-            "Использование: <code>/cursorask</code> текст\n"
-            "Или одно фото с подписью <code>/cursorask</code> текст",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-    await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
-    try:
-        out = await cursor_cli_client.run_cursor_agent(text, None)
-    except Exception as e:
-        logger.exception("cursor_ask failed user_id=%s", uid)
-        await update.message.reply_text(f"Ошибка Cursor CLI: {_h(repr(e))}", parse_mode=ParseMode.HTML)
-        return
-    for part in _plain_chunks(out):
-        await update.message.reply_text(_h(part), parse_mode=ParseMode.HTML)
-
-
-async def cursor_ask_photo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.message or not update.effective_user or not update.message.photo:
-        return
-    uid = update.effective_user.id
-    logger.info("cmd /cursorask (photo) user_id=%s", uid)
-    if await _reply_if_blocked_cmd(update, context):
-        return
-    if not await _disclaimer_consent_ok(update, context):
-        return
-    if not cursor_cli_client.cli_configured():
-        await update.message.reply_text(
-            "Cursor CLI недоступен: нет исполняемого <code>agent</code> в PATH "
-            "(или задайте <code>CURSOR_CLI_BIN</code>). Установка: "
-            "<code>curl https://cursor.com/install -fsS | bash</code>",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-    allow = _cursor_ask_allowlist_ids()
-    if not allow or uid not in allow:
-        await update.message.reply_text(
-            "Команда доступна только для user id из списка CURSOR_ASK_ALLOW_TELEGRAM_IDS.",
-        )
-        return
-    if update.message.media_group_id is not None:
-        await update.message.reply_text(
-            "Для этой команды пришли одно фото, не альбом.",
-        )
-        return
-    cap = update.message.caption or ""
-    m = re.match(r"^/cursorask(?:@\S*)?\s*(.*)$", cap, flags=re.DOTALL)
-    prompt = (m.group(1) if m else "").strip()
-    if not prompt:
-        await update.message.reply_text(
-            "В подписи к фото укажи текст после <code>/cursorask</code>.",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-    photo = update.message.photo[-1]
-    await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
-    try:
-        file = await context.bot.get_file(photo.file_id)
-        raw = await file.download_as_bytearray()
-    except Exception as e:
-        logger.exception("cursorask photo download user_id=%s", uid)
-        await update.message.reply_text(f"Не удалось скачать фото: {_h(repr(e))}", parse_mode=ParseMode.HTML)
-        return
-    tmp_path: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            suffix=".jpg", prefix="tgzh_cursor_", delete=False
-        ) as f:
-            f.write(bytes(raw))
-            tmp_path = f.name
-        out = await cursor_cli_client.run_cursor_agent(prompt, tmp_path)
-    except Exception as e:
-        logger.exception("cursor_ask photo failed user_id=%s", uid)
-        await update.message.reply_text(
-            f"Ошибка Cursor CLI: {_h(repr(e))}", parse_mode=ParseMode.HTML
-        )
-        return
-    finally:
-        if tmp_path:
-            with suppress(OSError):
-                Path(tmp_path).unlink(missing_ok=True)
-    for part in _plain_chunks(out):
-        await update.message.reply_text(_h(part), parse_mode=ParseMode.HTML)
-
-
 def main() -> None:
     global CATALOG
 
@@ -4622,15 +4552,8 @@ def main() -> None:
     app.add_handler(CommandHandler("my_support", my_support_cmd))
     app.add_handler(CommandHandler("polling", polling_cmd))
     app.add_handler(CommandHandler("begemot", begemot_cmd))
-    app.add_handler(CommandHandler("cursorask", cursor_ask_cmd))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_homework_text))
-    app.add_handler(
-        MessageHandler(
-            filters.PHOTO & filters.CaptionRegex(r"^/cursorask(@\S*)?(\s|$)"),
-            cursor_ask_photo_cmd,
-        ),
-    )
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
     app.run_polling(allowed_updates=Update.ALL_TYPES)

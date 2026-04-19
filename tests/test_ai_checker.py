@@ -652,3 +652,390 @@ def test_append_analysis_footer_preserves_mixed_numbers_marker() -> None:
     assert "Предварительное распознавание" in out
     assert "Модель: m1" in out
     assert out.index("Модель:") < out.rindex("[tgzh_mixed_numbers]")
+
+
+# --- Опциональный fallback на Cursor-bridge ---
+#
+# Все тесты ниже подменяют openai.AsyncOpenAI так, что primary и fallback
+# получают разные mock-инстансы (через side_effect-список). Это позволяет
+# проверить ровно ту последовательность вызовов, которую делает
+# `_chat_with_fallback`.
+
+
+def _make_mock_response(text: str | None) -> MagicMock:
+    resp = MagicMock()
+    if text is None:
+        resp.choices = []
+    else:
+        resp.choices = [MagicMock()]
+        resp.choices[0].message.content = text
+    return resp
+
+
+def _enable_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VLLM_BASE_URL", "http://localhost:9/v1")
+    monkeypatch.setenv("VLLM_FALLBACK_ENABLE", "1")
+    monkeypatch.setenv("VLLM_FALLBACK_BASE_URL", "http://bridge:8787/v1")
+    monkeypatch.setenv("VLLM_FALLBACK_API_KEY", "tok")
+    monkeypatch.setenv("VLLM_FALLBACK_MODEL", "cursor-agent")
+
+
+@pytest.mark.asyncio
+async def test_fallback_used_on_api_connection_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    _enable_fallback(monkeypatch)
+    from openai import APIConnectionError
+
+    primary = MagicMock()
+    primary.chat.completions.create = AsyncMock(side_effect=APIConnectionError(request=MagicMock()))
+    fallback = MagicMock()
+    fallback.chat.completions.create = AsyncMock(return_value=_make_mock_response("из бриджа"))
+
+    with patch("openai.AsyncOpenAI", side_effect=[primary, fallback]) as mock_cls:
+        out = await ai_checker._check_vllm(
+            b"\xff\xd8\xff" + b"\x00" * 20,
+            "image/jpeg",
+            paragraph="1",
+            exercise=None,
+            page=None,
+            textbook_label="",
+            grade=None,
+        )
+
+    assert mock_cls.call_count == 2
+    primary.chat.completions.create.assert_awaited_once()
+    fallback.chat.completions.create.assert_awaited_once()
+    fb_kwargs = fallback.chat.completions.create.await_args.kwargs
+    assert fb_kwargs["model"] == "cursor-agent"
+    assert "из бриджа" in out
+    # В футере должна быть отмечена fallback-модель, чтобы пользователь видел.
+    assert "Модель: cursor-agent" in out
+
+
+@pytest.mark.asyncio
+async def test_fallback_used_on_empty_choices(monkeypatch: pytest.MonkeyPatch) -> None:
+    _enable_fallback(monkeypatch)
+
+    primary = MagicMock()
+    primary.chat.completions.create = AsyncMock(return_value=_make_mock_response(None))
+    fallback = MagicMock()
+    fallback.chat.completions.create = AsyncMock(return_value=_make_mock_response("спасение"))
+
+    with patch("openai.AsyncOpenAI", side_effect=[primary, fallback]):
+        out = await ai_checker.summarize_check_parts(["один", "два"])
+
+    primary.chat.completions.create.assert_awaited_once()
+    fallback.chat.completions.create.assert_awaited_once()
+    assert "спасение" in out
+
+
+@pytest.mark.asyncio
+async def test_fallback_disabled_returns_primary_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VLLM_BASE_URL", "http://localhost:9/v1")
+    monkeypatch.delenv("VLLM_FALLBACK_ENABLE", raising=False)
+    monkeypatch.delenv("VLLM_FALLBACK_BASE_URL", raising=False)
+    from openai import APIConnectionError
+
+    primary = MagicMock()
+    primary.chat.completions.create = AsyncMock(side_effect=APIConnectionError(request=MagicMock()))
+
+    with patch("openai.AsyncOpenAI", side_effect=[primary]):
+        out = await ai_checker._check_vllm(
+            b"\xff\xd8\xff" + b"\x00" * 20,
+            "image/jpeg",
+            paragraph="1",
+            exercise=None,
+            page=None,
+            textbook_label="",
+            grade=None,
+        )
+
+    primary.chat.completions.create.assert_awaited_once()
+    assert "подключиться" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_fallback_both_fail_returns_safe_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    _enable_fallback(monkeypatch)
+    from openai import APIConnectionError
+
+    primary = MagicMock()
+    primary.chat.completions.create = AsyncMock(side_effect=APIConnectionError(request=MagicMock()))
+    fallback = MagicMock()
+    fallback.chat.completions.create = AsyncMock(side_effect=RuntimeError("bridge dead"))
+
+    with patch("openai.AsyncOpenAI", side_effect=[primary, fallback]):
+        out = await ai_checker._check_vllm(
+            b"\xff\xd8\xff" + b"\x00" * 20,
+            "image/jpeg",
+            paragraph="1",
+            exercise=None,
+            page=None,
+            textbook_label="",
+            grade=None,
+        )
+
+    primary.chat.completions.create.assert_awaited_once()
+    fallback.chat.completions.create.assert_awaited_once()
+    # При падении обоих эндпоинтов пользователь должен увидеть «человеческое»
+    # сообщение от primary (APIConnectionError), а не голое исключение.
+    assert "подключиться" in out.lower()
+    assert "Модель:" in out
+
+
+@pytest.mark.asyncio
+async def test_fallback_not_triggered_on_4xx(monkeypatch: pytest.MonkeyPatch) -> None:
+    _enable_fallback(monkeypatch)
+    from openai import APIStatusError
+
+    err = APIStatusError(
+        message="bad input",
+        response=MagicMock(status_code=400),
+        body=None,
+    )
+
+    primary = MagicMock()
+    primary.chat.completions.create = AsyncMock(side_effect=err)
+    fallback = MagicMock()
+    fallback.chat.completions.create = AsyncMock(return_value=_make_mock_response("never"))
+
+    with patch("openai.AsyncOpenAI", side_effect=[primary, fallback]):
+        out = await ai_checker._check_vllm(
+            b"\xff\xd8\xff" + b"\x00" * 20,
+            "image/jpeg",
+            paragraph="1",
+            exercise=None,
+            page=None,
+            textbook_label="",
+            grade=None,
+        )
+
+    primary.chat.completions.create.assert_awaited_once()
+    # 4xx — клиентская ошибка, fallback не пытаемся (он бы её повторил).
+    fallback.chat.completions.create.assert_not_called()
+    assert "Ошибка VLLM" in out
+
+
+@pytest.mark.asyncio
+async def test_force_fallback_skips_primary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Кнопка «Проверить ещё раз (Cursor)» — primary VLLM не должен дёргаться."""
+    _enable_fallback(monkeypatch)
+
+    primary = MagicMock()
+    primary.chat.completions.create = AsyncMock(return_value=_make_mock_response("должно игнорироваться"))
+    fallback = MagicMock()
+    fallback.chat.completions.create = AsyncMock(return_value=_make_mock_response("ответ от cursor"))
+
+    with patch("openai.AsyncOpenAI", side_effect=[fallback]) as mock_cls:
+        out = await ai_checker._check_vllm(
+            b"\xff\xd8\xff" + b"\x00" * 20,
+            "image/jpeg",
+            paragraph="1",
+            exercise=None,
+            page=None,
+            textbook_label="",
+            grade=None,
+            force_fallback=True,
+        )
+
+    assert mock_cls.call_count == 1, "должен быть создан только fallback-клиент"
+    fb_kwargs = fallback.chat.completions.create.await_args.kwargs
+    assert fb_kwargs["model"] == "cursor-agent"
+    assert "ответ от cursor" in out
+    assert "Модель: cursor-agent" in out
+    primary.chat.completions.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_force_fallback_without_config_returns_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Если fallback не сконфигурирован, force_fallback не должен «молча» уходить в primary."""
+    monkeypatch.setenv("VLLM_BASE_URL", "http://localhost:9/v1")
+    monkeypatch.delenv("VLLM_FALLBACK_ENABLE", raising=False)
+    monkeypatch.delenv("VLLM_FALLBACK_BASE_URL", raising=False)
+
+    primary = MagicMock()
+    primary.chat.completions.create = AsyncMock(return_value=_make_mock_response("primary"))
+
+    with patch("openai.AsyncOpenAI", side_effect=[primary]) as mock_cls:
+        out = await ai_checker._check_vllm(
+            b"\xff\xd8\xff" + b"\x00" * 20,
+            "image/jpeg",
+            paragraph="1",
+            exercise=None,
+            page=None,
+            textbook_label="",
+            grade=None,
+            force_fallback=True,
+        )
+
+    assert mock_cls.call_count == 0, "primary не должен создаваться при force_fallback"
+    primary.chat.completions.create.assert_not_called()
+    assert "недоступна" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_force_fallback_summarize(monkeypatch: pytest.MonkeyPatch) -> None:
+    """summarize_check_parts с force_fallback=True уходит сразу в bridge."""
+    _enable_fallback(monkeypatch)
+
+    primary = MagicMock()
+    primary.chat.completions.create = AsyncMock(return_value=_make_mock_response("primary"))
+    fallback = MagicMock()
+    fallback.chat.completions.create = AsyncMock(return_value=_make_mock_response("сводка из cursor"))
+
+    with patch("openai.AsyncOpenAI", side_effect=[fallback]):
+        out = await ai_checker.summarize_check_parts(
+            ["часть один", "часть два"],
+            force_fallback=True,
+        )
+
+    primary.chat.completions.create.assert_not_called()
+    fallback.chat.completions.create.assert_awaited_once()
+    assert "сводка из cursor" in out
+
+
+@pytest.mark.asyncio
+async def test_fallback_http_client_uses_dns_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Если задан VLLM_FALLBACK_DNS_SERVERS, fallback-клиент создается с http_client,
+    в котором стоит наш upstream-DNS transport, и этот клиент пробрасывается в AsyncOpenAI.
+    """
+    import tgzh_httpx
+
+    _enable_fallback(monkeypatch)
+    monkeypatch.setenv("VLLM_FALLBACK_DNS_SERVERS", "1.1.1.1, 8.8.8.8")
+    # Сбросить кэшированный клиент между тестами.
+    ai_checker._fallback_http_client_state["servers"] = None
+    ai_checker._fallback_http_client_state["client"] = None
+    tgzh_httpx._clear_dns_cache_for_tests()
+
+    fallback = MagicMock()
+    fallback.chat.completions.create = AsyncMock(return_value=_make_mock_response("ответ от cursor"))
+
+    with patch("openai.AsyncOpenAI", side_effect=[fallback]) as mock_cls:
+        await ai_checker._check_vllm(
+            b"\xff\xd8\xff" + b"\x00" * 20,
+            "image/jpeg",
+            paragraph="1",
+            exercise=None,
+            page=None,
+            textbook_label="",
+            grade=None,
+            force_fallback=True,
+        )
+
+    assert mock_cls.call_count == 1
+    fb_kwargs = mock_cls.call_args.kwargs
+    assert "http_client" in fb_kwargs, "должен прокинуться http_client с upstream-DNS"
+    http_client = fb_kwargs["http_client"]
+    transport = http_client._transport
+    pool = getattr(transport, "_pool", None)
+    assert pool is not None
+    assert isinstance(pool._network_backend, tgzh_httpx._UpstreamDnsBackend)
+    assert pool._network_backend._dns_servers == ("1.1.1.1", "8.8.8.8")
+
+
+@pytest.mark.asyncio
+async def test_fallback_no_http_client_when_dns_servers_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Без VLLM_FALLBACK_DNS_SERVERS / _RESOLVE_HTTP_ECHO_URL — клиент создается
+    без http_client (системный резолвер)."""
+    _enable_fallback(monkeypatch)
+    monkeypatch.delenv("VLLM_FALLBACK_DNS_SERVERS", raising=False)
+    monkeypatch.delenv("VLLM_FALLBACK_RESOLVE_HTTP_ECHO_URL", raising=False)
+    ai_checker._fallback_http_client_state["servers"] = None
+    ai_checker._fallback_http_client_state["client"] = None
+
+    fallback = MagicMock()
+    fallback.chat.completions.create = AsyncMock(return_value=_make_mock_response("ok"))
+
+    with patch("openai.AsyncOpenAI", side_effect=[fallback]) as mock_cls:
+        await ai_checker._check_vllm(
+            b"\xff\xd8\xff" + b"\x00" * 20,
+            "image/jpeg",
+            paragraph="1",
+            exercise=None,
+            page=None,
+            textbook_label="",
+            grade=None,
+            force_fallback=True,
+        )
+
+    assert "http_client" not in mock_cls.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_fallback_http_client_uses_http_echo_resolver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """С VLLM_FALLBACK_RESOLVE_HTTP_ECHO_URL — фабрика собирает _HttpEchoBackend
+    с правильным target_host (хост из VLLM_FALLBACK_BASE_URL) и DNS как страховка."""
+    import tgzh_httpx
+
+    _enable_fallback(monkeypatch)
+    monkeypatch.setenv("VLLM_FALLBACK_BASE_URL", "http://br.example.com:8787/v1")
+    monkeypatch.setenv("VLLM_FALLBACK_RESOLVE_HTTP_ECHO_URL", "http://echo.example/")
+    monkeypatch.setenv("VLLM_FALLBACK_DNS_SERVERS", "1.1.1.1, 8.8.8.8")
+    ai_checker._fallback_http_client_state["servers"] = None
+    ai_checker._fallback_http_client_state["client"] = None
+    tgzh_httpx._clear_echo_cache_for_tests()
+    tgzh_httpx._clear_dns_cache_for_tests()
+
+    fallback = MagicMock()
+    fallback.chat.completions.create = AsyncMock(return_value=_make_mock_response("ok"))
+
+    with patch("openai.AsyncOpenAI", side_effect=[fallback]) as mock_cls:
+        await ai_checker._check_vllm(
+            b"\xff\xd8\xff" + b"\x00" * 20,
+            "image/jpeg",
+            paragraph="1",
+            exercise=None,
+            page=None,
+            textbook_label="",
+            grade=None,
+            force_fallback=True,
+        )
+
+    fb_kwargs = mock_cls.call_args.kwargs
+    http_client = fb_kwargs["http_client"]
+    backend = http_client._transport._pool._network_backend
+    assert isinstance(backend, tgzh_httpx._HttpEchoBackend)
+    assert backend._target_host == "br.example.com"
+    assert backend._echo_url == "http://echo.example/"
+    assert backend._dns_fallback == ("1.1.1.1", "8.8.8.8")
+
+
+@pytest.mark.asyncio
+async def test_fallback_http_client_echo_without_target_host_falls_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Если echo задан, но в VLLM_FALLBACK_BASE_URL нет валидного хоста — echo
+    игнорируется; при наличии DNS — используем DNS-backend."""
+    import tgzh_httpx
+
+    _enable_fallback(monkeypatch)
+    monkeypatch.setenv("VLLM_FALLBACK_BASE_URL", "http:///v1")  # без хоста
+    monkeypatch.setenv("VLLM_FALLBACK_RESOLVE_HTTP_ECHO_URL", "http://echo.example/")
+    monkeypatch.setenv("VLLM_FALLBACK_DNS_SERVERS", "1.1.1.1")
+    ai_checker._fallback_http_client_state["servers"] = None
+    ai_checker._fallback_http_client_state["client"] = None
+
+    fallback = MagicMock()
+    fallback.chat.completions.create = AsyncMock(return_value=_make_mock_response("ok"))
+
+    with patch("openai.AsyncOpenAI", side_effect=[fallback]) as mock_cls:
+        await ai_checker._check_vllm(
+            b"\xff\xd8\xff" + b"\x00" * 20,
+            "image/jpeg",
+            paragraph="1",
+            exercise=None,
+            page=None,
+            textbook_label="",
+            grade=None,
+            force_fallback=True,
+        )
+
+    fb_kwargs = mock_cls.call_args.kwargs
+    backend = fb_kwargs["http_client"]._transport._pool._network_backend
+    assert isinstance(backend, tgzh_httpx._UpstreamDnsBackend)

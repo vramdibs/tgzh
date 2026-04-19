@@ -47,12 +47,27 @@ class CheckResponse(BaseModel):
     result: str
 
 
+_ALLOWED_CHECK_ENGINES = frozenset({"auto", "cursor"})
+
+
+def _resolve_engine(value: str | None) -> str:
+    """Нормализует Form-параметр `engine` в `/check`-эндпоинтах."""
+    raw = (value or "").strip().lower() or "auto"
+    if raw not in _ALLOWED_CHECK_ENGINES:
+        raise HTTPException(
+            400,
+            f"Unsupported engine={raw!r} (allowed: {sorted(_ALLOWED_CHECK_ENGINES)})",
+        )
+    return raw
+
+
 class SummarizeRequest(BaseModel):
     parts: list[str] = Field(
         ...,
         min_length=2,
         max_length=_MAX_SUMMARIZE_PARTS,
     )
+    engine: str = Field(default="auto")
 
 
 class QuipRequest(BaseModel):
@@ -84,9 +99,10 @@ async def check_summarize(body: SummarizeRequest) -> CheckResponse:
             413,
             f"Часть {too_long} длиннее лимита {_MAX_SUMMARIZE_PART_LEN} символов",
         )
+    engine = _resolve_engine(body.engine)
     t0 = time.perf_counter()
     try:
-        result = await summarize_check_parts(body.parts)
+        result = await summarize_check_parts(body.parts, force_fallback=engine == "cursor")
     except Exception:
         logger.exception("summarize_check_parts failed")
         raise
@@ -114,6 +130,7 @@ async def check_photo(
     gdz_verif_pages: str = Form(""),
     gdz_verif_works: str = Form(""),
     gdz_task_condition: str = Form(""),
+    engine: str = Form("auto"),
 ) -> CheckResponse:
     """Принимает фото или документ (см. allowed_check_mime), возвращает результат проверки."""
     if not allowed_check_mime(photo.content_type):
@@ -136,12 +153,14 @@ async def check_photo(
     if grade.strip().isdigit():
         grade_val = int(grade.strip())
     ex = exercise.strip() or None
+    engine_norm = _resolve_engine(engine)
 
     logger.info(
-        "check start bytes=%s content_type=%r paragraph_len=%s exercise=%r page=%s grade=%s textbook_len=%s "
+        "check start bytes=%s content_type=%r engine=%s paragraph_len=%s exercise=%r page=%s grade=%s textbook_len=%s "
         "gdz_ex_len=%s gdz_vp_len=%s gdz_vw_len=%s gdz_tc_len=%s",
         len(data),
         photo.content_type,
+        engine_norm,
         len(paragraph.strip()),
         ex,
         page_val,
@@ -168,6 +187,7 @@ async def check_photo(
             gdz_verif_pages=gdz_verif_pages.strip(),
             gdz_verif_works=gdz_verif_works.strip(),
             gdz_task_condition=gdz_task_condition.strip(),
+            force_fallback=engine_norm == "cursor",
         )
     except Exception:
         failed = True
