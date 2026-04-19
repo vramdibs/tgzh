@@ -108,6 +108,34 @@ def test_system_prompt_includes_memory_when_enabled(db_path: str) -> None:
     assert "PROJ-X" in out
     # base prompt тоже на месте
     assert "ИИ-ассистент" in out or "ассистент" in out.lower()
+    # И блок безопасности — обязателен.
+    assert bot._CHAT_SAFETY_POLICY in out
+
+
+def test_bot_safety_policy_always_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`_bot_chat_default_system_prompt` всегда префиксует политику безопасности."""
+    monkeypatch.delenv("CHAT_SYSTEM_PROMPT", raising=False)
+    default_prompt = bot._bot_chat_default_system_prompt()
+    assert default_prompt.startswith(bot._CHAT_SAFETY_POLICY)
+    for keyword in (
+        "ЗАПРЕЩЕНО",
+        "shell",
+        "листинг",
+        "пути в файловой системе",
+        "multimodal-контент",
+    ):
+        assert keyword in default_prompt
+    monkeypatch.setenv("CHAT_SYSTEM_PROMPT", "  кастомный  ")
+    custom = bot._bot_chat_default_system_prompt()
+    assert custom.startswith(bot._CHAT_SAFETY_POLICY)
+    assert custom.endswith("кастомный")
+
+
+def test_bot_and_server_safety_policy_are_in_sync() -> None:
+    """Дубликат политики безопасности на стороне бота и сервера должен совпадать."""
+    import ai_checker
+
+    assert bot._CHAT_SAFETY_POLICY == ai_checker.CHAT_SAFETY_POLICY
 
 
 # ====================== auto-sleep scheduler ======================

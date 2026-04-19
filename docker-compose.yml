@@ -86,6 +86,38 @@ services:
       retries: 6
       start_period: 60s
 
+  # Whisper STT (Speech-To-Text) для голосовых сообщений в /chat.
+  # OpenAI-совместимый POST /v1/audio/transcriptions (faster-whisper). Бот ходит сюда
+  # из контейнера через имя сервиса tgzh-stt:9000 (см. .env: STT_BASE_URL).
+  # Карта sm_120 (Blackwell, RTX 5060 Ti) — используем CPU (как и tgzh-preocr); int8
+  # на 4 потоках укладывается в ~1.5 ГБ RAM с моделью small.
+  # Порт хоста 127.0.0.1:9100 — только для локальной отладки (curl /v1/models).
+  # Модели кэшируются в томе tgzh-stt-models (на первом старте качается ~465 МБ).
+  tgzh-stt:
+    image: hwdsl2/whisper-server:latest
+    container_name: tgzh-stt
+    restart: always
+    networks:
+      - tgzh-internal
+    ports:
+      - "127.0.0.1:9100:9000"
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-ru}
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+      WHISPER_THREADS: ${WHISPER_THREADS:-4}
+      WHISPER_BEAM: ${WHISPER_BEAM:-1}
+      WHISPER_LOG_LEVEL: ${WHISPER_LOG_LEVEL:-INFO}
+    volumes:
+      - tgzh-stt-models:/var/lib/whisper
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9000/v1/models', timeout=3).status==200 else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 180s
+
   tgzh-bot:
     build:
       context: .
@@ -119,6 +151,10 @@ services:
         condition: service_healthy
       tgzh-server:
         condition: service_healthy
+      # tgzh-stt не блокирует старт бота: голосовые без STT просто отвечают «не настроено»,
+      # а первый старт STT качает модель и может занять 1-3 минуты.
+      tgzh-stt:
+        condition: service_started
     # PostgreSQL: DATABASE_URL в .env (например postgresql://tgzh:tgzh@postgres:5432/tgzh). USER_DB_PATH в compose не задаем — иначе перекрывает смысл Postgres
 
 networks:
@@ -129,3 +165,4 @@ volumes:
   tgzh-data:
   tgzh-pg:
   tgzh-preocr-models:
+  tgzh-stt-models:

@@ -25,7 +25,43 @@ def test_chat_default_system_prompt_overridable(monkeypatch: pytest.MonkeyPatch)
     default = ai_checker.chat_default_system_prompt()
     assert "ассистент" in default.lower()
     monkeypatch.setenv("CHAT_SYSTEM_PROMPT", "  своя инструкция  ")
-    assert ai_checker.chat_default_system_prompt() == "своя инструкция"
+    overridden = ai_checker.chat_default_system_prompt()
+    assert overridden.endswith("своя инструкция")
+    assert ai_checker.CHAT_SAFETY_POLICY in overridden
+
+
+def test_chat_safety_policy_always_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Префикс безопасности должен идти всегда, даже при пустом / переопределённом промпте."""
+    monkeypatch.delenv("CHAT_SYSTEM_PROMPT", raising=False)
+    default_prompt = ai_checker.chat_default_system_prompt()
+    assert default_prompt.startswith(ai_checker.CHAT_SAFETY_POLICY)
+    for keyword in (
+        "ЗАПРЕЩЕНО",
+        "shell",
+        "листинг",
+        "пути в файловой системе",
+        # Новый раздел: разрешаем работать с приложенными картинками/STT — это явно
+        # часть пользовательского сообщения, а не «чтение файлов с диска».
+        "multimodal-контент",
+    ):
+        assert keyword in default_prompt
+    monkeypatch.setenv("CHAT_SYSTEM_PROMPT", "  кастомный промпт  ")
+    custom_prompt = ai_checker.chat_default_system_prompt()
+    assert custom_prompt.startswith(ai_checker.CHAT_SAFETY_POLICY)
+    assert custom_prompt.endswith("кастомный промпт")
+
+
+def test_chat_safety_policy_in_normalized_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`/chat/stream` должен передавать политику безопасности в system, даже если бот её не прислал."""
+    monkeypatch.delenv("CHAT_SYSTEM_PROMPT", raising=False)
+    req = ChatStreamRequest(
+        user_id=42,
+        messages=[ChatMessage(role="user", content="привет")],
+        system_prompt=None,
+    )
+    msgs = _normalize_chat_messages(req)
+    assert msgs[0]["role"] == "system"
+    assert ai_checker.CHAT_SAFETY_POLICY in msgs[0]["content"]
 
 
 def test_chat_history_turns_bounded(monkeypatch: pytest.MonkeyPatch) -> None:

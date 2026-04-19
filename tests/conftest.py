@@ -38,5 +38,27 @@ def _clear_env_for_unit_tests(monkeypatch: pytest.MonkeyPatch) -> None:
         "CHAT_MEMORY_SLEEP_TRANSCRIPT_TURNS",
         "CHAT_MEMORY_SLEEP_TIMEOUT_S",
         "CHAT_SYSTEM_PROMPT",
+        # STT_* — у нас опциональный STT для голосовых; в юнит-тестах не должны
+        # случайно стучаться в реальный Whisper-эндпоинт через dev-`.env`.
+        "STT_BASE_URL",
+        "STT_API_KEY",
+        "STT_MODEL",
+        "STT_LANGUAGE",
+        "STT_TIMEOUT_S",
+        "STT_MAX_AUDIO_BYTES",
+        # DISCLAIMER_* — в проде висит DISCLAIMER_VERSION=N и пока пользователь
+        # не «согласен», `_disclaimer_consent_ok → False`. Юниты, которые этого
+        # явно не моделируют, иначе уходят в reply «Сначала открой /start…».
+        # Тесты, которым нужен дисклеймер, выставляют переменные сами.
+        "DISCLAIMER_VERSION",
+        "DISCLAIMER_SKIP",
+        "DISCLAIMER_TEXT",
+        "DISCLAIMER_QUIZ_QUESTION",
+        "DISCLAIMER_QUIZ_CORRECT",
+        "DISCLAIMER_QUIZ_OPT_0",
+        "DISCLAIMER_QUIZ_OPT_1",
+        "DISCLAIMER_QUIZ_OPT_2",
+        "DISCLAIMER_QUIZ_OPT_3",
+        "DISCLAIMER_ACCEPT_BUTTON",
     ):
         monkeypatch.delenv(key, raising=False)

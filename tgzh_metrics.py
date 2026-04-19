@@ -28,12 +28,13 @@ _server_check_errors_total = None
 _server_check_duration_seconds = None
 _check_feedback_total = None
 _llm_fallback_total = None
+_stt_requests_total = None
 
 
 def _ensure_metrics() -> None:
     global _bot_updates_total, _bot_handler_errors_total, _poll_completed_total
     global _server_check_requests_total, _server_check_errors_total, _server_check_duration_seconds
-    global _check_feedback_total, _llm_fallback_total
+    global _check_feedback_total, _llm_fallback_total, _stt_requests_total
     if Counter is None:
         return
     if _bot_updates_total is None:
@@ -79,6 +80,12 @@ def _ensure_metrics() -> None:
             "tgzh_llm_fallback_total",
             "Сколько раз primary VLLM пришлось заменять fallback-эндпоинтом",
             ["stage", "reason"],
+        )
+    if _stt_requests_total is None:
+        _stt_requests_total = Counter(
+            "tgzh_stt_requests_total",
+            "Распознавание голосовых сообщений в /chat",
+            ["outcome"],
         )
 
 
@@ -164,6 +171,20 @@ def record_llm_fallback(*, stage: str, reason: str) -> None:
     safe_stage = stage if stage in _LLM_FALLBACK_STAGES else "other"
     safe_reason = reason if reason in _LLM_FALLBACK_REASONS else "other"
     _llm_fallback_total.labels(safe_stage, safe_reason).inc()
+
+
+_STT_OUTCOMES: frozenset[str] = frozenset(
+    {"ok", "disabled", "too_large", "timeout", "http_error", "empty", "other"}
+)
+
+
+def record_stt(*, outcome: str) -> None:
+    """Счётчик `tgzh_stt_requests_total{outcome}`."""
+    _ensure_metrics()
+    if _stt_requests_total is None:
+        return
+    safe = outcome if outcome in _STT_OUTCOMES else "other"
+    _stt_requests_total.labels(safe).inc()
 
 
 def observe_server_check(*, elapsed_seconds: float, failed: bool) -> None:
