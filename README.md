@@ -195,7 +195,7 @@ docker compose up -d --build
 
 **Предварительное OCR (опционально)**
 
-Сервис **`tgzh-preocr`** (каталог [`preocr/`](preocr/), по умолчанию [`Dockerfile.preocr.gpu`](Dockerfile.preocr.gpu), альтернатива CPU — [`Dockerfile.preocr`](Dockerfile.preocr)) поднимается профилем Compose. Как пользоваться:
+Сервис **`tgzh-preocr`** (каталог [`preocr/`](preocr/), по умолчанию [`Dockerfile.preocr`](Dockerfile.preocr) — CPU; для GPU есть [`Dockerfile.preocr.gpu`](Dockerfile.preocr.gpu)) поднимается профилем Compose. Как пользоваться:
 
 - В **`.env`** задай **`PREOCR_URL=http://tgzh-preocr:8088`** (имя сервиса во внутренней сети; пустой URL — OCR не вызывается, в VLM уходит только картинка). Использует **`tgzh-server`** при проверке **только для `image/*`** (**`preocr_client`** → **`ai_checker`**); сценарий **«Ответить текстом»** и файлы **`text/plain`** (и соседние текстовые MIME) идут **сразу в LLM**, без pre-OCR. Если у части multipart **потерян** тип и пришло **`application/octet-stream`**, сервер по байтам распознает валидный **UTF-8** как текст (**`ai_checker._mime_from_bytes`**), чтобы не подставлять **`image/jpeg`** и не дергать OCR
 - Поднять стек с OCR: **`docker compose --profile preocr up -d --build`**. Без запущенного **`tgzh-preocr`** при непустом **`PREOCR_URL`** проверка фото на сервере будет падать на вызове OCR — либо поднимай профиль, либо очисти **`PREOCR_URL`**
@@ -205,9 +205,26 @@ docker compose up -d --build
 
 В ответе проверки в боте (текст с сервера) в конце, перед строкой **`Модель: …`**, при успешном непустом OCR появляется фраза **`Предварительное распознавание текста (pre-OCR) использовано.`** — по ней видно, что блок OCR попал в промпт. Если **`PREOCR_URL`** пустой, сервис OCR недоступен или **`merged_markdown`** пустой, этой строки не будет
 
-**GPU (по умолчанию в compose):** в **`docker-compose.yml`** заданы **`gpus: all`** и **`PREOCR_DOCKERFILE=Dockerfile.preocr.gpu`** (если переменная не переопределена). Нужны драйвер NVIDIA и **[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)**. Базовый образ Paddle задается **`PADDLE_GPU_IMAGE`** (в **`.env`** или аргумент **`build.args`**), например **`paddlepaddle/paddle:3.2.2-gpu-cuda12.6-cudnn9.5`**; другие теги с Docker Hub **`paddlepaddle/paddle`**: **`3.2.2-gpu-cuda11.8-cudnn8.9`**, **`...-cuda12.9-cudnn9.9`**, **`...-cuda13.0-cudnn9.13`** — выбери совместимый с драйвером хоста
+**CPU (дефолт в compose):** в **`docker-compose.yml`** значение **`PREOCR_DOCKERFILE=${PREOCR_DOCKERFILE:-Dockerfile.preocr}`** и блока **`gpus: all`** **нет**. Образ работает на любой машине без CUDA; первый вызов прогревает PaddleOCR-модели в lifespan-хуке (см. **`preocr/app.py`**, **`preocr/engine.warm_up`**)
 
-**Только CPU (без NVIDIA):** в **`.env`** **`PREOCR_DOCKERFILE=Dockerfile.preocr`** и убери у сервиса **`tgzh-preocr`** ключ **`gpus`** (файл **`docker-compose.override.yml`** в корне не коммить, либо правь **`docker-compose.yml`** локально)
+**GPU (опционально):** создай **`docker-compose.override.yml`** в корне:
+
+```yaml
+services:
+  tgzh-preocr:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    runtime: nvidia
+    environment:
+      PREOCR_DOCKERFILE: Dockerfile.preocr.gpu
+```
+
+Также положи в **`.env`** **`PREOCR_DOCKERFILE=Dockerfile.preocr.gpu`** и (опционально) **`PADDLE_GPU_IMAGE`** под нужную CUDA, например **`paddlepaddle/paddle:3.2.2-gpu-cuda12.6-cudnn9.5`** (другие теги — на Docker Hub **`paddlepaddle/paddle`**: **`3.2.2-gpu-cuda11.8-cudnn8.9`**, **`...-cuda12.9-cudnn9.9`**, **`...-cuda13.0-cudnn9.13`**). Нужны драйвер NVIDIA и **[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)**. **Известное ограничение:** PaddlePaddle 3.2.2 поддерживает sm_75…90; на **sm_120 (Blackwell, RTX 50xx)** запуск падает — оставь CPU-дефолт
 
 Деплой на удалённый хост по SSH: если в корне проекта есть **`.env`**, скрипт **`scripts/deploy-docker.sh`** копирует его на сервер перед **`docker compose`**; иначе положи **`.env`** в каталог деплоя на сервере вручную
 

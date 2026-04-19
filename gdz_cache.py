@@ -6,10 +6,33 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import shutil
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
+
+logger = logging.getLogger(__name__)
+
+_ALLOWED_HOST_SUFFIXES: tuple[str, ...] = (".gdz.ru",)
+_ALLOWED_HOSTS: tuple[str, ...] = ("gdz.ru",)
+
+
+def _is_allowed_image_url(url: str) -> bool:
+    """Allowlist для save_bundle: блокирует SSRF через картинки на чужих хостах."""
+    try:
+        p = urlparse((url or "").strip())
+    except (ValueError, TypeError):
+        return False
+    if p.scheme not in ("https", "http"):
+        return False
+    host = (p.hostname or "").lower()
+    if not host:
+        return False
+    if host in _ALLOWED_HOSTS:
+        return True
+    return any(host.endswith(suf) for suf in _ALLOWED_HOST_SUFFIXES)
 
 
 def cache_key(
@@ -101,6 +124,10 @@ def save_bundle(
     names: list[str] = []
     try:
         for i, url in enumerate(image_urls):
+            if not _is_allowed_image_url(url):
+                logger.warning("gdz_cache: skip non-gdz image url=%r", url)
+                shutil.rmtree(d, ignore_errors=True)
+                return None
             r = client.get(url)
             r.raise_for_status()
             ct = (r.headers.get("content-type") or "").lower()

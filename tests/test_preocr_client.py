@@ -7,7 +7,16 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+import preocr_client
 from preocr_client import fetch_preocr_block
+
+
+@pytest.fixture(autouse=True)
+def _reset_preocr_singleton() -> None:
+    # Singleton AsyncClient переиспользуется между запросами,
+    # тесты должны видеть свежий mock на каждом сценарии.
+    preocr_client._client = None
+    preocr_client._client_timeout = None
 
 
 @pytest.mark.asyncio

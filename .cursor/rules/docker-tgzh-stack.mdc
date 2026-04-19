@@ -15,8 +15,8 @@ alwaysApply: false
 
 ## Образ `tgzh-preocr` (`Dockerfile.preocr` / `Dockerfile.preocr.gpu`)
 
-- Сборка: **`docker compose --profile preocr build tgzh-preocr`**; по умолчанию **`PREOCR_DOCKERFILE=Dockerfile.preocr.gpu`** и **`gpus: all`** (нужен NVIDIA Container Toolkit)
-- CPU: в **`.env`** **`PREOCR_DOCKERFILE=Dockerfile.preocr`**, убери **`gpus`** у сервиса (override) или собери образ вручную с **`Dockerfile.preocr`**
+- Сборка: **`docker compose --profile preocr build tgzh-preocr`**; **по умолчанию `PREOCR_DOCKERFILE=Dockerfile.preocr` (CPU), без `gpus`** — работает на любой машине без CUDA
+- GPU (опционально): создай **`docker-compose.override.yml`** с **`deploy.resources.reservations.devices`** под **`driver: nvidia`** + положи в **`.env`** **`PREOCR_DOCKERFILE=Dockerfile.preocr.gpu`** и при необходимости **`PADDLE_GPU_IMAGE`**. Нужен NVIDIA Container Toolkit. Известное ограничение: PaddlePaddle 3.2.2 не поддерживает sm_120 (Blackwell, RTX 50xx) — оставляй CPU-дефолт
 - Зависимости приложения в **`preocr/requirements-common.txt`** + **`paddlepaddle`** (CPU) или базовый образ Paddle (GPU); **`uvicorn`** с **`--workers 1`**
 
 ## Сеть `tgzh-internal` (`docker-compose.yml`)

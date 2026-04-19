@@ -12,12 +12,19 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 load_dotenv()
 
 from logging_config import setup_logging
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+import preocr_client
 import tgzh_metrics
 from ai_checker import allowed_check_mime, check_homework, generate_check_quip, summarize_check_parts
 
 logger = setup_logging("tgzh.server")
+
+# Лимиты для входов LLM-эндпоинтов: страховка против гигантских payload'ов и
+# разогнанного потребления токенов. Значения с запасом по сравнению с реальными вызовами от бота.
+_MAX_SUMMARIZE_PARTS = 16
+_MAX_SUMMARIZE_PART_LEN = 16_000
+_MAX_QUIP_EXCERPT_LEN = 8_000
 
 
 @asynccontextmanager
@@ -27,7 +34,10 @@ async def lifespan(_app: FastAPI):
         os.getenv("PORT", "8000"),
         os.getenv("AI_MOCK", "?"),
     )
-    yield
+    try:
+        yield
+    finally:
+        await preocr_client.aclose_client()
 
 
 app = FastAPI(title="Homework Checker API", lifespan=lifespan)
@@ -38,11 +48,15 @@ class CheckResponse(BaseModel):
 
 
 class SummarizeRequest(BaseModel):
-    parts: list[str]
+    parts: list[str] = Field(
+        ...,
+        min_length=2,
+        max_length=_MAX_SUMMARIZE_PARTS,
+    )
 
 
 class QuipRequest(BaseModel):
-    excerpt: str = ""
+    excerpt: str = Field(default="", max_length=_MAX_QUIP_EXCERPT_LEN)
 
 
 @app.post("/check/quip", response_model=CheckResponse)
@@ -64,6 +78,12 @@ async def check_summarize(body: SummarizeRequest) -> CheckResponse:
     """Текстовая сводка нескольких результатов проверки (второй вызов LLM)."""
     if len(body.parts) < 2:
         raise HTTPException(400, "Нужно минимум два фрагмента для сводки")
+    too_long = next((i for i, p in enumerate(body.parts) if len(p) > _MAX_SUMMARIZE_PART_LEN), -1)
+    if too_long >= 0:
+        raise HTTPException(
+            413,
+            f"Часть {too_long} длиннее лимита {_MAX_SUMMARIZE_PART_LEN} символов",
+        )
     t0 = time.perf_counter()
     try:
         result = await summarize_check_parts(body.parts)

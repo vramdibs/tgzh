@@ -39,9 +39,14 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(sa.text("DROP TABLE IF EXISTS feedback_ticket"))
-    op.execute(sa.text("DROP TABLE IF EXISTS user_poll"))
-    op.execute(sa.text("DROP TABLE IF EXISTS user_consent"))
-    op.execute(sa.text("DROP TABLE IF EXISTS user_feedback"))
-    op.execute(sa.text("DROP TABLE IF EXISTS user_profile"))
-    op.execute(sa.text("DROP TABLE IF EXISTS bot_stats_by_year"))
+    """
+    Downgrade начальной схемы намеренно не реализован: upgrade() прогоняет полный
+    scripts/postgres_schema.sql (около десятка таблиц с FK), и неполный DROP может
+    оставить осиротевшие объекты. Если действительно нужно «снести всё», делать это
+    отдельным DDL-скриптом или drop_all через SQLAlchemy metadata.
+    """
+    raise NotImplementedError(
+        "Downgrade начальной схемы 001_initial не поддерживается. "
+        "Удаляйте схему вручную (DROP SCHEMA public CASCADE; CREATE SCHEMA public;) "
+        "или пересоздайте БД."
+    )

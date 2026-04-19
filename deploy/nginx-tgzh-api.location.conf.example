@@ -6,6 +6,32 @@
 #
 # Бот дергает POST .../tgzh-api/check, GET .../tgzh-api/health
 
+# --- Опциональный rate limit на /tgzh-api/check ---
+# Защита от ботов/DOS: перед check'ом бот уже выполняет валидацию и upload,
+# но если /tgzh-api/ опубликован наружу (например, для диагностики или партнёров),
+# поставь limit_req. Зону объяви ОДИН раз в http {} (например в /etc/nginx/conf.d/00-tgzh-rate.conf):
+#
+#   limit_req_zone $binary_remote_addr zone=tgzh_check:10m rate=12r/m;
+#   limit_req_status 429;
+#
+# Затем включи limit_req в location ниже.
+
+location = /tgzh-api/check {
+    # включи rate-limit, раскомментировав строку:
+    # limit_req zone=tgzh_check burst=4 nodelay;
+
+    proxy_pass http://127.0.0.1:8000/check;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    client_max_body_size 25m;
+    proxy_read_timeout 300s;
+    proxy_connect_timeout 60s;
+    proxy_send_timeout 300s;
+}
+
 location /tgzh-api/ {
     proxy_pass http://127.0.0.1:8000/;
     proxy_http_version 1.1;

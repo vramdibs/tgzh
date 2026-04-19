@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any
@@ -13,6 +14,42 @@ from typing import Any
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# Singleton-клиент: пересоздаём AsyncClient только при смене таймаута (через env).
+# Иначе на каждый /check открывалось новое TCP/HTTP-соединение к tgzh-preocr,
+# что под нагрузкой давало лишние коннекты и тормоза.
+_client: httpx.AsyncClient | None = None
+_client_timeout: float | None = None
+_client_lock = asyncio.Lock()
+
+
+async def _get_client(timeout_s: float) -> httpx.AsyncClient:
+    global _client, _client_timeout
+    if _client is not None and _client_timeout == timeout_s:
+        return _client
+    async with _client_lock:
+        if _client is not None and _client_timeout == timeout_s:
+            return _client
+        if _client is not None:
+            try:
+                await _client.aclose()
+            except Exception:
+                logger.debug("preocr client aclose failed", exc_info=True)
+        _client = httpx.AsyncClient(timeout=timeout_s)
+        _client_timeout = timeout_s
+        return _client
+
+
+async def aclose_client() -> None:
+    """Корректно закрыть глобальный AsyncClient (вызывать на shutdown сервера)."""
+    global _client, _client_timeout
+    if _client is None:
+        return
+    try:
+        await _client.aclose()
+    finally:
+        _client = None
+        _client_timeout = None
 
 
 def _preocr_url() -> str:
@@ -60,11 +97,11 @@ async def fetch_preocr_block(*, image_bytes: bytes, content_type: str) -> str:
 
     url = f"{base}/v1/preocr"
     try:
-        async with httpx.AsyncClient(timeout=_timeout_s()) as client:
-            r = await client.post(
-                url,
-                files={"image": (filename, image_bytes, ct)},
-            )
+        client = await _get_client(_timeout_s())
+        r = await client.post(
+            url,
+            files={"image": (filename, image_bytes, ct)},
+        )
     except httpx.HTTPError as e:
         logger.warning("preocr request failed: %s", e)
         return ""

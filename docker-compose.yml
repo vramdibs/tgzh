@@ -8,13 +8,16 @@ services:
     networks:
       - tgzh-internal
     environment:
-      POSTGRES_USER: tgzh
-      POSTGRES_PASSWORD: tgzh
-      POSTGRES_DB: tgzh
+      # Креды и имя БД берутся из .env (см. .env.example: POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB).
+      # Фоллбэки tgzh/tgzh/tgzh оставлены для локальной dev-среды; в проде задавай явно
+      # и держи такие же значения в DATABASE_URL.
+      POSTGRES_USER: ${POSTGRES_USER:-tgzh}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tgzh}
+      POSTGRES_DB: ${POSTGRES_DB:-tgzh}
     volumes:
       - tgzh-pg:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U tgzh -d tgzh"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tgzh} -d ${POSTGRES_DB:-tgzh}"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -39,10 +42,11 @@ services:
       timeout: 5s
       retries: 6
       start_period: 20s
-    # При активном профиле preocr сервер стартует после pre-OCR (имя хоста tgzh-preocr из PREOCR_URL)
+    # При активном профиле preocr сервер стартует после pre-OCR (имя хоста tgzh-preocr из PREOCR_URL).
+    # Ждём именно service_healthy, чтобы /check не падал по таймауту, пока модели прогреваются.
     depends_on:
       tgzh-preocr:
-        condition: service_started
+        condition: service_healthy
         required: false
 
   # Опционально: docker compose --profile preocr up -d --build (см. README). В .env: PREOCR_URL=http://tgzh-preocr:8088
@@ -93,8 +97,9 @@ services:
       SERVER_URL: http://tgzh-server:8000
       GDZ_CATALOG_PATH: /app/static/gdz_matematika_textbooks.json
       GDZ_CACHE_DIR: /app/data/gdz_cache
-      # Граница учебного года для статистики (сентябрь — август); см. STATS_TIMEZONE в .env.example
-      STATS_TIMEZONE: Europe/Samara
+      # Граница учебного года для статистики (сентябрь — август). Берём из .env (STATS_TIMEZONE);
+      # дефолт оставлен Europe/Moscow и совпадает с .env.example / README.
+      STATS_TIMEZONE: ${STATS_TIMEZONE:-Europe/Moscow}
     volumes:
       # Именованный том: SQLite (профили, статистика) и кеш GDZ переживают удаление контейнера.
       # Не используй docker compose down -v, если нужны данные.

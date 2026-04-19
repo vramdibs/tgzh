@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -16,10 +17,44 @@ from bs4 import BeautifulSoup
 
 import gdz_cache
 
+logger = logging.getLogger(__name__)
+
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
+
+# Allowlist для всех HTTP-обращений к GDZ: блокирует SSRF через подменённые URL
+# (учебники, картинки решений) — например на 169.254.169.254/cloud-metadata.
+_GDZ_ALLOWED_HOST_SUFFIXES: tuple[str, ...] = (".gdz.ru",)
+_GDZ_ALLOWED_HOSTS: tuple[str, ...] = ("gdz.ru",)
+
+
+class GdzUrlNotAllowed(ValueError):
+    """URL не относится к gdz.ru: блокируем для защиты от SSRF."""
+
+
+def _is_allowed_gdz_url(url: str) -> bool:
+    try:
+        p = urlparse((url or "").strip())
+    except (ValueError, TypeError):
+        return False
+    if p.scheme not in ("https", "http"):
+        return False
+    host = (p.hostname or "").lower()
+    if not host:
+        return False
+    if host in _GDZ_ALLOWED_HOSTS:
+        return True
+    return any(host.endswith(suf) for suf in _GDZ_ALLOWED_HOST_SUFFIXES)
+
+
+def _assert_gdz_url(url: str) -> str:
+    """Возвращает нормализованный URL или поднимает GdzUrlNotAllowed."""
+    u = (url or "").strip()
+    if not _is_allowed_gdz_url(u):
+        raise GdzUrlNotAllowed(f"URL вне gdz.ru заблокирован: {u!r}")
+    return u
 
 
 @dataclass(frozen=True)
@@ -56,16 +91,19 @@ def _book_base_path(textbook_url: str) -> str:
 
 
 def _normalize_img_url(src: str) -> str | None:
+    """Возвращает абсолютный URL только в пределах gdz.ru (защита от SSRF через парсинг)."""
     s = (src or "").strip()
     if not s:
         return None
     if s.startswith("//"):
-        return "https:" + s
-    if s.startswith("/"):
-        return "https://gdz.ru" + s
-    if s.startswith("http"):
-        return s
-    return None
+        candidate = "https:" + s
+    elif s.startswith("/"):
+        candidate = "https://gdz.ru" + s
+    elif s.startswith("http://") or s.startswith("https://"):
+        candidate = s
+    else:
+        return None
+    return candidate if _is_allowed_gdz_url(candidate) else None
 
 
 def paragraph_parts(paragraph: str) -> tuple[int | None, int | None]:
@@ -255,13 +293,23 @@ def fetch_paragraph_task_meta(
     url = (textbook_url or "").strip()
     if not url:
         return ParagraphTaskMeta(frozenset(), ())
+    try:
+        url = _assert_gdz_url(url)
+    except GdzUrlNotAllowed:
+        return ParagraphTaskMeta(frozenset(), ())
     headers = {"User-Agent": USER_AGENT, "Accept-Language": "ru-RU,ru;q=0.9"}
     try:
         with httpx.Client(headers=headers, follow_redirects=True, timeout=timeout) as client:
             r = client.get(url)
             r.raise_for_status()
             return collect_paragraph_task_meta(r.text, url, paragraph)
-    except Exception:
+    except Exception as e:
+        logger.warning(
+            "fetch_paragraph_task_meta failed url=%s paragraph=%r: %s",
+            url,
+            paragraph,
+            e,
+        )
         return ParagraphTaskMeta(frozenset(), ())
 
 
@@ -278,6 +326,10 @@ def fetch_homework_check_gdz_data(
     """
     url = (textbook_url or "").strip()
     if not url:
+        return ParagraphTaskMeta(frozenset(), ()), ""
+    try:
+        url = _assert_gdz_url(url)
+    except GdzUrlNotAllowed:
         return ParagraphTaskMeta(frozenset(), ()), ""
     want_condition = bool((exercise or "").strip()) or page is not None
     precache_cond = ""
@@ -302,13 +354,21 @@ def fetch_homework_check_gdz_data(
             rel = find_task_path_on_index(html, url, paragraph, exercise, page)
             if not rel:
                 return meta, ""
-            full_url = urljoin("https://gdz.ru/", rel)
+            full_url = _assert_gdz_url(urljoin("https://gdz.ru/", rel))
             r2 = client.get(full_url)
             r2.raise_for_status()
             condition, _imgs = extract_solution_from_task_page(r2.text, full_url)
             ct = (condition or "").strip()
             return meta, ct
-    except Exception:
+    except Exception as e:
+        logger.warning(
+            "fetch_homework_check_gdz_data failed url=%s paragraph=%r exercise=%r page=%s: %s",
+            url,
+            paragraph,
+            exercise,
+            page,
+            e,
+        )
         return ParagraphTaskMeta(frozenset(), ()), ""
 
 
@@ -411,6 +471,10 @@ def fetch_solution(
                 None,
             )
 
+    try:
+        textbook_url = _assert_gdz_url(textbook_url)
+    except GdzUrlNotAllowed as e:
+        return None, f"URL учебника не относится к gdz.ru: {e}"
     base = _book_base_path(textbook_url)
     headers = {"User-Agent": USER_AGENT, "Accept-Language": "ru-RU,ru;q=0.9"}
     try:
@@ -430,7 +494,7 @@ def fetch_solution(
                 )
                 return None, hint
 
-            full_url = urljoin("https://gdz.ru/", rel)
+            full_url = _assert_gdz_url(urljoin("https://gdz.ru/", rel))
             r2 = client.get(full_url)
             r2.raise_for_status()
             condition, imgs = extract_solution_from_task_page(r2.text, full_url)

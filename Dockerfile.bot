@@ -3,10 +3,15 @@ FROM python:3.12-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# Cursor Agent CLI (/cursorask): curl из install-скрипта, бинарники в /root/.local
+# Cursor Agent CLI (/cursorask) — опционально: docker build --build-arg INSTALL_CURSOR_CLI=1 ...
+# По умолчанию выключено: install-скрипт качается curl-ом без пиннинга — supply-chain риск,
+# в типичном деплое /cursorask не нужен.
+ARG INSTALL_CURSOR_CLI=0
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \
-    && curl -fsSL https://cursor.com/install | bash \
+    && if [ "$INSTALL_CURSOR_CLI" = "1" ]; then \
+         curl -fsSL https://cursor.com/install | bash; \
+       fi \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PATH="/root/.local/bin:${PATH}"

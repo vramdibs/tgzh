@@ -1184,14 +1184,11 @@ def upsert_check_result_vote(
     now = datetime.now(timezone.utc).isoformat()
     conn = connect(path)
     try:
+        # Один запрос вместо SELECT + INSERT/UPDATE: RETURNING вернёт строку только если
+        # запись фактически создана или vote реально поменялся (фильтр WHERE на DO UPDATE).
+        # vote — NOT NULL, поэтому `<>` работает и в SQLite, и в PostgreSQL.
+        # SQLite >= 3.35 и PostgreSQL >= 9.5 поддерживают INSERT ... RETURNING.
         row = _e(
-            conn,
-            "SELECT vote FROM check_result_vote WHERE chat_id = ? AND message_id = ? AND user_id = ?",
-            (chat_s, message_id, user_id),
-        ).fetchone()
-        if row is not None and int(row[0]) == vote:
-            return False
-        _e(
             conn,
             """
             INSERT INTO check_result_vote (chat_id, message_id, user_id, vote, updated_at)
@@ -1199,11 +1196,13 @@ def upsert_check_result_vote(
             ON CONFLICT (chat_id, message_id, user_id) DO UPDATE SET
                 vote = excluded.vote,
                 updated_at = excluded.updated_at
+                WHERE check_result_vote.vote <> excluded.vote
+            RETURNING vote
             """,
             (chat_s, message_id, user_id, vote, now),
-        )
+        ).fetchone()
         conn.commit()
-        return True
+        return row is not None
     finally:
         conn.close()
 

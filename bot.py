@@ -15,8 +15,10 @@ import random
 import re
 import tempfile
 import time
+from collections import deque
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -46,6 +48,38 @@ logger = setup_logging("tgzh.bot")
 
 def _h(s: str) -> str:
     return html.escape(s or "", quote=False)
+
+
+_ANSWERED_QUERY_IDS: deque[str] = deque(maxlen=4096)
+_ANSWERED_QUERY_SET: set[str] = set()
+
+
+async def _answer_query_once(
+    query: CallbackQuery,
+    text: str | None = None,
+    *,
+    show_alert: bool = False,
+) -> None:
+    """
+    Идемпотентный query.answer: дедуп по query.id, чтобы безусловный «дисмисс спиннера»
+    не «съедал» осмысленный alert/toast в дочерней ветке (Telegram разрешает ровно один answer).
+    Повторный вызов после первого молча игнорируется (включая возможный поздний BadRequest).
+    """
+    qid = getattr(query, "id", "") or ""
+    if qid and qid in _ANSWERED_QUERY_SET:
+        return
+    if qid:
+        if len(_ANSWERED_QUERY_IDS) == _ANSWERED_QUERY_IDS.maxlen and _ANSWERED_QUERY_IDS:
+            _ANSWERED_QUERY_SET.discard(_ANSWERED_QUERY_IDS[0])
+        _ANSWERED_QUERY_IDS.append(qid)
+        _ANSWERED_QUERY_SET.add(qid)
+    try:
+        if text is None:
+            await CallbackQuery.answer(query)
+        else:
+            await CallbackQuery.answer(query, text=text, show_alert=show_alert)
+    except BadRequest as e:
+        logger.debug("query.answer skipped: %s", e)
 
 
 def _schedule_feedback_tei_analysis(ticket_id: int, text: str) -> None:
@@ -425,6 +459,12 @@ _MOTIVATION_BUILTIN_STICKER_SET_NAMES = _BUILTIN_STICKER_SET_POOL
 _TADA_EMOJI_PREFER = "\U0001f389"  # 🎉
 
 user_photos: dict[int, list[str]] = {}
+# Все мутации user_photos — под этим asyncio.Lock'ом. Хэндлеры PTB конкурируют
+# в одном event loop, и без лока два одновременных update'а с фото от того же
+# пользователя могли «перезаписать» друг друга в dict (CPython gc-safe не значит
+# логически согласованно). Помещать сам словарь в context.user_data нельзя без
+# рефакторинга _do_check, поэтому ограничиваемся блокировкой.
+_user_photos_lock = asyncio.Lock()
 
 _PHOTO_BATCH_GID = "photo_batch_gid"
 _PHOTO_BATCH_ENTRIES = "photo_batch_entries"
@@ -443,12 +483,14 @@ def _user_has_uploaded_photo(user_id: int) -> bool:
     return bool(_user_photo_file_ids(user_id))
 
 
-def _store_photo_batch(user_id: int, ids: list[str]) -> None:
-    user_photos[user_id] = list(ids)
+async def _store_photo_batch(user_id: int, ids: list[str]) -> None:
+    async with _user_photos_lock:
+        user_photos[user_id] = list(ids)
 
 
-def _clear_user_photos(user_id: int) -> None:
-    user_photos.pop(user_id, None)
+async def _clear_user_photos(user_id: int) -> None:
+    async with _user_photos_lock:
+        user_photos.pop(user_id, None)
 
 
 def _cancel_photo_batch_task(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -484,7 +526,7 @@ async def _photo_batch_flush_delayed(
     profile = await asyncio.to_thread(user_storage.get_profile, USER_DB_PATH, user_id)
     if profile is None or not user_storage.homework_complete(profile):
         return
-    _store_photo_batch(user_id, ids)
+    await _store_photo_batch(user_id, ids)
     for _ in ids:
         await asyncio.to_thread(bot_stats.record_photo_uploaded, USER_DB_PATH)
     n = len(ids)
@@ -996,12 +1038,12 @@ async def _reply_if_blocked_callback(
     st, ok = await _safe_blocked_state(uid)
     if not ok:
         with suppress(Exception):
-            await query.answer(_BLOCKED_STATE_DB_ERROR_HTML, show_alert=True)
+            await _answer_query_once(query, _BLOCKED_STATE_DB_ERROR_HTML, show_alert=True)
         return True
     if st is None:
         return False
     with suppress(Exception):
-        await query.answer()
+        await _answer_query_once(query)
     with suppress(Exception):
         await query.message.reply_text(
             _blocked_user_message_html(st),
@@ -1015,18 +1057,18 @@ async def _handle_ban_lift(query: CallbackQuery, context: ContextTypes.DEFAULT_T
     uid = query.from_user.id if query.from_user else 0
     st, ok = await _safe_blocked_state(uid)
     if not ok:
-        await query.answer(_BLOCKED_STATE_DB_ERROR_HTML, show_alert=True)
+        await _answer_query_once(query, _BLOCKED_STATE_DB_ERROR_HTML, show_alert=True)
         return
     if st is None or st.get("kind") != user_storage.USER_BLOCK_TEMP:
-        await query.answer("Нет активного временного ограничения.", show_alert=True)
+        await _answer_query_once(query, "Нет активного временного ограничения.", show_alert=True)
         return
     try:
         await asyncio.to_thread(user_storage.clear_user_block, USER_DB_PATH, uid)
     except Exception:
         logger.exception("clear_user_block failed user_id=%s", uid)
-        await query.answer(_BLOCKED_STATE_DB_ERROR_HTML, show_alert=True)
+        await _answer_query_once(query, _BLOCKED_STATE_DB_ERROR_HTML, show_alert=True)
         return
-    await query.answer("Ограничение снято.")
+    await _answer_query_once(query, "Ограничение снято.")
     if query.message:
         with suppress(BadRequest):
             await query.edit_message_reply_markup(reply_markup=None)
@@ -1607,6 +1649,18 @@ def _hw_summary(profile: user_storage.UserProfile) -> str:
     return f"Параграф {p}"
 
 
+def _hw_summary_log(profile: user_storage.UserProfile) -> str:
+    """Краткая безопасная версия для логов: только идентификаторы пунктов ДЗ, без любого текста условий."""
+    parts: list[str] = []
+    if profile.hw_paragraph:
+        parts.append(f"par={profile.hw_paragraph!r}")
+    if profile.hw_page is not None:
+        parts.append(f"page={profile.hw_page}")
+    if profile.hw_exercise:
+        parts.append(f"ex={profile.hw_exercise!r}")
+    return " ".join(parts) or "par=-"
+
+
 def _hw_summary_html(profile: user_storage.UserProfile) -> str:
     p = profile.hw_paragraph or "—"
     pe = _h(p)
@@ -1893,8 +1947,8 @@ async def _send_gdz_solution_to_chat(
                     )
                 except Exception as e:
                     logger.warning(
-                        "gdz send_photo from cache failed path=%s user_id=%s: %s",
-                        path,
+                        "gdz send_photo from cache failed file=%s user_id=%s: %s",
+                        Path(path).name,
                         user_id,
                         e,
                     )
@@ -2487,9 +2541,9 @@ async def handle_homework_text(update: Update, context: ContextTypes.DEFAULT_TYP
             prof = await asyncio.to_thread(user_storage.get_profile, USER_DB_PATH, user_id)
             assert prof is not None
             logger.info(
-                "hw saved user_id=%s summary=%r",
+                "hw saved user_id=%s %s",
                 user_id,
-                _hw_summary(prof),
+                _hw_summary_log(prof),
             )
             flow_note(
                 context,
@@ -2521,7 +2575,7 @@ async def _handle_disclaimer_callback(
     user_id = query.from_user.id if query.from_user else 0
     chat_id = query.message.chat_id
     if dcfg is None:
-        await query.answer()
+        await _answer_query_once(query)
         return
     parts = data.split(":")
     picked: int | None = None
@@ -2531,10 +2585,10 @@ async def _handle_disclaimer_callback(
             msg_ver = int(parts[2].strip())
             picked = int(parts[3].strip())
         except ValueError:
-            await query.answer()
+            await _answer_query_once(query)
             return
         if msg_ver != dcfg.version:
-            await query.answer(
+            await _answer_query_once(query, 
                 "Текст условий обновился. Нажми /start внизу чата.",
                 show_alert=True,
             )
@@ -2544,7 +2598,7 @@ async def _handle_disclaimer_callback(
         try:
             picked = int(parts[2].strip())
         except ValueError:
-            await query.answer()
+            await _answer_query_once(query)
             return
 
     if picked is not None:
@@ -2562,13 +2616,13 @@ async def _handle_disclaimer_callback(
                     user_id,
                     data,
                 )
-                await query.answer(
+                await _answer_query_once(query, 
                     "Не удалось сохранить ответ. Попробуй еще раз или отправь /start.",
                     show_alert=True,
                 )
                 return
             context.user_data[_DISCLAIMER_WAIT_ACCEPT] = True
-            await query.answer("Верно")
+            await _answer_query_once(query, "Верно")
             compact = "<b>Согласие</b>\nОтвет верный. Подтверди условия кнопкой ниже."
             try:
                 await query.edit_message_text(
@@ -2592,7 +2646,7 @@ async def _handle_disclaimer_callback(
                 dcfg.version,
                 data,
             )
-            await query.answer(
+            await _answer_query_once(query, 
                 "Неверно. Прочитай текст выше и выбери другой вариант.",
                 show_alert=True,
             )
@@ -2604,7 +2658,7 @@ async def _handle_disclaimer_callback(
             dcfg.version,
         )
         if not can:
-            await query.answer("Сначала ответь на вопрос.", show_alert=True)
+            await _answer_query_once(query, "Сначала ответь на вопрос.", show_alert=True)
             return
         await asyncio.to_thread(
             user_storage.set_disclaimer_accepted,
@@ -2613,12 +2667,12 @@ async def _handle_disclaimer_callback(
             dcfg.version,
         )
         context.user_data.pop(_DISCLAIMER_WAIT_ACCEPT, None)
-        await query.answer("Принято")
+        await _answer_query_once(query, "Принято")
         with suppress(BadRequest):
             await query.edit_message_reply_markup(reply_markup=None)
         await _continue_start_after_consent(context.bot, chat_id, context, user_id)
         return
-    await query.answer()
+    await _answer_query_once(query)
 
 
 async def _handle_poll_callback(
@@ -2633,14 +2687,14 @@ async def _handle_poll_callback(
         try:
             likes = int(parts[2])
         except ValueError:
-            await query.answer()
+            await _answer_query_once(query)
             return
         if likes not in (0, 1):
-            await query.answer()
+            await _answer_query_once(query)
             return
         context.user_data[_POLL_LIKES_MATH] = likes
         context.user_data[_POLL_AWAIT_CAREER] = True
-        await query.answer("Записано")
+        await _answer_query_once(query, "Записано")
         try:
             await query.edit_message_text(
                 "<b>Опрос</b>\n\nКем хочешь стать? Напиши одним следующим сообщением (до ~2000 символов).",
@@ -2652,7 +2706,7 @@ async def _handle_poll_callback(
                 "Кем хочешь стать? Напиши одним следующим сообщением.",
             )
         return
-    await query.answer()
+    await _answer_query_once(query)
 
 
 async def _handle_check_feedback_vote(
@@ -2662,19 +2716,19 @@ async def _handle_check_feedback_vote(
 ) -> None:
     parts = data.split(":")
     if len(parts) != 2 or parts[0] != "cfv":
-        await query.answer()
+        await _answer_query_once(query)
         return
     try:
         vote = int(parts[1])
     except ValueError:
-        await query.answer()
+        await _answer_query_once(query)
         return
     if vote not in (1, -1):
-        await query.answer()
+        await _answer_query_once(query)
         return
     msg = query.message
     if not msg:
-        await query.answer()
+        await _answer_query_once(query)
         return
     uid = query.from_user.id if query.from_user else 0
     changed = await asyncio.to_thread(
@@ -2716,7 +2770,7 @@ async def _handle_check_feedback_vote(
             await query.edit_message_reply_markup(reply_markup=None)
     except BadRequest:
         pass
-    await query.answer("Спасибо" if changed else "Оценка уже сохранена")
+    await _answer_query_once(query, "Спасибо" if changed else "Оценка уже сохранена")
 
 
 def _check_result_task_condition_html(gdz_task_condition: str) -> str:
@@ -3121,13 +3175,55 @@ async def _run_homework_check(
             summary_ok,
         )
 
-    await run_with_typing(context.bot, chat_id, _do_check())
+    async def _do_check_with_safety_net() -> None:
+        try:
+            await _do_check()
+        except Exception:
+            # Внутри _do_check уже есть локальные try/except; этот внешний — страховка от
+            # неучтённых исключений, чтобы статус-сообщение «Проверяю работу…» не висело
+            # бесконечно у пользователя при неожиданной ошибке.
+            logger.exception("check unexpected outer error user_id=%s", user_id)
+            with suppress(Exception):
+                await asyncio.to_thread(bot_stats.record_check_technical_failed, USER_DB_PATH)
+            with suppress(BadRequest, Exception):
+                prof_safe = await asyncio.to_thread(
+                    user_storage.get_profile, USER_DB_PATH, user_id,
+                )
+                kb = (
+                    get_main_keyboard(
+                        uploaded=True,
+                        profile=prof_safe,
+                        show_check_button=False,
+                        user_id=user_id,
+                    )
+                    if prof_safe is not None
+                    else None
+                )
+                await query.edit_message_text(
+                    "Не удалось завершить проверку. Попробуй ещё раз через минуту.",
+                    reply_markup=kb,
+                )
+
+    await run_with_typing(context.bot, chat_id, _do_check_with_safety_net())
 
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query or not query.message:
         return
+    try:
+        await _button_callback_dispatch(update, context, query)
+    finally:
+        # Гарантированно гасим спиннер у callback (telegram разрешает один answer на запрос).
+        # Если ветка уже сделала answer(text=…, show_alert=…) — _answer_query_once это пропустит.
+        await _answer_query_once(query)
+
+
+async def _button_callback_dispatch(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    query: CallbackQuery,
+) -> None:
     user_id = query.from_user.id if query.from_user else 0
     data = query.data or ""
     chat_id = query.message.chat_id
@@ -3157,14 +3253,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data.startswith("fb:"):
         if not context.user_data.get(_BEGEMOT_OK):
-            await query.answer("Сначала войдите: команда /begemot", show_alert=True)
+            await _answer_query_once(query, "Сначала войдите: команда /begemot", show_alert=True)
             return
         parts = data.split(":")
         if len(parts) >= 3 and parts[1] == "o":
             try:
                 offset = int(parts[2])
             except ValueError:
-                await query.answer()
+                await _answer_query_once(query)
                 return
             offset = max(0, offset)
             total = await asyncio.to_thread(user_storage.count_user_feedback, USER_DB_PATH)
@@ -3186,7 +3282,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     ],
                 )
             markup_rows.extend(_admin_feedback_nav_keyboard(offset, total).inline_keyboard)
-            await query.answer()
+            await _answer_query_once(query)
             try:
                 await query.edit_message_text(
                     text_html,
@@ -3205,14 +3301,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             try:
                 uid_fb = int(parts[2])
             except ValueError:
-                await query.answer()
+                await _answer_query_once(query)
                 return
             row = await asyncio.to_thread(
                 user_storage.get_user_feedback_by_user_id,
                 USER_DB_PATH,
                 uid_fb,
             )
-            await query.answer()
+            await _answer_query_once(query)
             if row is None:
                 await context.bot.send_message(chat_id, "Запись не найдена.")
                 return
@@ -3309,9 +3405,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             try:
                 uid_arx = int(parts[2])
             except ValueError:
-                await query.answer()
+                await _answer_query_once(query)
                 return
-            await query.answer()
+            await _answer_query_once(query)
             arch_tickets = await asyncio.to_thread(
                 user_storage.list_feedback_tickets_for_admin_user,
                 USER_DB_PATH,
@@ -3353,10 +3449,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             try:
                 tid = int(parts[2])
             except ValueError:
-                await query.answer()
+                await _answer_query_once(query)
                 return
             tk = await asyncio.to_thread(user_storage.get_feedback_ticket_by_id, USER_DB_PATH, tid)
-            await query.answer()
+            await _answer_query_once(query)
             if tk is None:
                 await context.bot.send_message(chat_id, "Тикет не найден.")
                 return
@@ -3400,14 +3496,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             try:
                 tid = int(parts[2])
             except ValueError:
-                await query.answer()
+                await _answer_query_once(query)
                 return
             mode = parts[3]
             if mode not in ("r", "x"):
-                await query.answer()
+                await _answer_query_once(query)
                 return
             tk = await asyncio.to_thread(user_storage.get_feedback_ticket_by_id, USER_DB_PATH, tid)
-            await query.answer()
+            await _answer_query_once(query)
             if tk is None:
                 await context.bot.send_message(chat_id, "Тикет не найден.")
                 return
@@ -3432,12 +3528,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             try:
                 tuid = int(parts[2])
             except ValueError:
-                await query.answer("Неверный id", show_alert=True)
+                await _answer_query_once(query, "Неверный id", show_alert=True)
                 return
             if tuid == user_id:
-                await query.answer("Нельзя заблокировать свой аккаунт.", show_alert=True)
+                await _answer_query_once(query, "Нельзя заблокировать свой аккаунт.", show_alert=True)
                 return
-            await query.answer()
+            await _answer_query_once(query)
             context.user_data.pop(_FEEDBACK_STAFF_WAIT, None)
             context.user_data[_ADMIN_BAN_WAIT] = {"target_id": tuid}
             await context.bot.send_message(
@@ -3451,12 +3547,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             try:
                 tuid = int(parts[2])
             except ValueError:
-                await query.answer("Неверный id", show_alert=True)
+                await _answer_query_once(query, "Неверный id", show_alert=True)
                 return
             if tuid == user_id:
-                await query.answer("Нельзя забанить свой аккаунт.", show_alert=True)
+                await _answer_query_once(query, "Нельзя забанить свой аккаунт.", show_alert=True)
                 return
-            await query.answer()
+            await _answer_query_once(query)
             await asyncio.to_thread(user_storage.set_permanent_user_block, USER_DB_PATH, tuid)
             try:
                 await context.bot.send_message(
@@ -3476,9 +3572,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             try:
                 tuid = int(parts[2])
             except ValueError:
-                await query.answer("Неверный id", show_alert=True)
+                await _answer_query_once(query, "Неверный id", show_alert=True)
                 return
-            await query.answer()
+            await _answer_query_once(query)
             await asyncio.to_thread(user_storage.clear_user_block, USER_DB_PATH, tuid)
             try:
                 await context.bot.send_message(
@@ -3497,9 +3593,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             try:
                 tuid = int(parts[2])
             except ValueError:
-                await query.answer("Неверный id", show_alert=True)
+                await _answer_query_once(query, "Неверный id", show_alert=True)
                 return
-            await query.answer("Отправлено")
+            await _answer_query_once(query, "Отправлено")
             try:
                 await context.bot.send_message(
                     tuid,
@@ -3511,10 +3607,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     "Не удалось доставить сообщение пользователю.",
                 )
             return
-        await query.answer()
         return
-
-    await query.answer()
 
     if data == "stats":
         await _send_stats_message(context.bot, chat_id, user_id, context)
@@ -3628,7 +3721,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         _pop_step2_gdz_meta(context)
         prof = await asyncio.to_thread(user_storage.get_profile, USER_DB_PATH, user_id)
         assert prof is not None
-        logger.info("hw saved verif_btn user_id=%s summary=%r", user_id, _hw_summary(prof))
+        logger.info("hw saved verif_btn user_id=%s %s", user_id, _hw_summary_log(prof))
         await query.edit_message_text(
             _saved_homework_title_html(prof),
             reply_markup=None,
@@ -3694,10 +3787,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data == "back_hw:vf":
         if context.user_data.get(_HW_STEP) != "exercise_page":
-            await query.answer()
+            await _answer_query_once(query)
             return
         if not context.user_data.get(_HW_VERIF_SUBSCREEN):
-            await query.answer()
+            await _answer_query_once(query)
             return
         context.user_data.pop(_HW_VERIF_SUBSCREEN, None)
         await query.edit_message_text(
@@ -3709,11 +3802,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data == "hw_verif_open":
         if context.user_data.get(_HW_STEP) != "exercise_page":
-            await query.answer()
+            await _answer_query_once(query)
             return
         pages = context.user_data.get(_HW_VERIF_PAGES) or []
         if not pages:
-            await query.answer(
+            await _answer_query_once(query, 
                 "Для этого параграфа нет страниц проверочных в оглавлении.",
                 show_alert=True,
             )
@@ -3728,7 +3821,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data == "back_hw:pk":
         if context.user_data.get(_HW_STEP) != _HW_PAGE_KEYPAD:
-            await query.answer()
+            await _answer_query_once(query)
             return
         from_verif = context.user_data.pop(_HW_PAGE_FROM_VERIF, False)
         context.user_data[_HW_STEP] = "exercise_page"
@@ -3746,11 +3839,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data == "hw_page_keypad":
         if context.user_data.get(_HW_STEP) != "exercise_page":
-            await query.answer("Сначала открой шаг 2 после выбора параграфа.", show_alert=True)
+            await _answer_query_once(query, "Сначала открой шаг 2 после выбора параграфа.", show_alert=True)
             return
         paragraph = context.user_data.get("hw_paragraph_draft") or ""
         if not paragraph.strip():
-            await query.answer("Сначала выбери параграф.", show_alert=True)
+            await _answer_query_once(query, "Сначала выбери параграф.", show_alert=True)
             return
         context.user_data[_HW_PAGE_FROM_VERIF] = bool(context.user_data.get(_HW_VERIF_SUBSCREEN))
         context.user_data[_HW_STEP] = _HW_PAGE_KEYPAD
@@ -3825,10 +3918,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         valid = _exercise_valid_from_context(context)
         buf = (context.user_data.get(_HW_EX_BUF) or "").strip()
         if not buf:
-            await query.answer("Набери номер цифрами, затем «Готово».", show_alert=True)
+            await _answer_query_once(query, "Набери номер цифрами, затем «Готово».", show_alert=True)
             return
         if not _can_confirm_exercise(buf, valid):
-            await query.answer(
+            await _answer_query_once(query, 
                 "Такого номера упражнения нет в оглавлении этого параграфа.",
                 show_alert=True,
             )
@@ -3852,7 +3945,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         _pop_step2_gdz_meta(context)
         prof = await asyncio.to_thread(user_storage.get_profile, USER_DB_PATH, user_id)
         assert prof is not None
-        logger.info("hw saved exercise_keypad user_id=%s summary=%r", user_id, _hw_summary(prof))
+        logger.info("hw saved exercise_keypad user_id=%s %s", user_id, _hw_summary_log(prof))
         await query.edit_message_text(
             _saved_homework_title_html(prof),
             reply_markup=None,
@@ -3889,7 +3982,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         digit = data[4]
         buf = context.user_data.get(_HW_PAGE_BUF) or ""
         if len(buf) >= 3:
-            await query.answer("Не больше трёх цифр", show_alert=True)
+            await _answer_query_once(query, "Не больше трёх цифр", show_alert=True)
             return
         buf = buf + digit
         context.user_data[_HW_PAGE_BUF] = buf
@@ -3924,19 +4017,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return
         buf = (context.user_data.get(_HW_PAGE_BUF) or "").strip()
         if not buf:
-            await query.answer("Набери хотя бы одну цифру", show_alert=True)
+            await _answer_query_once(query, "Набери хотя бы одну цифру", show_alert=True)
             return
         try:
             page_num = int(buf)
         except ValueError:
-            await query.answer("Неверный номер", show_alert=True)
+            await _answer_query_once(query, "Неверный номер", show_alert=True)
             return
         if not (1 <= page_num <= 999):
-            await query.answer("Номер страницы от 1 до 999", show_alert=True)
+            await _answer_query_once(query, "Номер страницы от 1 до 999", show_alert=True)
             return
         paragraph = context.user_data.get("hw_paragraph_draft") or ""
         if not paragraph.strip():
-            await query.answer("Параграф потерян. Начни с шага 1.", show_alert=True)
+            await _answer_query_once(query, "Параграф потерян. Начни с шага 1.", show_alert=True)
             context.user_data[_HW_STEP] = _HW_PARAGRAPH_PICK
             _pop_step2_gdz_meta(context)
             return
@@ -3955,7 +4048,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         _pop_step2_gdz_meta(context)
         prof = await asyncio.to_thread(user_storage.get_profile, USER_DB_PATH, user_id)
         assert prof is not None
-        logger.info("hw saved page_keypad user_id=%s summary=%r", user_id, _hw_summary(prof))
+        logger.info("hw saved page_keypad user_id=%s %s", user_id, _hw_summary_log(prof))
         await query.edit_message_text(
             _saved_homework_title_html(prof),
             reply_markup=None,
@@ -3994,15 +4087,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data == "show_sol":
         profile = await asyncio.to_thread(user_storage.get_profile, USER_DB_PATH, user_id)
         if profile is None:
-            await query.answer("Сначала выбери учебник", show_alert=True)
+            await _answer_query_once(query, "Сначала выбери учебник", show_alert=True)
             return
         if not user_storage.homework_complete(profile):
-            await query.answer(
+            await _answer_query_once(query, 
                 "Сначала укажи параграф и упражнение или страницу",
                 show_alert=True,
             )
             return
-        await query.answer("Ищу решение… Ответ в чате, внизу — «печатает»")
+        await _answer_query_once(query, "Ищу решение… Ответ в чате, внизу — «печатает»")
         await _send_gdz_solution_to_chat(context.bot, chat_id, profile, user_id, context)
         return
 
@@ -4013,7 +4106,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return
         context.user_data.pop(_AWAIT_TEXT_ANSWER, None)
         await asyncio.to_thread(user_storage.clear_homework_meta, USER_DB_PATH, user_id)
-        _clear_user_photos(user_id)
+        await _clear_user_photos(user_id)
         profile = await asyncio.to_thread(user_storage.get_profile, USER_DB_PATH, user_id)
         assert profile is not None
         context.user_data["hw_entry"] = "main"
@@ -4102,7 +4195,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             context.user_data.pop(_HW_PAGE_BUF, None)
             context.user_data.pop(_HW_PAR_BTN_MAX, None)
             _pop_step2_gdz_meta(context)
-            _clear_user_photos(user_id)
+            await _clear_user_photos(user_id)
 
             prev_prof = await asyncio.to_thread(user_storage.get_profile, USER_DB_PATH, user_id)
             subj = prev_prof.subject_slug if prev_prof else "matematika"
@@ -4171,7 +4264,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 reply_markup=get_main_keyboard(uploaded=False, profile=profile, user_id=user_id),
             )
             return
-        _clear_user_photos(user_id)
+        await _clear_user_photos(user_id)
         context.user_data[_AWAIT_TEXT_ANSWER] = True
         gdz_tc = ""
         turl = (profile.textbook_url or "").strip()
@@ -4327,7 +4420,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     _photo_batch_clear_all(context)
-    _store_photo_batch(user_id, [photo.file_id])
+    await _store_photo_batch(user_id, [photo.file_id])
     await asyncio.to_thread(bot_stats.record_photo_uploaded, USER_DB_PATH)
     flow_note(
         context,
@@ -4499,11 +4592,26 @@ def main() -> None:
 
     tgzh_metrics.maybe_start_http_server()
 
+    visit_day_seen: set[tuple[int, str]] = set()
+
     async def _metrics_on_update(u: Update, _c: ContextTypes.DEFAULT_TYPE) -> None:
         tgzh_metrics.record_bot_update(u)
         eu = u.effective_user
-        if eu is not None and eu.id > 0:
-            await asyncio.to_thread(bot_stats.record_user_visit_day, USER_DB_PATH, eu.id)
+        if eu is None or eu.id <= 0:
+            return
+        # Дебаунс: на каждого пользователя в сутки делаем не более одного UPSERT в БД,
+        # чтобы при бурных апдейтах (стикеры, опросы и т.п.) не насиловать tgzh-pg.
+        try:
+            today = datetime.now(bot_stats._stats_tz()).strftime("%Y-%m-%d")
+        except Exception:
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        day_key = (eu.id, today)
+        if day_key in visit_day_seen:
+            return
+        if len(visit_day_seen) > 50_000:
+            visit_day_seen.clear()
+        visit_day_seen.add(day_key)
+        await asyncio.to_thread(bot_stats.record_user_visit_day, USER_DB_PATH, eu.id)
 
     app.add_handler(TypeHandler(Update, _metrics_on_update), group=-1)
 

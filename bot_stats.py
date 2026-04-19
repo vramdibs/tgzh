@@ -188,7 +188,15 @@ def _migrate_legacy_aggregate(conn: Any) -> None:
     )
 
 
+# Кеш уже выполненных init_stats(path) — каждое обращение к stats-функциям иначе
+# повторно открывало соединение и DDL'ило идемпотентные CREATE TABLE, что под нагрузкой
+# (десятки apдейтов в секунду) добавляло заметный latency и шум в pg_stat_statements.
+_INIT_DONE: set[str] = set()
+
+
 def init_stats(path: str) -> None:
+    if path in _INIT_DONE:
+        return
     conn = connect(path)
     try:
         _e(conn, _CREATE_BY_YEAR)
@@ -201,6 +209,7 @@ def init_stats(path: str) -> None:
         conn.commit()
     finally:
         conn.close()
+    _INIT_DONE.add(path)
 
 
 def list_years_desc(path: str) -> list[tuple[int, dict[str, int]]]:

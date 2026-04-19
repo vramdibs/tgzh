@@ -32,7 +32,8 @@ def test_check_rejects_bad_mime(client: TestClient) -> None:
 
 def test_summarize_requires_two_parts(client: TestClient) -> None:
     r = client.post("/check/summarize", json={"parts": ["only"]})
-    assert r.status_code == 400
+    # Pydantic min_length=2 на SummarizeRequest.parts — отдает 422 ещё до тела хэндлера.
+    assert r.status_code == 422
 
 
 def test_quip_mock(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:

@@ -1,6 +1,6 @@
 """
 Опциональный экспорт метрик Prometheus (HTTP /metrics) для бота и server.py.
-Включение: задать METRICS_PORT (положительное число). Привязка: METRICS_BIND (по умолчанию 0.0.0.0).
+Включение: задать METRICS_PORT (положительное число). Привязка: METRICS_BIND (по умолчанию 127.0.0.1).
 """
 
 from __future__ import annotations
