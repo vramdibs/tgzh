@@ -127,3 +127,67 @@ def test_format_merged_prefix_all_ok() -> None:
     assert p.startswith("\u2705 ")
     assert "Оценка выполнения" not in p
     assert "%" not in p
+
+
+def test_dedupe_collapses_repeated_task_bullets() -> None:
+    raw = (
+        "- Задание 1: ответ **8**, не отмечено на координатной прямой.\n"
+        "- Задание 1: не указано, что число 8 - это среднее арифметическое.\n"
+        "- Задание 1: не объяснено, как это связано с делением отрезка пополам.\n"
+        "- Задание 1: не указано, что на координатной прямой отмечены числа 4 и 12.\n"
+        "- Задание 2: верно."
+    )
+    out = hcs.dedupe_homework_check_lines(raw)
+    lines = [l for l in out.split("\n") if l.strip()]
+    assert len(lines) == 2
+    assert lines[0].startswith("- Задание 1:")
+    assert lines[1].startswith("- Задание 2:")
+
+
+def test_dedupe_keeps_distinct_subparts() -> None:
+    raw = (
+        "- Задание 1а: верно.\n"
+        "- Задание 1б: ошибка в **3/8**.\n"
+        "- Задание 2: верно."
+    )
+    out = hcs.dedupe_homework_check_lines(raw)
+    assert out.count("Задание 1") == 2
+    assert "Задание 2" in out
+
+
+def test_dedupe_drops_exact_duplicate_lines() -> None:
+    raw = (
+        "Решение видно на фото.\n"
+        "Решение видно на фото.\n"
+        "решение видно на фото.\n"
+        "Дополнительный текст."
+    )
+    out = hcs.dedupe_homework_check_lines(raw)
+    lines = [l for l in out.split("\n") if l.strip()]
+    assert lines == ["Решение видно на фото.", "Дополнительный текст."]
+
+
+def test_dedupe_collapses_blank_lines_and_preserves_order() -> None:
+    raw = "А\n\n\nБ\n\nВ\n"
+    out = hcs.dedupe_homework_check_lines(raw)
+    assert out == "А\n\nБ\n\nВ"
+
+
+def test_dedupe_handles_synonyms_for_task_label() -> None:
+    raw = (
+        "- Задача 3: ошибка.\n"
+        "- Задача 3: пояснение к ошибке.\n"
+        "- Упражнение 3: что-то ещё.\n"
+        "- № 3: и снова про то же."
+    )
+    out = hcs.dedupe_homework_check_lines(raw)
+    lines = [l for l in out.split("\n") if l.strip()]
+    assert len(lines) == 3
+    assert lines[0].startswith("- Задача 3:")
+    assert lines[1].startswith("- Упражнение 3:")
+    assert lines[2].startswith("- № 3:")
+
+
+def test_dedupe_empty_and_none_safe() -> None:
+    assert hcs.dedupe_homework_check_lines("") == ""
+    assert hcs.dedupe_homework_check_lines("   \n\n  ") == ""

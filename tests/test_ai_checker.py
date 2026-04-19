@@ -147,10 +147,10 @@ def test_full_check_prompt_includes_ignore_gdz_on_photo(monkeypatch: pytest.Monk
     assert "игнорируй" in full.lower()
     assert "смешан" in full.lower()
     assert "[tgzh_mixed_numbers]" in full
-    assert "новой строки" in full.lower()
+    assert "строка-пункт" in full.lower()
     assert "не вини ученика" in full.lower()
     assert "markdown" in full.lower() and "жирн" in full.lower()
-    assert "длинный абзац" in full.lower()
+    assert "не зацикл" in full.lower()
 
 
 def test_full_check_prompt_includes_rubric(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -209,7 +209,11 @@ def test_full_check_prompt_includes_gdz_task_condition() -> None:
     assert "таблицу простых" in full
     assert "не копируй" in full.lower() or "не вставляй" in full.lower()
     assert "зацикливайся" in full.lower() or "один раз" in full.lower()
-    assert "не повторяй подряд" in full.lower() or "одинаковых строк" in full.lower()
+    assert (
+        "не повторяй" in full.lower()
+        or "одинаковых строк" in full.lower()
+        or "разными словами" in full.lower()
+    )
 
 
 def test_mock_result_prefers_page_over_exercise() -> None:

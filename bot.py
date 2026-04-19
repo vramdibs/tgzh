@@ -418,6 +418,7 @@ _BUILTIN_STICKER_SET_POOL: tuple[str, ...] = (
     "taxiderm",
     "DonutTheDog",
     "HotCherry",
+    "UtyaDuck",
 )
 _TADA_BUILTIN_STICKER_SET_NAMES = _BUILTIN_STICKER_SET_POOL
 _MOTIVATION_BUILTIN_STICKER_SET_NAMES = _BUILTIN_STICKER_SET_POOL
@@ -2744,7 +2745,7 @@ async def _run_homework_text_answer_check(
     bot = context.bot
     status_msg = await bot.send_message(
         chat_id,
-        "<b>Проверяю текстовый ответ…</b>\n<i>Ожидайте до минуты.</i>",
+        "<b>Проверяю текстовый ответ…</b>\n<i>Подождите минуту.</i>",
         reply_to_message_id=reply_mid,
         parse_mode=ParseMode.HTML,
     )

@@ -34,6 +34,72 @@ def strip_homework_check_machine_tags(text: str) -> str:
     return t.rstrip()
 
 
+_LIST_LINE_RE = re.compile(r"^(\s*)([-*•]|\d+[.)])\s+(.*)$")
+_TASK_KEY_RE = re.compile(
+    r"^(?P<key>"
+    r"(?:№\s*\d+|"
+    r"(?:задани[еяй]|задач[аи]|пункт[аы]?|упражнени[еяй]|вопрос[аы]?|часть|номер)"
+    r"\s*(?:№\s*)?\d+(?:[a-zа-я])?(?:[.)])?"
+    r")"
+    r")",
+    re.IGNORECASE,
+)
+_DUP_NORMALIZE_SPACES_RE = re.compile(r"\s+")
+_DUP_STRIP_PUNCT_RE = re.compile(r"[«»\"'`*_]+")
+
+
+def _normalize_for_dup(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = _DUP_NORMALIZE_SPACES_RE.sub(" ", s)
+    s = _DUP_STRIP_PUNCT_RE.sub("", s)
+    return s
+
+
+def dedupe_homework_check_lines(text: str) -> str:
+    """
+    Снимает повторы из ответа модели (страховка от «петель» VLM):
+    - подряд идущие пустые строки схлопываются до одной;
+    - точные дубликаты строк (после нормализации регистра/пробелов/кавычек/звёздочек) убираются;
+    - несколько пунктов вида «- Задание N: ...» по одному и тому же N оставляем только один раз;
+      сюда же попадают синонимы — Задача N, Упражнение N, Пункт N, Вопрос N, Номер N, № N
+      (распознаются вместе с подпунктом-буквой: 1а, 1б — это разные ключи).
+
+    Свободный текст (не список) не схлопывается, кроме точных повторов.
+    """
+    if not text:
+        return text or ""
+    lines = text.split("\n")
+    out: list[str] = []
+    seen_lines: set[str] = set()
+    seen_task_keys: set[str] = set()
+    last_blank = False
+    for line in lines:
+        norm = _normalize_for_dup(line)
+        if not norm:
+            if last_blank or not out:
+                continue
+            out.append("")
+            last_blank = True
+            continue
+        if norm in seen_lines:
+            continue
+        m_list = _LIST_LINE_RE.match(line)
+        if m_list:
+            body = m_list.group(3).strip()
+            m_task = _TASK_KEY_RE.match(body)
+            if m_task:
+                key = _normalize_for_dup(m_task.group("key"))
+                if key in seen_task_keys:
+                    continue
+                seen_task_keys.add(key)
+        seen_lines.add(norm)
+        out.append(line)
+        last_blank = False
+    while out and not out[-1].strip():
+        out.pop()
+    return "\n".join(out)
+
+
 def detach_trailing_mixed_numbers_marker(text: str) -> tuple[str, str]:
     """
     Отрезает хвостовую метку смешанных чисел, если она в самом конце строки.
