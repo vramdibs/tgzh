@@ -1,0 +1,9 @@
+# Общие зависимости preocr (без paddlepaddle / paddlepaddle-gpu — они в Dockerfile CPU или в базовом GPU-образе)
+paddleocr==3.3.3
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.9
+pydantic>=2.0
+opencv-contrib-python-headless>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0

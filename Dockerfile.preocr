@@ -1,0 +1,24 @@
+# Предварительное OCR (PaddleOCR, CPU). Модели качаются при первом запросе в том /root/.paddlex (том tgzh-preocr-models)
+FROM python:3.11-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    DISABLE_MODEL_SOURCE_CHECK=True
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libgomp1 \
+        libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY preocr/requirements-common.txt /app/preocr/requirements-common.txt
+RUN pip install --no-cache-dir paddlepaddle==3.2.2 \
+    && pip install --no-cache-dir -r /app/preocr/requirements-common.txt
+
+COPY preocr/ /app/preocr/
+
+EXPOSE 8088
+
+CMD ["uvicorn", "preocr.app:app", "--host", "0.0.0.0", "--port", "8088", "--workers", "1"]

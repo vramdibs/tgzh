@@ -1,0 +1,36 @@
+---
+description: Docker tgzh-server/tgzh-bot - синхронизация COPY с импортами, сеть compose, проверка после изменений
+globs: Dockerfile.server,Dockerfile.bot,Dockerfile.preocr,Dockerfile.preocr.gpu,docker-compose.yml,ai_checker.py,server.py,preocr_client.py
+alwaysApply: false
+---
+
+# Docker-стек tgzh (сервер проверки и бот)
+
+## Образ tgzh-server (`Dockerfile.server`)
+
+- **`COPY`** перечисляет только часть **`.py`**. Любой новый **`import`** в **`server.py`** или **`ai_checker.py`** (в т.ч. **`from homework_check_status import …`**) обязан иметь соответствующий файл в строке **`COPY`**
+- После правок импортов: сверь список **`COPY`** с верхом **`ai_checker.py`** и **`server.py`** (и с цепочкой их зависимостей). Иначе контейнер падает при старте (**`ModuleNotFoundError`**), API не слушает порт, бот показывает ошибку связи с сервером
+- Пересборка только сервера: **`docker compose build tgzh-server && docker compose up -d tgzh-server`**
+- Новый модуль в **`COPY`**: **`preocr_client.py`** (импорт из **`ai_checker`**)
+
+## Образ `tgzh-preocr` (`Dockerfile.preocr` / `Dockerfile.preocr.gpu`)
+
+- Сборка: **`docker compose --profile preocr build tgzh-preocr`**; по умолчанию **`PREOCR_DOCKERFILE=Dockerfile.preocr.gpu`** и **`gpus: all`** (нужен NVIDIA Container Toolkit)
+- CPU: в **`.env`** **`PREOCR_DOCKERFILE=Dockerfile.preocr`**, убери **`gpus`** у сервиса (override) или собери образ вручную с **`Dockerfile.preocr`**
+- Зависимости приложения в **`preocr/requirements-common.txt`** + **`paddlepaddle`** (CPU) или базовый образ Paddle (GPU); **`uvicorn`** с **`--workers 1`**
+
+## Сеть `tgzh-internal` (`docker-compose.yml`)
+
+- Сервисы **`postgres`**, **`tgzh-server`**, **`tgzh-bot`** на одной сети **`tgzh-internal`**; опционально **`tgzh-preocr`** (профиль **`preocr`**, порт **8088**, том **`tgzh-preocr-models`**)
+- При **`PREOCR_URL=http://tgzh-preocr:8088`** в **`.env`** сервер вызывает предварительный OCR перед VLM; без профиля **`preocr`** задай **`PREOCR_URL` пустым** или не поднимай сервис
+- Если из **`tgzh-bot`** не резолвится **`tgzh-server`** (**`getent hosts` пусто**, **`socket.getaddrinfo`** **-3**), а **`docker network inspect`** не показывает **`tgzh-server`** с **IPv4** на этой сети — часто помогает полный цикл **`docker compose down`** затем **`docker compose up -d`** (не только один контейнер)
+- Частичные **`up`**/`recreate` без синхронизации сети могут оставить "пустой" endpoint у сервера
+
+## Бот и `SERVER_URL` (`bot.py`)
+
+- Для **`POST /check`**, **`/check/quip`** и сводки используется транспорт **httpx** с резолвом имени через **IPv4** (**`AF_INET`**), если меняешь эти вызовы — не возвращай обычный **`AsyncClient`** без этой логики, иначе на части хостов снова возможен **Errno -3** при рабочем **`getaddrinfo(..., AF_INET)`**
+
+## Быстрая проверка после деплоя
+
+- С хоста: **`curl -fsS http://127.0.0.1:8000/health`**
+- Из бота: **`docker compose exec tgzh-bot python3 -c "import urllib.request; print(urllib.request.urlopen('http://tgzh-server:8000/health', timeout=5).read())"`** (или эквивалент с **httpx**)

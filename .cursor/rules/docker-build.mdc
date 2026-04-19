@@ -1,0 +1,25 @@
+---
+description: Диагностика Docker buildx при локальной сборке (опционально для этого репо)
+alwaysApply: false
+---
+
+# Docker build: диагностика
+
+В этом репозитории основной запуск - **Python** (`pip`, `server.py`, `bot.py`). Docker в дереве проекта не задан; правило нужно, если вручную собираешь образы на той же машине.
+
+При `docker build` или `docker compose build`:
+
+**Если `docker build -f ...` падает с `unknown shorthand flag: -f`** - Docker CLI не подхватывает плагин **buildx**, часто из-за прав на `~/.docker` или недоступного `~/.docker/config.json`. Проверить:
+
+```bash
+stat -c '%U:%G %a' ~/.docker
+```
+
+Если владелец **root** или каталог не читается текущим пользователем:
+
+```bash
+sudo chown $(whoami):$(whoami) ~/.docker
+sudo chmod 755 ~/.docker
+```
+
+Убедиться, что `docker build --help` упоминает `docker buildx build`, а не урезанный вариант без `-f`.

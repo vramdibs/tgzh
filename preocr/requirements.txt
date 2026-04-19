@@ -1,0 +1,3 @@
+# Локальная установка CPU (как в Dockerfile.preocr)
+paddlepaddle==3.2.2
+-r requirements-common.txt

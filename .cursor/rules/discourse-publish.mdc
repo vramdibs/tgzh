@@ -1,0 +1,17 @@
+---
+description: Правила публикации в Discourse
+alwaysApply: false
+---
+
+# Публикация в Discourse
+
+При публикации постов в Discourse через API:
+
+1. **Формат запроса:** использовать `Content-Type: application/json` и JSON-тело, не multipart/form-data. Multipart для `/posts.json` может возвращать HTTP 500
+
+2. **Начало контента (опционально):** при необходимости оглавления вставлять в начало текста поста блок:
+   ```html
+   <div data-theme-toc="true"> </div>
+   ```
+
+3. **Категория:** задавать через настройки инстанса приложения (env или таблица `settings`, ключ `discourse_category_id`) или параметры публикации в коде; не хардкодить id категории в репозитории

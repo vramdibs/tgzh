@@ -1,0 +1,21 @@
+# GPU: официальный образ Paddle (CUDA + cudnn внутри). Базовый тег меняй под драйвер хоста (см. README)
+ARG PADDLE_GPU_IMAGE=paddlepaddle/paddle:3.2.2-gpu-cuda12.6-cudnn9.5
+FROM ${PADDLE_GPU_IMAGE}
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    DISABLE_MODEL_SOURCE_CHECK=True
+
+WORKDIR /app
+
+COPY preocr/requirements-common.txt /app/preocr/requirements-common.txt
+# paddleocr может подтянуть пакет paddlepaddle (CPU) — удаляем, оставляем paddlepaddle-gpu из базового образа
+RUN python3 -m pip install --upgrade pip \
+    && python3 -m pip install --no-cache-dir -r /app/preocr/requirements-common.txt \
+    && (python3 -m pip uninstall -y paddlepaddle 2>/dev/null || true)
+
+COPY preocr/ /app/preocr/
+
+EXPOSE 8088
+
+CMD ["python3", "-m", "uvicorn", "preocr.app:app", "--host", "0.0.0.0", "--port", "8088", "--workers", "1"]

@@ -1,0 +1,129 @@
+"""Эвристика статуса проверки по тексту ответа модели."""
+
+from __future__ import annotations
+
+import homework_check_status as hcs
+
+
+def test_absent_solution_cross() -> None:
+    assert hcs.homework_check_stats_verdict("На фото нет решения, лист пуст.") == "absent"
+    assert hcs.homework_check_stats_result("На фото нет решения, лист пуст.") == "absent"
+    assert hcs.homework_check_status_emoji("На фото нет решения, лист пуст.") == "\u274c"
+
+
+def test_mock_partial_stats_green_emoji() -> None:
+    t = "[Тестовый режим] Получено."
+    assert hcs.homework_check_stats_verdict(t) == "partial"
+    assert hcs.homework_check_status_emoji(t) == "\u2705"
+
+
+def test_verdict_fully_correct() -> None:
+    text = (
+        "Разбор...\n\n"
+        "Вывод: Решение верно, ответ правильный, ошибок нет."
+    )
+    assert hcs.homework_check_stats_verdict(text) == "correct"
+    assert hcs.homework_check_status_emoji(text) == "\u2705"
+
+
+def test_verdict_correct_but_caveat_partial_stats() -> None:
+    text = (
+        "Вывод: Решение верно. Однако оформление можно улучшить."
+    )
+    assert hcs.homework_check_stats_verdict(text) == "partial"
+    assert hcs.homework_check_status_emoji(text) == "\u2705"
+
+
+def test_errors_partial_stats() -> None:
+    text = "Вывод: В решении есть ошибки в вычислениях."
+    assert hcs.homework_check_stats_verdict(text) == "partial"
+    assert hcs.homework_check_status_emoji(text) == "\u2705"
+
+
+def test_format_prefix_errors_plain() -> None:
+    assert hcs.format_check_result_prefix("Ошибка связи с сервером: x") == (
+        "<b>Результат проверки:</b>\n\n"
+    )
+
+
+def test_format_prefix_absent_no_gdz_line() -> None:
+    p = hcs.format_check_result_prefix("На фото нет решения, лист пуст.")
+    assert p == "\u274c <b>Результат проверки:</b>\n\n"
+    assert "ГДЗ" not in p
+    assert "Оценка выполнения" not in p
+
+
+def test_format_prefix_ok_no_footer_in_prefix() -> None:
+    p = hcs.format_check_result_prefix("Вывод: Решение верно.")
+    assert p.startswith("\u2705 ")
+    assert "<b>Результат проверки:</b>" in p
+    assert "Оценка выполнения" not in p
+    assert "ГДЗ" not in p
+
+
+def test_format_suffix_disclaimer_and_vote_label() -> None:
+    s = hcs.format_check_result_suffix_html()
+    assert s.startswith("\n\n")
+    assert "нейросеть" in s.lower()
+    assert "скилл" in s.lower()
+    assert "ручную проверку" in s.lower()
+    assert "<b>Оцени ответ:</b>" in s
+    assert "<i>" in s
+
+
+def test_mixed_numbers_marker_and_strip() -> None:
+    raw = "Не могу проверить смешанные числа. Реши сам.\n[tgzh_mixed_numbers]"
+    assert hcs.homework_check_stats_result(raw) == "partial"
+    assert hcs.homework_check_status_emoji(raw) == "\u2705"
+    assert hcs.strip_homework_check_machine_tags(raw) == "Не могу проверить смешанные числа. Реши сам."
+
+
+def test_mixed_numbers_marker_strip_spaced_brackets() -> None:
+    raw = "Задание 6: смешанные числа.\n[ tgzh_mixed_numbers ]\n\nМодель: x"
+    out = hcs.strip_homework_check_machine_tags(raw)
+    assert "tgzh_mixed" not in out.lower()
+    assert "Задание 6" in out
+    assert "Модель" in out
+
+
+def test_detach_trailing_mixed_numbers_marker() -> None:
+    raw = "Текст.\n[tgzh_mixed_numbers]"
+    head, trail = hcs.detach_trailing_mixed_numbers_marker(raw)
+    assert head == "Текст."
+    assert "tgzh_mixed_numbers" in trail.lower()
+
+    h3, t3 = hcs.detach_trailing_mixed_numbers_marker("Текст.\n[ tgzh_mixed_numbers ]")
+    assert h3 == "Текст."
+    assert "tgzh_mixed_numbers" in t3.lower()
+
+    h2, t2 = hcs.detach_trailing_mixed_numbers_marker("без метки")
+    assert h2 == "без метки"
+    assert t2 == ""
+
+
+def test_mixed_numbers_escalation_any_part() -> None:
+    outs = ["Ошибки.", "Лимит\n[TGZH_MIXED_NUMBERS]"]
+    assert hcs.homework_check_mixed_number_escalation_active(outs, "**Фото 1**\nx") is True
+
+
+def test_format_merged_prefix_any_absent() -> None:
+    p = hcs.format_merged_check_prefix(
+        [
+            "Вывод: Решение верно.",
+            "На фото нет решения, лист пуст.",
+        ],
+    )
+    assert p.startswith("\u274c ")
+    assert "Оценка выполнения" not in p
+
+
+def test_format_merged_prefix_all_ok() -> None:
+    p = hcs.format_merged_check_prefix(
+        [
+            "Вывод: Решение верно, ошибок нет.",
+            "Вывод: В решении есть ошибки в вычислениях.",
+        ],
+    )
+    assert p.startswith("\u2705 ")
+    assert "Оценка выполнения" not in p
+    assert "%" not in p

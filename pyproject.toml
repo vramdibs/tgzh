@@ -1,0 +1,7 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+markers = [
+    "llm: живой HTTP-запрос к VLLM (нужны VLLM_BASE_URL, сеть; при AI_MOCK=1 пропускается)",
+]

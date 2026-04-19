@@ -1,0 +1,102 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: tgzh-postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:15432:5432"
+    networks:
+      - tgzh-internal
+    environment:
+      POSTGRES_USER: tgzh
+      POSTGRES_PASSWORD: tgzh
+      POSTGRES_DB: tgzh
+    volumes:
+      - tgzh-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tgzh -d tgzh"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  tgzh-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+      network: host
+    image: tgzh-server:latest
+    container_name: tgzh-server
+    restart: always
+    networks:
+      - tgzh-internal
+    ports:
+      - "127.0.0.1:8000:8000"
+    env_file:
+      - .env
+    # При активном профиле preocr сервер стартует после pre-OCR (имя хоста tgzh-preocr из PREOCR_URL)
+    depends_on:
+      tgzh-preocr:
+        condition: service_started
+        required: false
+
+  # Опционально: docker compose --profile preocr up -d --build (см. README). В .env: PREOCR_URL=http://tgzh-preocr:8088
+  # По умолчанию сборка GPU (Dockerfile.preocr.gpu); без видеокарты: в .env PREOCR_DOCKERFILE=Dockerfile.preocr и закомментируй блок gpus ниже (или docker-compose.override.yml)
+  tgzh-preocr:
+    profiles:
+      - preocr
+    build:
+      context: .
+      dockerfile: ${PREOCR_DOCKERFILE:-Dockerfile.preocr.gpu}
+      network: host
+      args:
+        PADDLE_GPU_IMAGE: ${PADDLE_GPU_IMAGE:-paddlepaddle/paddle:3.2.2-gpu-cuda12.6-cudnn9.5}
+    image: tgzh-preocr:latest
+    container_name: tgzh-preocr
+    restart: always
+    gpus: all
+    networks:
+      - tgzh-internal
+    ports:
+      - "127.0.0.1:8088:8088"
+    env_file:
+      - .env
+    volumes:
+      - tgzh-preocr-models:/root/.paddlex
+
+  tgzh-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+      network: host
+    image: tgzh-bot:latest
+    container_name: tgzh-bot
+    restart: always
+    networks:
+      - tgzh-internal
+    env_file:
+      - .env
+    environment:
+      # Поверх .env: в рантайме контейнеры в сети compose (имя сервиса tgzh-server), не на host; 127.0.0.1 в боте — это сам контейнер
+      SERVER_URL: http://tgzh-server:8000
+      GDZ_CATALOG_PATH: /app/static/gdz_matematika_textbooks.json
+      GDZ_CACHE_DIR: /app/data/gdz_cache
+      # Граница учебного года для статистики (сентябрь — август); см. STATS_TIMEZONE в .env.example
+      STATS_TIMEZONE: Europe/Samara
+    volumes:
+      # Именованный том: SQLite (профили, статистика) и кеш GDZ переживают удаление контейнера.
+      # Не используй docker compose down -v, если нужны данные.
+      # Альтернатива — каталог на хосте, например: - ./data:/app/data
+      - tgzh-data:/app/data
+    depends_on:
+      - postgres
+      - tgzh-server
+    # PostgreSQL: DATABASE_URL в .env (например postgresql://tgzh:tgzh@postgres:5432/tgzh). USER_DB_PATH в compose не задаем — иначе перекрывает смысл Postgres
+
+networks:
+  tgzh-internal:
+    driver: bridge
+
+volumes:
+  tgzh-data:
+  tgzh-pg:
+  tgzh-preocr-models:

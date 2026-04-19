@@ -1,0 +1,111 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 4, "w": 8, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [
+        {"expr": "sum(rate(tgzh_server_check_requests_total[5m]))", "legendFormat": "checks/s", "refId": "A"}
+      ],
+      "title": "POST /check (rate)",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 16, "x": 8, "y": 0},
+      "id": 2,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(tgzh_server_check_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95",
+          "refId": "A"
+        }
+      ],
+      "title": "Длительность проверки (p95)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"h": 4, "w": 8, "x": 0, "y": 4},
+      "id": 3,
+      "targets": [
+        {"expr": "sum(increase(tgzh_bot_updates_total[1h]))", "legendFormat": "updates/h", "refId": "A"}
+      ],
+      "title": "Обновления Telegram (1h increase)",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"h": 4, "w": 8, "x": 0, "y": 8},
+      "id": 4,
+      "targets": [
+        {"expr": "sum(increase(tgzh_poll_completed_total[24h]))", "legendFormat": "polls/24h", "refId": "A"}
+      ],
+      "title": "Опрос /polling завершен (24h)",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "gridPos": {"h": 4, "w": 8, "x": 8, "y": 8},
+      "id": 5,
+      "targets": [
+        {"expr": "sum(increase(tgzh_bot_handler_errors_total[24h]))", "legendFormat": "errors/24h", "refId": "A"}
+      ],
+      "title": "Ошибки обработчиков бота (24h)",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 4, "w": 12, "x": 0, "y": 12},
+      "id": 6,
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [
+        {
+          "expr": "sum(increase(tgzh_check_feedback_total{vote=\"like\"}[24h]))",
+          "legendFormat": "likes 24h",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(increase(tgzh_check_feedback_total{vote=\"dislike\"}[24h]))",
+          "legendFormat": "dislikes 24h",
+          "refId": "B"
+        }
+      ],
+      "title": "Оценка проверки 👍/👎 (24h)",
+      "type": "stat"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["tgzh"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "label": "Prometheus",
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "tgzh overview",
+  "uid": "tgzh-overview",
+  "version": 1
+}

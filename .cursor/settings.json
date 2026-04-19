@@ -1,0 +1,13 @@
+{
+  "plugins": {
+    "figma": {
+      "enabled": false
+    },
+    "superpowers": {
+      "enabled": true
+    },
+    "cursor-team-kit": {
+      "enabled": true
+    }
+  }
+}
