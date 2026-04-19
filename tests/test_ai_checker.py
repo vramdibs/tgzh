@@ -825,7 +825,13 @@ async def test_force_fallback_skips_primary(monkeypatch: pytest.MonkeyPatch) -> 
     fallback = MagicMock()
     fallback.chat.completions.create = AsyncMock(return_value=_make_mock_response("ответ от cursor"))
 
-    with patch("openai.AsyncOpenAI", side_effect=[fallback]) as mock_cls:
+    with (
+        patch("openai.AsyncOpenAI", side_effect=[fallback]) as mock_cls,
+        patch(
+            "preocr_client.fetch_preocr_block",
+            AsyncMock(return_value="PRE_OCR_TEXT"),
+        ),
+    ):
         out = await ai_checker._check_vllm(
             b"\xff\xd8\xff" + b"\x00" * 20,
             "image/jpeg",
@@ -840,9 +846,93 @@ async def test_force_fallback_skips_primary(monkeypatch: pytest.MonkeyPatch) -> 
     assert mock_cls.call_count == 1, "должен быть создан только fallback-клиент"
     fb_kwargs = fallback.chat.completions.create.await_args.kwargs
     assert fb_kwargs["model"] == "cursor-agent"
+    # При recheck через Cursor payload должен быть text-only (без image_url):
+    # cursor-agent текстовый, base64-картинку всё равно не «видит».
+    msg_content = fb_kwargs["messages"][0]["content"]
+    assert isinstance(msg_content, list)
+    assert all(c.get("type") == "text" for c in msg_content), msg_content
+    assert any("PRE_OCR_TEXT" in c["text"] for c in msg_content)
     assert "ответ от cursor" in out
     assert "Модель: cursor-agent" in out
     primary.chat.completions.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_force_fallback_image_without_preocr_returns_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cursor recheck по фото без pre-OCR — внятное сообщение, fallback не вызываем.
+
+    cursor-agent текстовый, base64-картинка ему бесполезна; без preocr нечего
+    отправлять, поэтому возвращаем готовый текст с подсказкой про PREOCR_URL.
+    """
+    _enable_fallback(monkeypatch)
+
+    fallback = MagicMock()
+    fallback.chat.completions.create = AsyncMock(return_value=_make_mock_response("не должно вызваться"))
+
+    with (
+        patch("openai.AsyncOpenAI", side_effect=[fallback]) as mock_cls,
+        patch(
+            "preocr_client.fetch_preocr_block",
+            AsyncMock(return_value=""),
+        ),
+    ):
+        out = await ai_checker._check_vllm(
+            b"\xff\xd8\xff" + b"\x00" * 20,
+            "image/jpeg",
+            paragraph="1",
+            exercise=None,
+            page=None,
+            textbook_label="",
+            grade=None,
+            force_fallback=True,
+        )
+
+    assert mock_cls.call_count == 0
+    fallback.chat.completions.create.assert_not_called()
+    assert "PREOCR_URL" in out
+    assert "только с текстом" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_force_fallback_image_uses_preocr_text_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cursor recheck по фото с pre-OCR: payload без image_url, GDZ-условие в нём же."""
+    _enable_fallback(monkeypatch)
+
+    fallback = MagicMock()
+    fallback.chat.completions.create = AsyncMock(return_value=_make_mock_response("разбор"))
+
+    with (
+        patch("openai.AsyncOpenAI", side_effect=[fallback]),
+        patch(
+            "preocr_client.fetch_preocr_block",
+            AsyncMock(return_value="OCR: ученик написал 12"),
+        ),
+    ):
+        await ai_checker._check_vllm(
+            b"\xff\xd8\xff" + b"\x00" * 20,
+            "image/jpeg",
+            paragraph="3",
+            exercise="42",
+            page=None,
+            textbook_label="К",
+            grade=6,
+            gdz_task_condition="Найдите сумму 5 и 7.",
+            force_fallback=True,
+        )
+
+    fb_kwargs = fallback.chat.completions.create.await_args.kwargs
+    msg_content = fb_kwargs["messages"][0]["content"]
+    assert isinstance(msg_content, list)
+    # Ни одного image_url — Cursor получает только текст.
+    assert all(c.get("type") == "text" for c in msg_content), msg_content
+    joined = "\n".join(c["text"] for c in msg_content)
+    assert "OCR: ученик написал 12" in joined
+    # gdz_task_condition должен попасть в тот же текст — это и есть «сверка с ГДЗ».
+    assert "Найдите сумму 5 и 7." in joined
 
 
 @pytest.mark.asyncio
@@ -857,7 +947,13 @@ async def test_force_fallback_without_config_returns_unavailable(
     primary = MagicMock()
     primary.chat.completions.create = AsyncMock(return_value=_make_mock_response("primary"))
 
-    with patch("openai.AsyncOpenAI", side_effect=[primary]) as mock_cls:
+    with (
+        patch("openai.AsyncOpenAI", side_effect=[primary]) as mock_cls,
+        patch(
+            "preocr_client.fetch_preocr_block",
+            AsyncMock(return_value="PRE_OCR_TEXT"),
+        ),
+    ):
         out = await ai_checker._check_vllm(
             b"\xff\xd8\xff" + b"\x00" * 20,
             "image/jpeg",
@@ -912,7 +1008,13 @@ async def test_fallback_http_client_uses_dns_override(monkeypatch: pytest.Monkey
     fallback = MagicMock()
     fallback.chat.completions.create = AsyncMock(return_value=_make_mock_response("ответ от cursor"))
 
-    with patch("openai.AsyncOpenAI", side_effect=[fallback]) as mock_cls:
+    with (
+        patch("openai.AsyncOpenAI", side_effect=[fallback]) as mock_cls,
+        patch(
+            "preocr_client.fetch_preocr_block",
+            AsyncMock(return_value="PRE_OCR_TEXT"),
+        ),
+    ):
         await ai_checker._check_vllm(
             b"\xff\xd8\xff" + b"\x00" * 20,
             "image/jpeg",
@@ -950,7 +1052,13 @@ async def test_fallback_no_http_client_when_dns_servers_unset(
     fallback = MagicMock()
     fallback.chat.completions.create = AsyncMock(return_value=_make_mock_response("ok"))
 
-    with patch("openai.AsyncOpenAI", side_effect=[fallback]) as mock_cls:
+    with (
+        patch("openai.AsyncOpenAI", side_effect=[fallback]) as mock_cls,
+        patch(
+            "preocr_client.fetch_preocr_block",
+            AsyncMock(return_value="PRE_OCR_TEXT"),
+        ),
+    ):
         await ai_checker._check_vllm(
             b"\xff\xd8\xff" + b"\x00" * 20,
             "image/jpeg",
@@ -985,7 +1093,13 @@ async def test_fallback_http_client_uses_http_echo_resolver(
     fallback = MagicMock()
     fallback.chat.completions.create = AsyncMock(return_value=_make_mock_response("ok"))
 
-    with patch("openai.AsyncOpenAI", side_effect=[fallback]) as mock_cls:
+    with (
+        patch("openai.AsyncOpenAI", side_effect=[fallback]) as mock_cls,
+        patch(
+            "preocr_client.fetch_preocr_block",
+            AsyncMock(return_value="PRE_OCR_TEXT"),
+        ),
+    ):
         await ai_checker._check_vllm(
             b"\xff\xd8\xff" + b"\x00" * 20,
             "image/jpeg",
@@ -1024,7 +1138,13 @@ async def test_fallback_http_client_echo_without_target_host_falls_through(
     fallback = MagicMock()
     fallback.chat.completions.create = AsyncMock(return_value=_make_mock_response("ok"))
 
-    with patch("openai.AsyncOpenAI", side_effect=[fallback]) as mock_cls:
+    with (
+        patch("openai.AsyncOpenAI", side_effect=[fallback]) as mock_cls,
+        patch(
+            "preocr_client.fetch_preocr_block",
+            AsyncMock(return_value="PRE_OCR_TEXT"),
+        ),
+    ):
         await ai_checker._check_vllm(
             b"\xff\xd8\xff" + b"\x00" * 20,
             "image/jpeg",

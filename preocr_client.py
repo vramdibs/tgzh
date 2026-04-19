@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from typing import Any
 
 import httpx
@@ -72,9 +73,51 @@ def _max_chars() -> int:
     return 8000
 
 
-async def fetch_preocr_block(*, image_bytes: bytes, content_type: str) -> str:
+# Водяной знак сайта готовых решений в OCR-тексте: пишется и латиницей (`gdz.ru`,
+# `gdz ru`, `gdzru`), и кириллицей (`гдз.ру`, `гдз ру`, `гдзру`). Может мелькать с
+# любым регистром и пробелами/дефисами вокруг точки. Из OCR-результата эти токены
+# нужно вычистить ДО передачи в LLM (и primary, и Cursor-fallback) — иначе они
+# приходят как «текст ученика» и сбивают и проверку, и сверку с условием gdz.ru.
+_WATERMARK_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bgdz\s*[._\- ]?\s*ru\b", re.IGNORECASE),
+    re.compile(r"\bгдз\s*[._\- ]?\s*ру\b", re.IGNORECASE),
+    re.compile(r"\bgdzru\b", re.IGNORECASE),
+    re.compile(r"\bгдзру\b", re.IGNORECASE),
+)
+
+
+def strip_gdz_watermark(text: str) -> str:
+    """Удалить вхождения водяного знака `gdz.ru`/`гдз.ру` (и вариантов) из OCR-текста.
+
+    Кейсы:
+    - "ответ: 12 gdz.ru"  → "ответ: 12 "
+    - "решение GDZ.RU"    → "решение "
+    - "гдз.ру по матике"  → " по матике"
+    - "1+1=2"             → "1+1=2"  (не задеваем формулы)
+
+    После удаления схлопываем повторные пробелы/пустые строки, чтобы не оставлять
+    «дыры» в OCR-разметке.
     """
-    POST /v1/preocr, возвращает готовый блок для вставки в промпт или пустую строку.
+    if not text:
+        return ""
+    cleaned = text
+    for pat in _WATERMARK_PATTERNS:
+        cleaned = pat.sub(" ", cleaned)
+    # Убираем подряд идущие пробелы/табы внутри строки и схлопываем 3+ переноса.
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r" *\n *", "\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+async def fetch_preocr_text(*, image_bytes: bytes, content_type: str) -> str:
+    """
+    POST /v1/preocr, возвращает «сырой» текст распознавания (`merged_markdown`)
+    с уже очищенным водяным знаком gdz.ru/гдз.ру и обрезанный по `PREOCR_PROMPT_MAX_CHARS`.
+
+    Без обёртки-инструкции — для вызывающего кода, который сам решает, как вшить
+    OCR-текст (например, в чат-промпт). Если PREOCR_URL не задан, сервис недоступен
+    или текст пуст — возвращает пустую строку.
     """
     base = _preocr_url()
     if not base:
@@ -85,15 +128,6 @@ async def fetch_preocr_block(*, image_bytes: bytes, content_type: str) -> str:
         filename = "photo.png"
     elif "webp" in ct:
         filename = "photo.webp"
-
-    tpl = (
-        os.getenv("VLLM_PROMPT_PREOCR_BLOCK", "").strip()
-        or (
-            "Ниже — автоматическое предварительное распознавание листа (OCR). "
-            "Оно может содержать ошибки; опирайся в первую очередь на изображение. "
-            "Используй текст как подсказку для символов и формул.\n\n{body}"
-        )
-    )
 
     url = f"{base}/v1/preocr"
     try:
@@ -117,11 +151,32 @@ async def fetch_preocr_block(*, image_bytes: bytes, content_type: str) -> str:
         return ""
 
     body = (data.get("merged_markdown") or "").strip()
+    body = strip_gdz_watermark(body)
     if not body:
         return ""
     lim = _max_chars()
     if len(body) > lim:
         body = body[: lim - 3] + "..."
+    return body
+
+
+async def fetch_preocr_block(*, image_bytes: bytes, content_type: str) -> str:
+    """
+    POST /v1/preocr, возвращает готовый блок для вставки в промпт `_check_vllm`
+    или пустую строку. Шаблон-обёртка из `VLLM_PROMPT_PREOCR_BLOCK`.
+    """
+    body = await fetch_preocr_text(image_bytes=image_bytes, content_type=content_type)
+    if not body:
+        return ""
+
+    tpl = (
+        os.getenv("VLLM_PROMPT_PREOCR_BLOCK", "").strip()
+        or (
+            "Ниже — автоматическое предварительное распознавание листа (OCR). "
+            "Оно может содержать ошибки; опирайся в первую очередь на изображение. "
+            "Используй текст как подсказку для символов и формул.\n\n{body}"
+        )
+    )
 
     if "{body}" in tpl:
         return tpl.replace("{body}", body)

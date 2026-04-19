@@ -103,3 +103,42 @@ CREATE TABLE IF NOT EXISTS check_sticker_reward (
     quip TEXT,
     created_at TEXT NOT NULL
 );
+
+-- /chat: пароль (CHAT_PASSWORD/ADMIN_PASSWORD) → запись сессии на CHAT_SESSION_TTL_DAYS суток.
+CREATE TABLE IF NOT EXISTS chat_session (
+    user_id BIGINT PRIMARY KEY NOT NULL,
+    granted_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+
+-- /begemot: пароль ADMIN_PASSWORD → сессия на ADMIN_SESSION_TTL_DAYS суток.
+-- Отдельная таблица от chat_session, чтобы logout одного раздела не выкидывал
+-- из другого, и чтобы пароли можно было разводить.
+CREATE TABLE IF NOT EXISTS admin_session (
+    user_id BIGINT PRIMARY KEY NOT NULL,
+    granted_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+
+-- /chat: до 10 сохранённых диалогов на пользователя (история {role, content} в JSON).
+-- Прорежается при insert (помещается всё, что больше 10 — старейшие удаляются).
+CREATE TABLE IF NOT EXISTS chat_dialog (
+    dialog_id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    title TEXT NOT NULL,
+    history_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_dialog_user_updated
+    ON chat_dialog (user_id, updated_at DESC);
+
+-- Настройки/счётчики «сна памяти» в /chat (одна строка на пользователя).
+CREATE TABLE IF NOT EXISTS chat_memory_pref (
+    user_id BIGINT PRIMARY KEY NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    msgs_since_sleep INTEGER NOT NULL DEFAULT 0,
+    last_sleep_at TEXT,
+    last_sleep_status TEXT,
+    updated_at TEXT NOT NULL
+);

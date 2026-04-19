@@ -423,6 +423,66 @@ def init_db(path: str) -> None:
                 )
                 """,
             )
+        _e(
+            conn,
+            """
+            CREATE TABLE IF NOT EXISTS chat_session (
+                user_id BIGINT PRIMARY KEY NOT NULL,
+                granted_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )
+            """,
+        )
+        # /begemot — отдельная таблица, чтобы не путать с chat_session: разные
+        # пароли (CHAT_PASSWORD vs ADMIN_PASSWORD) и независимые logout'ы.
+        # Postgres-сторона создаётся миграцией Alembic 012_admin_session.
+        _e(
+            conn,
+            """
+            CREATE TABLE IF NOT EXISTS admin_session (
+                user_id BIGINT PRIMARY KEY NOT NULL,
+                granted_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )
+            """,
+        )
+        # SQLite не понимает `BIGSERIAL` из postgres-схемы — для локальной БД
+        # эмулируем через INTEGER PRIMARY KEY AUTOINCREMENT (Postgres-сторона
+        # создаётся миграцией Alembic 010_chat_dialog).
+        if not use_postgres():
+            _e(
+                conn,
+                """
+                CREATE TABLE IF NOT EXISTS chat_dialog (
+                    dialog_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id BIGINT NOT NULL,
+                    title TEXT NOT NULL,
+                    history_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """,
+            )
+            _e(
+                conn,
+                "CREATE INDEX IF NOT EXISTS idx_chat_dialog_user_updated "
+                "ON chat_dialog (user_id, updated_at DESC)",
+            )
+            # Настройки и счётчики «сна памяти» — одна строка на пользователя.
+            # Postgres-сторона создаётся миграцией 011_chat_memory_pref.
+            _e(
+                conn,
+                """
+                CREATE TABLE IF NOT EXISTS chat_memory_pref (
+                    user_id BIGINT PRIMARY KEY NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    msgs_since_sleep INTEGER NOT NULL DEFAULT 0,
+                    last_sleep_at TEXT,
+                    last_sleep_status TEXT,
+                    updated_at TEXT NOT NULL
+                )
+                """,
+            )
         conn.commit()
         if not use_postgres():
             _migrate(conn)
@@ -1391,3 +1451,602 @@ def record_check_sticker_reward(
         conn.commit()
     finally:
         conn.close()
+
+
+# Скрытый /chat: один год после последнего ввода пароля. Логин-через-кнопку
+# в боте — UPSERT, поэтому окно фактически продлевается на каждом перелогине.
+CHAT_SESSION_TTL_DAYS = 365
+
+# /begemot (админ-просмотр отзывов): тот же годовой TTL, отдельная таблица —
+# чтобы logout одного раздела не выкидывал из другого, и чтобы пароли можно
+# было разводить (CHAT_PASSWORD vs ADMIN_PASSWORD). См. helpers admin_session_*.
+ADMIN_SESSION_TTL_DAYS = 365
+
+
+def _parse_iso_utc(s: str) -> datetime | None:
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def chat_session_login(path: str, user_id: int, *, ttl_days: int = CHAT_SESSION_TTL_DAYS) -> str:
+    """Запись сессии «авторизован в /chat» на `ttl_days` суток. Возвращает ISO `expires_at`."""
+    if not db_path_usable(path):
+        raise RuntimeError("user storage path unusable")
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(days=int(ttl_days))
+    expires_iso = expires.isoformat()
+    granted_iso = now.isoformat()
+    conn = connect(path)
+    try:
+        _e(
+            conn,
+            """
+            INSERT INTO chat_session (user_id, granted_at, expires_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                granted_at = excluded.granted_at,
+                expires_at = excluded.expires_at
+            """,
+            (int(user_id), granted_iso, expires_iso),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return expires_iso
+
+
+def chat_session_active_until(path: str, user_id: int) -> datetime | None:
+    """`expires_at` (UTC) если сессия валидна; иначе None (нет записи или истекла)."""
+    if not db_path_usable(path):
+        return None
+    conn = connect(path)
+    try:
+        r = _e(
+            conn,
+            "SELECT expires_at FROM chat_session WHERE user_id = ?",
+            (int(user_id),),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not r:
+        return None
+    exp = _parse_iso_utc(str(r[0]))
+    if exp is None or exp <= datetime.now(timezone.utc):
+        return None
+    return exp
+
+
+def chat_session_logout(path: str, user_id: int) -> bool:
+    """Удалить сессию /chat. Возвращает True, если запись существовала."""
+    if not db_path_usable(path):
+        return False
+    conn = connect(path)
+    try:
+        existed = (
+            _e(
+                conn,
+                "SELECT 1 FROM chat_session WHERE user_id = ?",
+                (int(user_id),),
+            ).fetchone()
+            is not None
+        )
+        _e(conn, "DELETE FROM chat_session WHERE user_id = ?", (int(user_id),))
+        conn.commit()
+    finally:
+        conn.close()
+    return existed
+
+
+def admin_session_login(
+    path: str,
+    user_id: int,
+    *,
+    ttl_days: int = ADMIN_SESSION_TTL_DAYS,
+) -> str:
+    """Запись сессии «авторизован в /begemot» на `ttl_days` суток. Возвращает ISO `expires_at`.
+
+    Семантика идентична `chat_session_login` (UPSERT по `user_id` —
+    повторный успешный ввод пароля продлевает окно).
+    """
+    if not db_path_usable(path):
+        raise RuntimeError("user storage path unusable")
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(days=int(ttl_days))
+    expires_iso = expires.isoformat()
+    granted_iso = now.isoformat()
+    conn = connect(path)
+    try:
+        _e(
+            conn,
+            """
+            INSERT INTO admin_session (user_id, granted_at, expires_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                granted_at = excluded.granted_at,
+                expires_at = excluded.expires_at
+            """,
+            (int(user_id), granted_iso, expires_iso),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return expires_iso
+
+
+def admin_session_active_until(path: str, user_id: int) -> datetime | None:
+    """`expires_at` (UTC) если сессия валидна; иначе None (нет записи или истекла)."""
+    if not db_path_usable(path):
+        return None
+    conn = connect(path)
+    try:
+        r = _e(
+            conn,
+            "SELECT expires_at FROM admin_session WHERE user_id = ?",
+            (int(user_id),),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not r:
+        return None
+    exp = _parse_iso_utc(str(r[0]))
+    if exp is None or exp <= datetime.now(timezone.utc):
+        return None
+    return exp
+
+
+def admin_session_logout(path: str, user_id: int) -> bool:
+    """Удалить сессию /begemot. Возвращает True, если запись существовала."""
+    if not db_path_usable(path):
+        return False
+    conn = connect(path)
+    try:
+        existed = (
+            _e(
+                conn,
+                "SELECT 1 FROM admin_session WHERE user_id = ?",
+                (int(user_id),),
+            ).fetchone()
+            is not None
+        )
+        _e(conn, "DELETE FROM admin_session WHERE user_id = ?", (int(user_id),))
+        conn.commit()
+    finally:
+        conn.close()
+    return existed
+
+
+# До скольких сохранённых диалогов /chat держим на одного пользователя.
+# Кнопка «Мои чаты» в боте показывает ровно столько (новейшие сверху).
+CHAT_DIALOG_HISTORY_LIMIT: int = 10
+# Лимит длины автозаголовка диалога (выводится как подпись inline-кнопки в Telegram —
+# у тех ~64 байта; берём с запасом, многобайтные кириллические символы тоже влезут).
+_CHAT_DIALOG_TITLE_MAX_LEN: int = 60
+
+
+@dataclass(frozen=True)
+class ChatDialogSummary:
+    """Краткая запись для списка «Мои чаты»."""
+
+    dialog_id: int
+    title: str
+    updated_at: str
+    history_len: int
+
+
+def chat_dialog_title_from_history(history: list[dict[str, str]]) -> str:
+    """Заголовок диалога: первая user-реплика, обрезанная до длины кнопки."""
+    for msg in history or []:
+        if (msg.get("role") or "").lower() == "user":
+            text = (msg.get("content") or "").strip()
+            if not text:
+                continue
+            text = " ".join(text.split())
+            if len(text) > _CHAT_DIALOG_TITLE_MAX_LEN:
+                text = text[: _CHAT_DIALOG_TITLE_MAX_LEN - 1].rstrip() + "…"
+            return text
+    return "Без названия"
+
+
+def _serialize_chat_history(history: list[dict[str, str]]) -> str:
+    """Только {role, content} в том порядке, в котором история уходит в LLM."""
+    import json
+
+    cleaned: list[dict[str, str]] = []
+    for msg in history or []:
+        role = (msg.get("role") or "").strip().lower()
+        if role not in ("user", "assistant", "system"):
+            continue
+        content = (msg.get("content") or "").strip()
+        if not content:
+            continue
+        cleaned.append({"role": role, "content": content})
+    return json.dumps(cleaned, ensure_ascii=False)
+
+
+def _deserialize_chat_history(blob: str) -> list[dict[str, str]]:
+    import json
+
+    try:
+        data = json.loads(blob or "[]")
+    except (ValueError, TypeError):
+        return []
+    out: list[dict[str, str]] = []
+    if not isinstance(data, list):
+        return []
+    for msg in data:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "").strip().lower()
+        if role not in ("user", "assistant", "system"):
+            continue
+        content = str(msg.get("content") or "")
+        if not content:
+            continue
+        out.append({"role": role, "content": content})
+    return out
+
+
+def _prune_chat_dialogs(conn, user_id: int, *, keep: int) -> None:
+    """Удалить у пользователя всё, кроме `keep` новейших по `updated_at`.
+
+    Лимит на пользователя выдерживаем ровно после каждого insert: если позже
+    `CHAT_DIALOG_HISTORY_LIMIT` уменьшится в коде, обрезка дотянется в следующий
+    раз; не делаем здесь массового усечения существующих БД.
+    """
+    if use_postgres():
+        _e(
+            conn,
+            """
+            DELETE FROM chat_dialog
+            WHERE dialog_id IN (
+                SELECT dialog_id FROM chat_dialog
+                WHERE user_id = ?
+                ORDER BY updated_at DESC, dialog_id DESC
+                OFFSET ?
+            )
+            """,
+            (int(user_id), int(keep)),
+        )
+    else:
+        _e(
+            conn,
+            """
+            DELETE FROM chat_dialog
+            WHERE user_id = ?
+              AND dialog_id NOT IN (
+                  SELECT dialog_id FROM chat_dialog
+                  WHERE user_id = ?
+                  ORDER BY updated_at DESC, dialog_id DESC
+                  LIMIT ?
+              )
+            """,
+            (int(user_id), int(user_id), int(keep)),
+        )
+
+
+def chat_dialog_upsert(
+    path: str,
+    user_id: int,
+    dialog_id: int | None,
+    history: list[dict[str, str]],
+) -> int | None:
+    """Сохранить активный диалог; вернуть `dialog_id` сохранённой записи или None.
+
+    Если в `history` нет ни одной user-реплики — ничего не пишем (и возвращаем
+    None). При переполнении (> `CHAT_DIALOG_HISTORY_LIMIT`) подрезаем старейшие
+    записи пользователя.
+    """
+    if not db_path_usable(path):
+        return None
+    cleaned = [
+        m for m in (
+            {
+                "role": (msg.get("role") or "").strip().lower(),
+                "content": (msg.get("content") or "").strip(),
+            }
+            for msg in (history or [])
+            if isinstance(msg, dict)
+        )
+        if m["role"] in ("user", "assistant", "system") and m["content"]
+    ]
+    # Сохраняем только реальные диалоги: должна быть хотя бы одна реплика
+    # пользователя — это нужно и для заголовка, и для смысла записи.
+    if not any(m["role"] == "user" for m in cleaned):
+        return None
+    cleaned_blob = _serialize_chat_history(cleaned)
+    title = chat_dialog_title_from_history(cleaned)
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    conn = connect(path)
+    try:
+        existing_id: int | None = None
+        if dialog_id is not None:
+            row = _e(
+                conn,
+                "SELECT dialog_id FROM chat_dialog WHERE dialog_id = ? AND user_id = ?",
+                (int(dialog_id), int(user_id)),
+            ).fetchone()
+            if row is not None:
+                existing_id = int(row[0])
+
+        if existing_id is not None:
+            _e(
+                conn,
+                """
+                UPDATE chat_dialog
+                SET title = ?, history_json = ?, updated_at = ?
+                WHERE dialog_id = ?
+                """,
+                (title, cleaned_blob, now_iso, int(existing_id)),
+            )
+            new_id = existing_id
+        else:
+            if use_postgres():
+                row = _e(
+                    conn,
+                    """
+                    INSERT INTO chat_dialog (user_id, title, history_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    RETURNING dialog_id
+                    """,
+                    (int(user_id), title, cleaned_blob, now_iso, now_iso),
+                ).fetchone()
+                new_id = int(row[0]) if row else None
+            else:
+                cur = _e(
+                    conn,
+                    """
+                    INSERT INTO chat_dialog (user_id, title, history_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (int(user_id), title, cleaned_blob, now_iso, now_iso),
+                )
+                new_id = int(cur.lastrowid) if cur.lastrowid is not None else None
+            if new_id is not None:
+                _prune_chat_dialogs(conn, user_id, keep=CHAT_DIALOG_HISTORY_LIMIT)
+        conn.commit()
+    finally:
+        conn.close()
+    return new_id
+
+
+def chat_dialog_list(
+    path: str,
+    user_id: int,
+    *,
+    limit: int = CHAT_DIALOG_HISTORY_LIMIT,
+) -> list[ChatDialogSummary]:
+    """Список последних диалогов пользователя (newest first), без `history_json`."""
+    if not db_path_usable(path):
+        return []
+    lim = max(1, int(limit))
+    conn = connect(path)
+    try:
+        rows = _e(
+            conn,
+            """
+            SELECT dialog_id, title, updated_at, history_json
+            FROM chat_dialog
+            WHERE user_id = ?
+            ORDER BY updated_at DESC, dialog_id DESC
+            LIMIT ?
+            """,
+            (int(user_id), lim),
+        ).fetchall()
+    finally:
+        conn.close()
+    out: list[ChatDialogSummary] = []
+    for r in rows:
+        history = _deserialize_chat_history(str(r[3] or "[]"))
+        out.append(
+            ChatDialogSummary(
+                dialog_id=int(r[0]),
+                title=str(r[1] or ""),
+                updated_at=str(r[2] or ""),
+                history_len=len(history),
+            )
+        )
+    return out
+
+
+def chat_dialog_load(
+    path: str,
+    user_id: int,
+    dialog_id: int,
+) -> list[dict[str, str]] | None:
+    """История одного диалога пользователя (или None, если не нашли)."""
+    if not db_path_usable(path):
+        return None
+    conn = connect(path)
+    try:
+        row = _e(
+            conn,
+            "SELECT history_json FROM chat_dialog WHERE dialog_id = ? AND user_id = ?",
+            (int(dialog_id), int(user_id)),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return None
+    return _deserialize_chat_history(str(row[0] or "[]"))
+
+
+def chat_dialog_purge(path: str, user_id: int) -> int:
+    """Снести все сохранённые диалоги пользователя. Возвращает кол-во удалённых."""
+    if not db_path_usable(path):
+        return 0
+    conn = connect(path)
+    try:
+        cnt_row = _e(
+            conn,
+            "SELECT COUNT(*) FROM chat_dialog WHERE user_id = ?",
+            (int(user_id),),
+        ).fetchone()
+        deleted = int(cnt_row[0]) if cnt_row else 0
+        _e(conn, "DELETE FROM chat_dialog WHERE user_id = ?", (int(user_id),))
+        conn.commit()
+    finally:
+        conn.close()
+    return deleted
+
+
+# ====================== /chat: сон памяти (toggle + счётчики) ======================
+#
+# Простая таблица `chat_memory_pref` (1 строка на user_id):
+#   enabled            — bool как INTEGER (1=on, 0=off); по умолчанию 1.
+#   msgs_since_sleep   — счётчик пользовательских реплик с последнего сна.
+#   last_sleep_at      — ISO UTC последнего успешного сна; NULL, если ещё не было.
+#   last_sleep_status  — короткая отметка ('ok', 'error: ...', 'noop', 'manual ok' ...).
+#   updated_at         — ISO UTC любого UPSERT'а строки (для дебага).
+#
+# Поведение default: если строки нет — считаем `enabled=True`, счётчик = 0.
+# Это позволяет включить фичу всем пользователям без миграции данных.
+
+
+CHAT_MEMORY_DEFAULT_ENABLED: bool = True
+
+
+@dataclass(frozen=True)
+class ChatMemoryPref:
+    user_id: int
+    enabled: bool
+    msgs_since_sleep: int
+    last_sleep_at: str | None
+    last_sleep_status: str | None
+
+
+def _row_to_chat_memory_pref(user_id: int, row: tuple | None) -> ChatMemoryPref:
+    if not row:
+        return ChatMemoryPref(
+            user_id=int(user_id),
+            enabled=CHAT_MEMORY_DEFAULT_ENABLED,
+            msgs_since_sleep=0,
+            last_sleep_at=None,
+            last_sleep_status=None,
+        )
+    enabled_raw, msgs_raw, last_at, last_st = row[0], row[1], row[2], row[3]
+    return ChatMemoryPref(
+        user_id=int(user_id),
+        enabled=bool(int(enabled_raw or 0)),
+        msgs_since_sleep=int(msgs_raw or 0),
+        last_sleep_at=str(last_at) if last_at else None,
+        last_sleep_status=str(last_st) if last_st else None,
+    )
+
+
+def chat_memory_get_pref(path: str, user_id: int) -> ChatMemoryPref:
+    """Текущие настройки сна памяти; «нет строки» = дефолт (enabled=True)."""
+    if not db_path_usable(path):
+        return ChatMemoryPref(
+            user_id=int(user_id),
+            enabled=CHAT_MEMORY_DEFAULT_ENABLED,
+            msgs_since_sleep=0,
+            last_sleep_at=None,
+            last_sleep_status=None,
+        )
+    conn = connect(path)
+    try:
+        row = _e(
+            conn,
+            "SELECT enabled, msgs_since_sleep, last_sleep_at, last_sleep_status "
+            "FROM chat_memory_pref WHERE user_id = ?",
+            (int(user_id),),
+        ).fetchone()
+    finally:
+        conn.close()
+    return _row_to_chat_memory_pref(int(user_id), tuple(row) if row else None)
+
+
+def _upsert_chat_memory_pref(
+    path: str,
+    user_id: int,
+    *,
+    enabled: bool | None = None,
+    msgs_since_sleep: int | None = None,
+    last_sleep_at: str | None = None,
+    last_sleep_status: str | None = None,
+) -> None:
+    """UPSERT по `user_id`; неуказанные поля сохраняются. Без транзакционных хитростей —
+    читаем текущее, мерджим, перезаписываем (одна строка, конкуренции по одному user_id
+    практически нет: чат-сессия одна)."""
+    if not db_path_usable(path):
+        return
+    cur = chat_memory_get_pref(path, user_id)
+    new_enabled = cur.enabled if enabled is None else bool(enabled)
+    new_msgs = cur.msgs_since_sleep if msgs_since_sleep is None else int(msgs_since_sleep)
+    new_at = cur.last_sleep_at if last_sleep_at is None else last_sleep_at
+    new_st = cur.last_sleep_status if last_sleep_status is None else last_sleep_status
+    now_iso = datetime.now(timezone.utc).isoformat()
+    conn = connect(path)
+    try:
+        _e(
+            conn,
+            """
+            INSERT INTO chat_memory_pref
+                (user_id, enabled, msgs_since_sleep, last_sleep_at, last_sleep_status, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                enabled = excluded.enabled,
+                msgs_since_sleep = excluded.msgs_since_sleep,
+                last_sleep_at = excluded.last_sleep_at,
+                last_sleep_status = excluded.last_sleep_status,
+                updated_at = excluded.updated_at
+            """,
+            (
+                int(user_id),
+                1 if new_enabled else 0,
+                int(max(0, new_msgs)),
+                new_at,
+                new_st,
+                now_iso,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def chat_memory_set_enabled(path: str, user_id: int, enabled: bool) -> None:
+    """Переключить «спать или нет»; счётчик/история сна не сбрасываются."""
+    _upsert_chat_memory_pref(path, user_id, enabled=bool(enabled))
+
+
+def chat_memory_increment_msgs(path: str, user_id: int) -> int:
+    """Атомарного `+1` нет (одной строки на пользователя достаточно).
+
+    Возвращает новое значение `msgs_since_sleep` (после инкремента) — бот по нему
+    решает, пора ли запускать авто-сон.
+    """
+    cur = chat_memory_get_pref(path, user_id)
+    new_val = int(cur.msgs_since_sleep) + 1
+    _upsert_chat_memory_pref(path, user_id, msgs_since_sleep=new_val)
+    return new_val
+
+
+def chat_memory_reset_msgs(path: str, user_id: int) -> None:
+    _upsert_chat_memory_pref(path, user_id, msgs_since_sleep=0)
+
+
+def chat_memory_record_sleep(
+    path: str,
+    user_id: int,
+    *,
+    status: str,
+    when_iso: str | None = None,
+) -> None:
+    """Зафиксировать факт прошедшего сна (успешного/неуспешного); сбрасывает счётчик."""
+    when = when_iso or datetime.now(timezone.utc).isoformat()
+    _upsert_chat_memory_pref(
+        path,
+        user_id,
+        msgs_since_sleep=0,
+        last_sleep_at=when,
+        last_sleep_status=(status or "ok")[:200],
+    )

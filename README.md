@@ -55,6 +55,114 @@ RUN_LLM_LIVE=1 pytest -m llm
 
 Нужны **`VLLM_BASE_URL`** и **`AI_MOCK`** не равный **`1`** (как при реальной проверке ДЗ)
 
+## Архитектура и зависимости сервисов
+
+Карта запущенных процессов и того, какой эндпоинт по какой фиче дёргается. **Жирным** выделены обязательные для базовой работы компоненты, *курсивом* — опциональные.
+
+```mermaid
+flowchart LR
+    subgraph Internet
+        user(("Пользователь<br/>Telegram"))
+        tg["Telegram Bot API<br/>api.telegram.org:443"]
+    end
+
+    subgraph Compose["Docker Compose (tgzh-internal)"]
+        bot["**tgzh-bot**<br/>polling, FSM, RAM-история чата"]
+        server["**tgzh-server** (FastAPI)<br/>/check, /chat/stream, /chat/once,<br/>/image/generate, /check/summarize,<br/>/check/quip, /health"]
+        pg[("**postgres** (или SQLite<br/>в томе tgzh-data)")]
+        preocr["*tgzh-preocr*<br/>profile=preocr<br/>POST /v1/preocr"]
+    end
+
+    subgraph External["Внешние сервисы (могут жить где угодно)"]
+        vllm["**VLLM Qwen3-VL**<br/>POST /v1/chat/completions<br/>VLLM_BASE_URL"]
+        bridge["*cursor-bridge*<br/>POST /v1/chat/completions<br/>VLLM_FALLBACK_BASE_URL"]
+        cursorcli["*cursor-agent CLI*<br/>(headless, на хосте бриджа)"]
+        imgapi["*OpenAI-compat image API*<br/>POST /v1/images/generations<br/>IMAGE_GEN_BASE_URL<br/>(gpt-image-1, dall-e-3, …)"]
+        tei["*TEI sentiment/emotion*<br/>POST /predict"]
+        gdz["gdz.ru"]
+    end
+
+    user <-- "сообщения / inline" --> tg
+    tg <-- "polling" --> bot
+    bot -- "POST /check, /check/summarize,<br/>/chat/stream, /chat/once, /image/generate" --> server
+    bot <-- "SQL: профили, сессии, диалоги,<br/>отзывы, статистика" --> pg
+    bot -- "HTTPS: каталог, оглавление,<br/>условия и картинки" --> gdz
+    bot -- "POST /predict" --> tei
+    server -- "openai client" --> vllm
+    server -- "fallback / forced cursor" --> bridge
+    bridge -- "subprocess --print" --> cursorcli
+    server -- "POST /v1/preocr" --> preocr
+    server -- "POST /v1/images/generations" --> imgapi
+```
+
+### Что обязательно запустить и где
+
+| Компонент | Обязательность | Где живёт | Чем рулится |
+|---|---|---|---|
+| **`tgzh-bot`** | всегда | Docker `tgzh-bot` (или `python3 bot.py` на хосте) | `BOT_TOKEN`, `SERVER_URL`, `DATABASE_URL` |
+| **`tgzh-server`** (FastAPI) | всегда | Docker `tgzh-server` (или `python3 server.py`) | `PORT`, `VLLM_*`, `PREOCR_URL`, `IMAGE_GEN_*` |
+| **PostgreSQL** *или* SQLite | одно из двух | `postgres`-контейнер либо том `tgzh-data` | `DATABASE_URL` (пусто → SQLite по `USER_DB_PATH`) |
+| **VLLM (Qwen3-VL)** | для проверки ДЗ при `AI_MOCK=0` | внешний хост (см. `VLLM_BASE_URL`) | `VLLM_BASE_URL`/`API_KEY`/`MODEL` |
+| *cursor-bridge* + *cursor-agent CLI* | для `/chat`, `/imagine`-не нужен, для recheck «Cursor» | хост `BRIDGE_HOST` (см. `discourse-cursor-bridge`) | `VLLM_FALLBACK_*` (включая `_BASE_URL`, `_API_KEY`, `_MODEL=cursor-agent`) |
+| *tgzh-preocr* (PaddleOCR) | для recheck «Cursor» по фото; общий буст качества | Docker profile `preocr` | `PREOCR_URL=http://tgzh-preocr:8088`, `PREOCR_*` |
+| *OpenAI-compat image API* | для `/imagine` и кнопки «Сгенерировать фото» | любой провайдер (OpenAI/together/replicate/локальный SDXL) | `IMAGE_GEN_BASE_URL`, `IMAGE_GEN_API_KEY`, `IMAGE_GEN_MODEL`, `IMAGE_GEN_SIZE` |
+| *TEI sentiment / emotion* | украшает `/begemot` (тон отзывов) | внешние сервисы | `TEI_SENTIMENT_URL`, `TEI_EMOTION_URL` |
+| *Cursor IDE на десктопе* | **не требуется** | — | — |
+
+`docker compose up -d` поднимает `postgres` + `tgzh-server` + `tgzh-bot`. Чтобы добавить pre-OCR — `docker compose --profile preocr up -d --build`. Всё остальное (VLLM, bridge, image API, TEI) — внешние эндпоинты, поднимаются отдельно.
+
+### Маршруты эндпоинтов по фичам
+
+| Фича | Источник | Цепочка вызовов | Обязательные сервисы |
+|---|---|---|---|
+| Проверка ДЗ — **фото** (основная) | `«Проверить»` в боте | bot → `POST /check` (multipart `photo`) → preocr (если `PREOCR_URL`) → VLLM | bot, server, VLLM, *(preocr опц.)* |
+| Проверка ДЗ — **несколько фото** | альбом → «Проверить» | bot → N×`POST /check` → `POST /check/summarize` → VLLM | bot, server, VLLM |
+| Проверка ДЗ — **текст** | «Ответить текстом» | bot → `POST /check` (multipart `text/plain`, без preocr) → VLLM | bot, server, VLLM |
+| **«Проверить ещё раз (Cursor)»** — текст | кнопка под результатом | bot → `POST /check` с `engine=cursor` → bridge → cursor-agent | bot, server, bridge+CLI, `VLLM_FALLBACK_*` |
+| **«Проверить ещё раз (Cursor)»** — фото | кнопка под результатом | bot → `POST /check` `engine=cursor` → preocr → bridge (только текст) | bot, server, **preocr**, bridge+CLI |
+| `/chat` — стриминговый ИИ-ассистент | `/chat` + пароль | bot → `POST /chat/stream` (SSE-like) → bridge → cursor-agent | bot, server, bridge+CLI |
+| `/chat` — sleep памяти (`/sleep`, авто) | фоновая задача в боте | bot → `POST /chat/once` → bridge → cursor-agent | bot, server, bridge+CLI |
+| `/chat` — фото в чате | фото с подписью | bot → `POST /chat/stream` (multimodal user-msg, без preocr) → bridge → cursor-agent | bot, server, bridge+CLI |
+| `/imagine` / «Сгенерировать фото» | в активном `/chat` | bot → `POST /image/generate` → `POST /v1/images/generations` (внешний провайдер) | bot, server, **`IMAGE_GEN_*`-бэкенд** |
+| `/begemot` — отзывы | `/begemot` + пароль | bot → SQL (`user_feedback`, `feedback_ticket`) | bot, БД |
+| Тон/эмоции отзывов | новый текст в `/support` или 👎 | bot → `POST /predict` (TEI) → SQL `feedback_ticket_nlp` | bot, *(TEI опц.)*, БД |
+| «Показать ГДЗ», условие задания | в сценарии ДЗ | bot → HTTPS `gdz.ru`, кеш `GDZ_CACHE_DIR` | bot, исходящий 443 |
+| Метрики Prometheus | scrape | `bot.py` и `server.py` слушают `METRICS_PORT` `/metrics` | *(опц.)* |
+
+### Голосовые команды
+
+**Сейчас не поддерживаются.** В `bot.main()` зарегистрированы только `MessageHandler(filters.TEXT, …)` и `MessageHandler(filters.PHOTO, …)`; апдейтов с `voice`/`audio`/`video_note` бот не слушает и в Cursor/VLLM ничего голосового не отправляет. Чтобы добавить:
+
+1. подключить STT-сервис (Whisper API, локальный `faster-whisper`, Yandex SpeechKit и т.п.) и завести env-блок `STT_*`;
+2. добавить `MessageHandler(filters.VOICE | filters.AUDIO, handle_voice_msg)`;
+3. в обработчике скачать `voice.ogg`, прогнать через STT, дальше передать как обычный `text` в текущие пути (`handle_homework_text`, `_handle_chat_user_message`, `imagine_cmd`).
+
+Это самостоятельная фича, в текущей сборке её нет.
+
+### Нужен ли работающий инстанс Cursor на ПК?
+
+**Нет.** Декстопный Cursor IDE (Electron) для бота не требуется и в схеме не участвует. Через bridge мы общаемся не с IDE, а с **`cursor-agent` CLI** — отдельным бинарником из [`cursor.com/install`](https://cursor.com/install), который запускается subprocess'ом на машине бриджа (`discourse-cursor-bridge`, см. его `agent_runner.py`). Что важно:
+
+- На хосте бриджа должен быть установлен `cursor-agent` (`curl https://cursor.com/install -fsS | bash` или ручная установка) и **разово выполнен логин** (`cursor-agent login`) — после этого `~/.cursor/agent-cli-state.json` хранит токен, и заходить в IDE для каждого запроса не нужно.
+- Декстопное приложение Cursor может быть закрыто/удалено — на работу бриджа это не влияет, у CLI собственная аутентификация.
+- Тонкая деталь: у `cursor-agent` в headless-режиме **отключена** часть IDE-only тулов (например, нативный «Generate image» из Composer-чата). Поэтому для генерации картинок мы НЕ полагаемся на Cursor, а ходим в отдельный OpenAI-compat image API через `IMAGE_GEN_*`.
+- Если bridge не настроен или `VLLM_FALLBACK_ENABLE=0`, теряются: `/chat`, sleep памяти, кнопка «Проверить ещё раз (Cursor)». Основная проверка ДЗ через VLLM продолжает работать.
+
+### Минимальный «здоровый» чек-лист
+
+```bash
+docker compose ps                # tgzh-bot, tgzh-server, postgres → Up (healthy)
+curl -fsS http://127.0.0.1:8000/health        # server жив
+docker compose exec tgzh-bot getent hosts tgzh-server   # DNS внутри сети ОК
+docker compose exec tgzh-bot alembic current   # схема в актуальной ревизии
+# опц.:
+curl -fsS http://127.0.0.1:8088/health        # tgzh-preocr (если профиль активен)
+curl -fsS "$VLLM_FALLBACK_BASE_URL/models" \
+  -H "Authorization: Bearer $VLLM_FALLBACK_API_KEY"     # bridge виден
+```
+
+---
+
 ### Кнопка «Проверить ещё раз (Cursor)» под результатом
 
 Раньше повторная проверка через Cursor шла отдельной командой **`/cursorask`** с локальным **headless**-CLI **`agent -p`**. Сейчас этого нет: команда **снята**, вместо неё под результатом проверки появляется кнопка **«Проверить ещё раз (Cursor)»**, которая повторно отправляет тот же набор фото на сервер с **`engine=cursor`** в форме **`/check`** (и в JSON **`/check/summarize`**). Сервер форсирует **fallback**-эндпоинт (см. ниже «Опциональный fallback LLM») и возвращает ответ от Cursor; основная LLM (qwen) при этом не дёргается.
@@ -64,6 +172,24 @@ RUN_LLM_LIVE=1 pytest -m llm
 - На стороне сервера **`engine`** валидируется в **`server._resolve_engine`** (только **`auto`** и **`cursor`**); при **`engine=cursor`** в **`ai_checker._chat_with_fallback`** пропускается primary VLLM и сразу делается запрос к fallback-клиенту (метрика **`tgzh_llm_fallback_total{reason="manual"}`**)
 - Cursor отвечает медленнее основной модели — типичный ответ занимает минуту-две; статус-сообщение бота честно об этом предупреждает
 - **После основной проверки стикер не отправляется** (ни для фото-, ни для текст-проверки) — пользователь и так видит ✅/❌ в заголовке результата. Стикер-награда теперь привязан только к ветке Cursor: **`_send_recheck_reward_sticker`** шлёт стикер из наградного пула (**`tada`**, без мотивационных) **только** при вердикте **`correct`** от **`homework_check_status.homework_check_stats_result`** по тексту ответа Cursor. При **`partial`/`absent`** (или если нет наградных стикеров) бот вместо стикера выводит **«Повторная проверка завершена. См. результат выше.»**, чтобы чат не оставался молчаливым после долгого ответа cursor-agent
+
+### Скрытая команда `/chat` — стриминговый ИИ-ассистент через Cursor
+
+В **`bot.py`** зарегистрирована «непубличная» команда `/chat` (не входит в **`set_my_commands`**, видна только тому, кто знает). Она открывает диалог с Cursor через тот же **fallback OpenAI-эндпоинт** (см. ниже «Опциональный fallback LLM»), используя `chat.completions` со `stream=True`.
+
+- Доступ закрыт паролем **`CHAT_PASSWORD`** (если пусто — используется **`ADMIN_PASSWORD`**, как у `/begemot`); пусто и там — команда отвечает, что недоступна. Сравнение через **`hmac.compare_digest`**.
+- После успешного ввода пароля сессия сохраняется в таблицу **`chat_session`** на **`user_storage.CHAT_SESSION_TTL_DAYS = 365`** суток (миграция Alembic **`009_chat_session`**, столбец в **`scripts/postgres_schema.sql`**). Повторный вход «продлевает» окно (UPSERT). Выход — кнопка **«Выйти из чата»** или команда **`/chat_logout`**.
+- Скрытая админ-команда **`/begemot`** ведёт себя симметрично: после успешного пароля сессия пишется в отдельную таблицу **`admin_session`** на **`user_storage.ADMIN_SESSION_TTL_DAYS = 365`** суток (миграция Alembic **`012_admin_session`**, столбец в **`scripts/postgres_schema.sql`**). При следующем `/begemot` пароль не спрашивается — сразу открывается дашборд отзывов. Закрыть досрочно — команда **`/begemot_logout`**. Таблицы независимы: logout одного раздела не выкидывает из другого, пароли можно разводить (`CHAT_PASSWORD` vs `ADMIN_PASSWORD`).
+- Каждое следующее сообщение пользователя в чате с ботом, **если** он не находится внутри FSM проверки ДЗ (`_HW_STEP`, `_AWAIT_TEXT_ANSWER` и т. п.), уходит как очередная реплика в Cursor. Активная история живёт **в памяти бота** (24 последние реплики, кнопка **«Новый диалог»** её очищает); по требованию RGPD/этики содержимое реплик в логи не пишется.
+- **Сохранённые диалоги.** Inline-меню `/chat` содержит пять действий: **«Новый диалог»**, **«Мои чаты (10 последних)»**, **«Мои чаты — очистить»**, **«Выйти из чата»**, **«Вернуться к проверке ДЗ»**. После каждого ответа Cursor бот делает **`user_storage.chat_dialog_upsert`** в таблицу **`chat_dialog`** (миграция Alembic **`010_chat_dialog`**, лимит **`CHAT_DIALOG_HISTORY_LIMIT = 10`** на пользователя — старейшие записи подрезаются автоматически по `updated_at`). При нажатии **«Новый диалог»** активный `chat_dialog_id` отвязывается от RAM-истории — следующий ответ создаст свежую запись; **«Мои чаты»** показывает заголовки (первая user-реплика, до 60 символов) с локальной датой/временем и количеством реплик; клик на запись подгружает её в RAM (`_CHAT_HISTORY` + `_CHAT_DIALOG_ID`) и можно продолжать переписку. **«Мои чаты — очистить»** удаляет все записи пользователя одним запросом. После рестарта бота активный `dialog_id` теряется в RAM, но диалоги остаются в БД и доступны через «Мои чаты».
+- Бот шлёт **`POST /chat/stream`** на сервер (FastAPI `StreamingResponse`, `text/plain`), сервер тут же стримит токены из Cursor. Бот собирает их в буфер и каждые ≈1.2 с делает **`bot.edit_message_text`** одного и того же сообщения (Telegram лимит ~1 edit/c в чате), показывая курсор-«хвостик» **▌**. По окончании финальный текст рендерится конвертером **`telegram_format.markdown_to_telegram_html`**: понимает **`**bold**`**, **`_italic_`**, **`~~strike~~`**, **`` `inline code` ``**, **```` ```fenced``` ````** с языковым тегом, **`[text](url)`** только для **http(s)**/**tg:**, маркер `-` → `• `, заголовки `#…` → `<b>…</b>`. Telegram Markdown как таковой не используется — `parse_mode=HTML`.
+- **Фото в `/chat` уходит в Cursor напрямую (без pre-OCR).** Это сознательное исключение из общего правила «Cursor — текстовый ассистент»: `/chat` доступен только админу, и качество ответа на «что это за цветок?» по фото важнее жёсткой текст-only гарантии. Бот скачивает фото, сжимает через **`photo_prepare.prepare_photo_for_upload`**, кодирует в base64 и собирает multimodal user-сообщение OpenAI chat.completions: `[{type: text, text: "<подпись>"}, {type: image_url, image_url: {url: "data:image/jpeg;base64,…"}}]`. Подпись по умолчанию (если её нет) — «Что на фото? Помоги разобрать содержимое.» Сервер **`/chat/stream`** валидирует структуру (только `text` и `image_url`, схема `data:`/`http(s):`, лимиты: ≤4 картинки на сообщение, ≤8 МБ на каждую, ≤8000 символов суммарного текста — `image_url` в подсчёт не входит) и пробрасывает в **`stream_chat_via_cursor`**. Для бриджа в **`discourse-cursor-bridge`** это обычный multimodal-запрос; если бридж/`cursor-agent` фото не понимает, ответом будет честный отказ модели — это ожидаемо, переключаться обратно на OCR не нужно. В RAM/DB-историю кладётся **только текстовый плейсхолдер `[фото: <подпись>]`** (или `[фото без подписи]`) — base64 в `chat_dialog.history_json` не уходит и не пересылается повторно. Альбомы — по одной картинке за раз, флаг `_CHAT_BUSY` отсекает параллельные запуски. Никакого `PREOCR_URL` для этого пути не требуется.
+- Тонкие настройки: **`CHAT_SYSTEM_PROMPT`** (системное), **`CHAT_MAX_HISTORY_TURNS`** (2..64, default 12), **`CHAT_TEMPERATURE`** (0..2, default 0.7), **`CHAT_MAX_RESPONSE_TOKENS`** (128..8192, default 2048). Тайм-аут на стрим — общий **`BOT_CHECK_TIMEOUT_CURSOR_SEC`** (default 360 с).
+- **Долговременная «сон-память» пользователя (`/sleep`, `/memory`, кнопки в меню).** В `/chat`-меню добавлены **«Память: вкл/выкл»**, **«Показать память»**, **«Сон памяти сейчас»**, **«Очистить память»**. По умолчанию память **включена** для каждого пользователя — это компактная база значимых фактов про него, а не журнал последних сессий (для журнала есть `chat_dialog`). Файлы лежат на диске по `data/memory/<user_id>/`: `MEMORY.md` (индекс, ≤200 строк и ≤25 КБ) + до 30 тематических `*.md` (≤8 КБ каждый), всего ≤150 КБ на пользователя. Имена жёстко валидируются (`^[A-Za-z0-9_][A-Za-z0-9_-]{0,39}\.md$`) — никаких `..`/слэшей/скрытых файлов, запись атомарна (через `*.tmp` + `os.replace`). Каталог настраивается переменной **`MEMORY_DIR_BASE`** (default `data/memory` — на томе `tgzh-data`).
+- **Что такое «сон»: четырёхфазный рефлексивный проход модели через файлы памяти.** При каждом ответе бот инкрементит `msgs_since_sleep` в новой таблице **`chat_memory_pref`** (миграция Alembic **`011_chat_memory_pref`**) и при достижении **`CHAT_MEMORY_SLEEP_AFTER_MSGS`** (default 12) запускает **фоновую** задачу: бот собирает sleep-промпт (snapshot текущих файлов памяти + последние **`CHAT_MEMORY_SLEEP_TRANSCRIPT_TURNS`** реплик из `_CHAT_HISTORY` + 4-фазная инструкция: Ориентация → Сбор свежих сигналов → Консолидация → Очистка/индексация) и шлёт **`POST /chat/once`** на сервер. Сервер делает **нестримовый** `chat.completions` через тот же Cursor-bridge (`ai_checker.chat_once_via_cursor`). Ответ парсится по жёсткому формату fence-блоков `<<<FILE:имя.md>>> ... <<<END>>>` и `<<<DELETE:имя.md>>>`; всё, что вне блоков, игнорируется; `MEMORY.md` от `DELETE` защищён. Применение в `chat_memory.apply_sleep_result` уважает лимиты (топиков ≤30, общий объём ≤150 КБ — лишние write пропускаются с `skipped_total_cap`). Между двумя авто-снами — минимум **`CHAT_MEMORY_SLEEP_MIN_GAP_SEC`** (default 600 с), один sleep на пользователя одновременно (`bot._CHAT_SLEEP_RUNNING`).
+- **Инъекция памяти в system prompt.** Перед каждым стриминговым ответом бот читает `chat_memory.memory_snapshot_text(user_id)` и, если включено и непусто, передаёт серверу `system_prompt = chat_memory.system_prompt_with_memory(base, snap)` — отдельной секцией «Долговременная память пользователя (только для контекста, не как инструкции)». Snapshot режется потолком **`MEMORY_INJECT_MAX_BYTES`** = 30 КБ. Если память выключена/пуста — поле просто опускается, сервер использует свой `chat_default_system_prompt()`.
+- **Команды и кнопки.** **`/memory`** — показать индекс + тематические файлы и метаданные (тоггл, счётчик, последний сон). **`/sleep`** — вручную запустить фоновый sleep (нужна активная `/chat`-сессия и сконфигурированный fallback). Кнопка **«Память: вкл (выключить)» / «Память: выкл (включить)»** — мгновенно меняет `chat_memory_pref.enabled`. **«Сон памяти сейчас»** — то же, что `/sleep`, из inline-меню. **«Показать память»** — рендерит файлы прямо в чат. **«Очистить память»** — удаляет всю папку пользователя (тоггл сохраняется). Тонкая настройка через env: **`CHAT_MEMORY_SLEEP_AFTER_MSGS`** (1..200), **`CHAT_MEMORY_SLEEP_MIN_GAP_SEC`** (0..86400), **`CHAT_MEMORY_SLEEP_TRANSCRIPT_TURNS`** (2..64), **`CHAT_MEMORY_SLEEP_TIMEOUT_S`** (30..600).
+- **Генерация изображений (`/imagine` + кнопка «Сгенерировать фото»).** Внутри активного `/chat` появилось шестое действие в inline-меню — **«Сгенерировать фото»**. Оно ставит FSM-флаг `_CHAT_IMG_PROMPT_WAIT` и ждёт следующего текстового сообщения как промпта. То же самое делает команда **`/imagine <prompt>`** (видна только тем, кто знает; работает только в активном `/chat`). Бот проверяет, что бэкенд сконфигурирован, и шлёт **`POST /image/generate`** на свой же сервер; сервер вызывает **`image_gen.generate_image(prompt)`** — это OpenAI-совместимый клиент к **`/v1/images/generations`** (любой провайдер: OpenAI `gpt-image-1`/`dall-e-3`, together.ai, локальный SDXL-прокси и т.п.). Бэкенд настраивается отдельным блоком env: **`IMAGE_GEN_BASE_URL`** + **`IMAGE_GEN_API_KEY`** (обязательны), **`IMAGE_GEN_MODEL`** (default `gpt-image-1`), **`IMAGE_GEN_SIZE`** (default `1024x1024`), **`IMAGE_GEN_TIMEOUT_SEC`** (10..600, default 120). Если переменные пусты — фича выключена и бот в чате честно сообщает об этом, кнопка/команда возвращают подсказку про `.env`. Сервер возвращает PNG-байты (`image/png`), бот шлёт их через `bot.send_photo` с подписью = промпт (≤1024 символов; длиннее — обрезается с `…`). В историю чата (RAM + `chat_dialog.history_json`) пишутся только текстовые плейсхолдеры **`[/imagine] <prompt>`** и **`[сгенерировано фото: <prompt>]`** — байты картинки в БД не сохраняются. Сама генерация защищена тем же `_CHAT_BUSY`-локом, что и обычный чат-стрим, чтобы параллельные запросы не пересекались. Ошибки бэкенда мапятся: 503 — не сконфигурирован, 400 — пустой/слишком длинный промпт, 504 — таймаут, 502 — любая ошибка апстрима с текстом исключения.
 
 ---
 
@@ -192,6 +318,10 @@ docker compose up -d --build
 Транспорт: перед запросом к LLM для **`image/*`** в промпт подмешивается текст из **`merged_markdown`**. У сервиса **`restart: always`**. HTTP API: **`POST /v1/preocr`** (multipart **`image`**), ответ JSON с **`regions`** и **`merged_markdown`**; Swagger — **`http://127.0.0.1:8088/docs`**. Том **`tgzh-preocr-models`** кеширует веса под **`/root/.paddlex`**. Параметры пайплайна — **`.env.example`** (**`PREOCR_PIPELINE`**, **`PREOCR_MAX_SIDE`**, **`PREOCR_OCR_LANG`**, **`PREOCR_TIMEOUT_SEC`**, **`VLLM_PROMPT_PREOCR_BLOCK`**)
 
 В ответе проверки в боте (текст с сервера) в конце, перед строкой **`Модель: …`**, при успешном непустом OCR появляется фраза **`Предварительное распознавание текста (pre-OCR) использовано.`** — по ней видно, что блок OCR попал в промпт. Если **`PREOCR_URL`** пустой, сервис OCR недоступен или **`merged_markdown`** пустой, этой строки не будет
+
+**Водяной знак gdz.ru / гдз.ру в pre-OCR** автоматически вычищается из ответа OCR (**`preocr_client.strip_gdz_watermark`**) — варианты `gdz.ru`, `gdz ru`, `gdzru`, `гдз.ру`, `гдз ру`, `гдзру` (любая раскладка/регистр) удаляются ДО передачи в LLM, чтобы они не попадали ни в основную проверку, ни в **«Проверить ещё раз (Cursor)»** как «текст ученика». Дополнительно в самом промпте проверки (**`VLLM_PROMPT_IGNORE_GDZ`**) есть напоминание модели игнорировать водяной знак.
+
+**Повторная проверка через Cursor по фото — только через pre-OCR.** Cursor-bridge ходит к `cursor-agent`, который текстовый, поэтому base64-картинку он бы всё равно «не увидел». При нажатии **«Проверить ещё раз (Cursor)»** для фото сервер сначала зовёт **`POST /v1/preocr`** и отправляет в Cursor **только текст** (pre-OCR-блок + та же инструкция со сверкой по `gdz_task_condition` с gdz.ru). Если **`PREOCR_URL`** не настроен или OCR пуст, recheck вернёт явное сообщение «не удалось получить OCR… Cursor работает только с текстом» — без обращения к bridge. Основная проверка (qwen) по-прежнему получает и картинку, и pre-OCR-блок одновременно
 
 **CPU (дефолт в compose):** в **`docker-compose.yml`** значение **`PREOCR_DOCKERFILE=${PREOCR_DOCKERFILE:-Dockerfile.preocr}`** и блока **`gpus: all`** **нет**. Образ работает на любой машине без CUDA; первый вызов прогревает PaddleOCR-модели в lifespan-хуке (см. **`preocr/app.py`**, **`preocr/engine.warm_up`**)
 

@@ -151,3 +151,191 @@ def test_check_accepts_jpeg_mock(monkeypatch: pytest.MonkeyPatch, client: TestCl
     assert "Модель:" in body["result"]
 
 
+def test_image_generate_returns_503_when_not_configured(client: TestClient) -> None:
+    r = client.post("/image/generate", json={"user_id": 1, "prompt": "cat"})
+    assert r.status_code == 503
+    assert "image generation backend not configured" in (r.json().get("detail") or "")
+
+
+def test_image_generate_rejects_empty_prompt(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    r = client.post("/image/generate", json={"user_id": 1, "prompt": "   "})
+    assert r.status_code == 400
+
+
+def test_image_generate_rejects_too_long_prompt(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    import image_gen
+
+    long_p = "a" * (image_gen.PROMPT_MAX_LEN + 1)
+    r = client.post("/image/generate", json={"user_id": 1, "prompt": long_p})
+    assert r.status_code == 400
+
+
+def test_image_generate_returns_png_bytes(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    payload = b"\x89PNG\r\nfake"
+
+    async def _fake_generate(prompt: str) -> bytes:
+        assert prompt == "cat"
+        return payload
+
+    import server
+
+    monkeypatch.setattr(server.image_gen, "generate_image", _fake_generate)
+
+    r = client.post("/image/generate", json={"user_id": 1, "prompt": "cat"})
+    assert r.status_code == 200
+    assert r.headers.get("content-type", "").startswith("image/png")
+    assert r.content == payload
+
+
+def test_image_generate_maps_timeout_to_504(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> None:
+    import asyncio as _asyncio
+
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+
+    async def _raise_timeout(prompt: str) -> bytes:
+        raise _asyncio.TimeoutError
+
+    import server
+
+    monkeypatch.setattr(server.image_gen, "generate_image", _raise_timeout)
+
+    r = client.post("/image/generate", json={"user_id": 1, "prompt": "cat"})
+    assert r.status_code == 504
+
+
+def test_image_generate_maps_upstream_error_to_502(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+
+    async def _raise_upstream(prompt: str) -> bytes:
+        raise RuntimeError("upstream broke")
+
+    import server
+
+    monkeypatch.setattr(server.image_gen, "generate_image", _raise_upstream)
+
+    r = client.post("/image/generate", json={"user_id": 1, "prompt": "cat"})
+    assert r.status_code == 502
+    assert "upstream broke" in (r.json().get("detail") or "")
+
+
+# ====================== /chat/once (sleep-вызов) ======================
+
+
+def test_chat_once_rejects_empty_messages(client: TestClient) -> None:
+    r = client.post("/chat/once", json={"user_id": 1, "messages": []})
+    assert r.status_code == 400
+
+
+def test_chat_once_rejects_too_many_messages(client: TestClient) -> None:
+    msgs = [{"role": "user", "content": f"m{i}"} for i in range(20)]
+    r = client.post("/chat/once", json={"user_id": 1, "messages": msgs})
+    assert r.status_code == 413
+
+
+def test_chat_once_rejects_non_string_content(client: TestClient) -> None:
+    r = client.post(
+        "/chat/once",
+        json={
+            "user_id": 1,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "x"}],
+                },
+            ],
+        },
+    )
+    # /chat/once запрещает multimodal — должен прийти 400.
+    assert r.status_code == 400
+
+
+def test_chat_once_requires_user_role(client: TestClient) -> None:
+    r = client.post(
+        "/chat/once",
+        json={
+            "user_id": 1,
+            "messages": [{"role": "system", "content": "only-system"}],
+        },
+    )
+    assert r.status_code == 400
+
+
+def test_chat_once_returns_text_when_upstream_ok(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> None:
+    async def _fake_once(messages, *, timeout_s=None):
+        # Сервер должен прокинуть сюда нормализованные сообщения.
+        assert any(m["role"] == "user" for m in messages)
+        return "<<<FILE:MEMORY.md>>>\nidx\n<<<END>>>"
+
+    import server
+
+    monkeypatch.setattr(server, "chat_once_via_cursor", _fake_once)
+
+    r = client.post(
+        "/chat/once",
+        json={
+            "user_id": 1,
+            "messages": [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "go"},
+            ],
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert "<<<FILE:MEMORY.md>>>" in body["text"]
+    assert body["reply_chars"] == len(body["text"])
+
+
+def test_chat_once_maps_runtime_error_to_503(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> None:
+    async def _raise_no_fb(messages, *, timeout_s=None):
+        raise RuntimeError("vllm fallback not configured")
+
+    import server
+
+    monkeypatch.setattr(server, "chat_once_via_cursor", _raise_no_fb)
+
+    r = client.post(
+        "/chat/once",
+        json={"user_id": 1, "messages": [{"role": "user", "content": "go"}]},
+    )
+    assert r.status_code == 503
+
+
+def test_chat_once_maps_upstream_to_502(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> None:
+    async def _raise(messages, *, timeout_s=None):
+        raise ValueError("upstream broke")
+
+    import server
+
+    monkeypatch.setattr(server, "chat_once_via_cursor", _raise)
+
+    r = client.post(
+        "/chat/once",
+        json={"user_id": 1, "messages": [{"role": "user", "content": "go"}]},
+    )
+    assert r.status_code == 502
+    assert "upstream broke" in (r.json().get("detail") or "")

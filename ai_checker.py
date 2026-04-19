@@ -546,6 +546,197 @@ async def _chat_with_fallback(
     return fb_response, True, fb_model
 
 
+# --- /chat: стриминг через fallback (Cursor-bridge) ----------------------------
+
+CHAT_DEFAULT_SYSTEM_PROMPT: Final = (
+    "Ты — дружелюбный школьный ИИ-ассистент. Отвечай по-русски. "
+    "Объясняй кратко и понятно, опирайся на проверенные факты. Если вопрос "
+    "связан с учебой, давай пошаговое решение. Не выдумывай источники. "
+    "В ответе используй только обычный текст и базовую разметку: "
+    "**жирный**, _курсив_, `inline code`, ```fenced code```; не используй "
+    "таблицы и заголовки `#`."
+)
+
+
+def chat_default_system_prompt() -> str:
+    """Системный промпт чата (override через `CHAT_SYSTEM_PROMPT`)."""
+    raw = (os.getenv("CHAT_SYSTEM_PROMPT") or "").strip()
+    return raw or CHAT_DEFAULT_SYSTEM_PROMPT
+
+
+def chat_max_history_turns() -> int:
+    """Сколько последних реплик (user+assistant) прокидываем в Cursor."""
+    return _int_env("CHAT_MAX_HISTORY_TURNS", default=12, lo=2, hi=64)
+
+
+def chat_stream_temperature() -> float:
+    raw = (os.getenv("CHAT_TEMPERATURE") or "").strip()
+    if not raw:
+        return 0.7
+    try:
+        v = float(raw)
+    except ValueError:
+        return 0.7
+    return max(0.0, min(2.0, v))
+
+
+def chat_max_response_tokens() -> int:
+    return _int_env("CHAT_MAX_RESPONSE_TOKENS", default=2048, lo=128, hi=8192)
+
+
+async def stream_chat_via_cursor(
+    messages: list[dict[str, str]],
+    *,
+    on_delta,
+):
+    """Стрим chat.completions через **fallback OpenAI-эндпоинт** (Cursor-bridge).
+
+    `on_delta(piece: str)` вызывается на каждый непустой фрагмент токена. Возвращает
+    итоговую полную строку ответа (накопленную). Кидает RuntimeError, если fallback
+    не сконфигурирован, или прокидывает исключение клиента OpenAI при сетевой ошибке.
+    """
+    from openai import AsyncOpenAI
+
+    if not _fallback_ready():
+        raise RuntimeError("vllm fallback not configured (CHAT requires VLLM_FALLBACK_*)")
+
+    fb_url = _fallback_base_url()
+    fb_key = _fallback_api_key() or "EMPTY"
+    fb_model = _fallback_model()
+    fb_timeout = _fallback_timeout_s()
+    fb_http_client = await _get_fallback_http_client()
+    if fb_http_client is not None:
+        client = AsyncOpenAI(
+            base_url=fb_url,
+            api_key=fb_key,
+            timeout=fb_timeout,
+            http_client=fb_http_client,
+        )
+    else:
+        client = AsyncOpenAI(base_url=fb_url, api_key=fb_key, timeout=fb_timeout)
+
+    from openai import APIStatusError
+
+    full_parts: list[str] = []
+
+    async def _consume_stream() -> None:
+        stream = await client.chat.completions.create(
+            model=fb_model,
+            messages=messages,
+            temperature=chat_stream_temperature(),
+            max_tokens=chat_max_response_tokens(),
+            stream=True,
+        )
+        try:
+            async for event in stream:
+                choices = getattr(event, "choices", None) or []
+                if not choices:
+                    continue
+                delta = getattr(choices[0], "delta", None)
+                if delta is None:
+                    continue
+                piece = getattr(delta, "content", None)
+                if not piece:
+                    continue
+                full_parts.append(piece)
+                try:
+                    await on_delta(piece)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("chat on_delta failed")
+        finally:
+            with suppress(Exception):
+                await stream.close()
+
+    try:
+        await _consume_stream()
+    except APIStatusError as e:
+        # cursor-bridge может не поддерживать stream=true (отвечает 400). В этом случае
+        # делаем один обычный (нестримовый) вызов и эмитим ответ целиком одной дельтой —
+        # для бота это выглядит как стрим из одного куска, без падения сессии чата.
+        body_text = ""
+        try:
+            body_text = (e.response.text or "") if e.response is not None else ""
+        except Exception:
+            body_text = ""
+        if e.status_code == 400 and "stream" in body_text.lower():
+            logger.warning(
+                "vllm fallback: stream=true rejected by bridge, falling back to single completion",
+            )
+            full_parts.clear()
+            response = await client.chat.completions.create(
+                model=fb_model,
+                messages=messages,
+                temperature=chat_stream_temperature(),
+                max_tokens=chat_max_response_tokens(),
+                stream=False,
+            )
+            choices = getattr(response, "choices", None) or []
+            if choices:
+                msg = getattr(choices[0], "message", None)
+                content = getattr(msg, "content", None) if msg is not None else None
+                if content:
+                    full_parts.append(content)
+                    with suppress(Exception):
+                        await on_delta(content)
+        else:
+            raise
+
+    return "".join(full_parts)
+
+
+async def chat_once_via_cursor(
+    messages: list[dict],
+    *,
+    timeout_s: float | None = None,
+) -> str:
+    """Одноразовый (нестримовый) chat.completions через Cursor-bridge.
+
+    Используется для «сна памяти»: бот отдаёт sleep-промпт + транскрипт, бридж
+    возвращает ответ целиком, бот парсит блоки `<<<FILE:...>>>`. Никакого
+    стриминга UI здесь не нужно — промежуточные дельты бесполезны.
+
+    Бросает:
+        RuntimeError — если fallback не сконфигурирован.
+        APIError/APIStatusError — пробрасываем как есть, чтобы caller отличал
+            5xx upstream от 4xx «ваш промт длиннее модели».
+    """
+    from openai import AsyncOpenAI
+
+    if not _fallback_ready():
+        raise RuntimeError("vllm fallback not configured (CHAT requires VLLM_FALLBACK_*)")
+
+    fb_url = _fallback_base_url()
+    fb_key = _fallback_api_key() or "EMPTY"
+    fb_model = _fallback_model()
+    fb_timeout = float(timeout_s) if timeout_s and timeout_s > 0 else _fallback_timeout_s()
+    fb_http_client = await _get_fallback_http_client()
+    if fb_http_client is not None:
+        client = AsyncOpenAI(
+            base_url=fb_url,
+            api_key=fb_key,
+            timeout=fb_timeout,
+            http_client=fb_http_client,
+        )
+    else:
+        client = AsyncOpenAI(base_url=fb_url, api_key=fb_key, timeout=fb_timeout)
+
+    response = await client.chat.completions.create(
+        model=fb_model,
+        messages=messages,
+        temperature=chat_stream_temperature(),
+        max_tokens=chat_max_response_tokens(),
+        stream=False,
+    )
+    choices = getattr(response, "choices", None) or []
+    if not choices:
+        return ""
+    msg = getattr(choices[0], "message", None)
+    content = getattr(msg, "content", None) if msg is not None else None
+    return content or ""
+
+
 def _mime_from_bytes(data: bytes) -> str:
     if len(data) >= 3 and data[:3] == b"\xff\xd8\xff":
         return "image/jpeg"
@@ -924,11 +1115,31 @@ async def _check_vllm(
         if preocr_used:
             instr = f"{pre_block.strip()}\n\n{instr}"
 
-        b64 = base64.standard_b64encode(data).decode()
-        content: list[dict] = [
-            {"type": "text", "text": instr},
-            {"type": "image_url", "image_url": {"url": f"data:{ct};base64,{b64}"}},
-        ]
+        if force_fallback:
+            # Cursor-bridge ходит к cursor-agent (text-only): base64-картинки бесполезны,
+            # модель всё равно не «видит» рисунок. Поэтому при повторной проверке через
+            # Cursor отправляем ТЕКСТОВЫЙ payload — pre-OCR-блок (уже без водяных
+            # gdz.ru/гдз.ру) + основная инструкция со сверкой по gdz_task_condition.
+            # Если pre-OCR недоступен — возвращаем явное сообщение, чтобы пользователь
+            # увидел, что повторная проверка не на чем основываться.
+            if not preocr_used:
+                logger.warning(
+                    "cursor recheck without preocr: PREOCR_URL not configured or returned empty"
+                )
+                return (
+                    "Повторная проверка через Cursor не выполнена: "
+                    "не удалось получить предварительное OCR-распознавание изображения "
+                    "(переменная PREOCR_URL не настроена или сервис не вернул текст). "
+                    "Cursor работает только с текстом."
+                    + _analysis_result_footer(model=model, preocr_used=False)
+                )
+            content: list[dict] = [{"type": "text", "text": instr}]
+        else:
+            b64 = base64.standard_b64encode(data).decode()
+            content = [
+                {"type": "text", "text": instr},
+                {"type": "image_url", "image_url": {"url": f"data:{ct};base64,{b64}"}},
+            ]
     elif ct == "application/pdf":
         b64 = base64.standard_b64encode(data).decode()
         content = [

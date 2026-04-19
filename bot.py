@@ -19,6 +19,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Final
 
 import httpx
 from dotenv import load_dotenv
@@ -39,7 +40,7 @@ from telegram.error import BadRequest
 
 load_dotenv()
 
-from logging_config import setup_logging
+from logging_config import clip_check_log_body, setup_logging
 from tgzh_httpx import async_http_transport_ipv4_lookup
 
 logger = setup_logging("tgzh.bot")
@@ -163,13 +164,40 @@ from telegram.ext import (
 from telegram.request import HTTPXRequest
 
 import bot_stats
+import chat_memory
 import feedback_tei
 import gdz_solution
 import homework_check_status
+import image_gen
 import photo_prepare
 import telegram_format
 import tgzh_metrics
 import user_storage
+
+
+def _log_hw_anchor(
+    user_id: int,
+    profile: user_storage.UserProfile,
+    *,
+    engine: str,
+    tag: str,
+) -> None:
+    """Параграф / страница / упражнение в логах проверки (корреляция с сервером)."""
+    para = (profile.hw_paragraph or "").strip()
+    ex = (profile.hw_exercise or "").strip() or None
+    page = profile.hw_page
+    lbl = (profile.textbook_label or "").strip()
+    logger.info(
+        "%s user_id=%s engine=%s paragraph=%r exercise=%r page=%s grade=%s textbook_label=%r",
+        tag,
+        user_id,
+        engine,
+        para[:240] + ("…" if len(para) > 240 else ""),
+        ex,
+        page,
+        profile.grade,
+        lbl[:200] + ("…" if len(lbl) > 200 else ""),
+    )
 
 
 def _textbook_label_html(profile: user_storage.UserProfile) -> str:
@@ -249,6 +277,23 @@ _ADMIN_BAN_WAIT = "admin_ban_wait"
 _CHECK_DISLIKE_FEEDBACK_WAIT = "check_dislike_feedback_wait"
 _FEEDBACK_PAGE = 3
 
+# /chat: скрытое меню, FSM ввода пароля и активный диалог.
+_CHAT_PW_WAIT = "chat_pw_wait"
+_CHAT_ACTIVE = "chat_active"
+_CHAT_HISTORY = "chat_history"  # list[dict[role,content]] — храним только в RAM
+_CHAT_BUSY = "chat_busy"
+_CHAT_HISTORY_RUNTIME_CAP = 24
+# `chat_dialog.dialog_id` активной серверной записи. Меняется при «Новый диалог»
+# (сбрасывается → следующий ответ создаст новую запись), при открытии истории
+# из «Мои чаты» (берём id из БД), при logout (сбрасывается).
+_CHAT_DIALOG_ID = "chat_dialog_id"
+# Кнопка «Сгенерировать фото» переводит чат в режим ожидания одного текстового
+# промпта; следующий апдейт текста уходит в `/image/generate`. Любой другой шаг
+# (другая кнопка, /chat_logout, фото) сбрасывает флаг.
+_CHAT_IMG_PROMPT_WAIT = "chat_img_prompt_wait"
+# Caption у Telegram-фото: лимит 1024 символа.
+_TG_PHOTO_CAPTION_MAX_LEN = 1024
+
 
 def _admin_password_expected() -> str:
     return (os.getenv("ADMIN_PASSWORD") or "").strip()
@@ -260,6 +305,18 @@ def _admin_password_matches(got: str, expected: str) -> bool:
     if len(got) != len(expected):
         return False
     return hmac.compare_digest(got.encode("utf-8"), expected.encode("utf-8"))
+
+
+def _chat_password_expected() -> str:
+    """Пароль скрытого /chat. По умолчанию `CHAT_PASSWORD`, иначе **`ADMIN_PASSWORD`**."""
+    raw = (os.getenv("CHAT_PASSWORD") or "").strip()
+    if raw:
+        return raw
+    return _admin_password_expected()
+
+
+def _chat_password_configured() -> bool:
+    return bool(_chat_password_expected())
 
 
 def _clear_feedback_and_begemot_wait(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1184,6 +1241,52 @@ async def my_support_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await _send_long_html(context.bot, update.effective_chat.id, text_html)
 
 
+async def _send_begemot_dashboard(
+    bot,
+    chat_id: int,
+    *,
+    extra_header_html: str = "",
+) -> None:
+    """Шапка + первая страница списка отзывов для админ-сессии /begemot.
+
+    Используется и сразу после успешного ввода пароля, и при «горячем»
+    входе по уже активной DB-сессии (см. `admin_session_active_until`).
+    """
+    total = await asyncio.to_thread(user_storage.count_user_feedback, USER_DB_PATH)
+    v_up, v_down = await asyncio.to_thread(
+        user_storage.check_result_vote_totals,
+        USER_DB_PATH,
+    )
+    rows = await asyncio.to_thread(
+        user_storage.list_user_feedback,
+        USER_DB_PATH,
+        limit=_FEEDBACK_PAGE,
+        offset=0,
+    )
+    header = (
+        f"Пользователей с отзывами: <b>{total}</b>.\n"
+        f"Оценки проверки (👍/👎 под результатом): <b>{v_up}</b> / <b>{v_down}</b>."
+    )
+    if extra_header_html:
+        header = f"{extra_header_html}\n{header}"
+    body = _format_feedback_list_html(rows)
+    markup_rows: list[list[InlineKeyboardButton]] = []
+    if rows:
+        markup_rows.append(
+            [
+                InlineKeyboardButton(str(r.user_id), callback_data=f"fb:v:{r.user_id}")
+                for r in rows
+            ],
+        )
+    markup_rows.extend(_admin_feedback_nav_keyboard(0, total).inline_keyboard)
+    await bot.send_message(
+        chat_id=chat_id,
+        text=header + "\n\n" + body,
+        reply_markup=InlineKeyboardMarkup(markup_rows),
+        parse_mode=ParseMode.HTML,
+    )
+
+
 async def begemot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.effective_user:
         return
@@ -1195,8 +1298,540 @@ async def begemot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.message.reply_text("Раздел администратора не настроен.")
         return
     _clear_feedback_and_begemot_wait(context)
+    user_id = update.effective_user.id
+    until = await asyncio.to_thread(
+        user_storage.admin_session_active_until,
+        USER_DB_PATH,
+        user_id,
+    )
+    if until is not None:
+        context.user_data[_BEGEMOT_OK] = True
+        try:
+            until_local = until.astimezone()
+        except Exception:
+            until_local = until
+        when_html = _h(until_local.strftime("%Y-%m-%d %H:%M %Z").strip())
+        await _send_begemot_dashboard(
+            context.bot,
+            update.effective_chat.id,
+            extra_header_html=(
+                f"<i>Доступ уже открыт до <b>{when_html}</b>. "
+                f"Закрыть — /begemot_logout.</i>"
+            ),
+        )
+        return
     context.user_data[_BEGEMOT_PW_WAIT] = True
-    await update.message.reply_text("Введите пароль одним сообщением.")
+    await update.message.reply_text(
+        f"Введите пароль одним сообщением. Сессия откроется на "
+        f"{user_storage.ADMIN_SESSION_TTL_DAYS} суток.",
+    )
+
+
+async def begemot_logout_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or not update.effective_user:
+        return
+    user_id = update.effective_user.id
+    logger.info("cmd /begemot_logout user_id=%s", user_id)
+    existed = await asyncio.to_thread(
+        user_storage.admin_session_logout,
+        USER_DB_PATH,
+        user_id,
+    )
+    _clear_begemot_session(context)
+    context.user_data.pop(_BEGEMOT_PW_WAIT, None)
+    msg = "Сессия /begemot закрыта." if existed else "Сессии /begemot не было."
+    await update.message.reply_text(msg)
+
+
+def _chat_session_status_html(session_until) -> str:
+    if session_until is None:
+        return ""
+    try:
+        local = session_until.astimezone()
+    except Exception:
+        local = session_until
+    when = local.strftime("%Y-%m-%d %H:%M %Z").strip()
+    return f"Сессия чата активна до <b>{_h(when)}</b>."
+
+
+def _chat_menu_keyboard_for_user(active: bool, user_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура меню чата, подтянув текущий тоггл памяти из БД (sync, дёшево)."""
+    mem_enabled = True
+    try:
+        mem_enabled = user_storage.chat_memory_get_pref(USER_DB_PATH, user_id).enabled
+    except Exception:
+        pass
+    return _chat_menu_keyboard(active, memory_enabled=mem_enabled)
+
+
+def _chat_menu_keyboard(
+    active: bool,
+    *,
+    memory_enabled: bool = True,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if active:
+        rows.append(
+            [InlineKeyboardButton("Новый диалог", callback_data="chat:new")],
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"Мои чаты ({user_storage.CHAT_DIALOG_HISTORY_LIMIT} последних)",
+                    callback_data="chat:list",
+                ),
+            ],
+        )
+        rows.append(
+            [InlineKeyboardButton("Мои чаты — очистить", callback_data="chat:purge")],
+        )
+        rows.append(
+            [InlineKeyboardButton("Сгенерировать фото", callback_data="chat:imagine")],
+        )
+        # Долговременная память + «сон». Подпись кнопки тоггла зависит от текущего состояния.
+        mem_label = (
+            "Память: вкл (выключить)" if memory_enabled else "Память: выкл (включить)"
+        )
+        rows.append([InlineKeyboardButton(mem_label, callback_data="chat:mem_toggle")])
+        rows.append(
+            [
+                InlineKeyboardButton("Показать память", callback_data="chat:mem_show"),
+                InlineKeyboardButton("Сон памяти сейчас", callback_data="chat:mem_sleep"),
+            ],
+        )
+        rows.append(
+            [InlineKeyboardButton("Очистить память", callback_data="chat:mem_purge")],
+        )
+        rows.append(
+            [InlineKeyboardButton("Выйти из чата", callback_data="chat:logout")],
+        )
+    rows.append(
+        [InlineKeyboardButton("Вернуться к проверке ДЗ", callback_data="chat:back")],
+    )
+    return InlineKeyboardMarkup(rows)
+
+
+def _chat_dialog_list_keyboard(
+    dialogs: list[user_storage.ChatDialogSummary],
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for d in dialogs:
+        title = d.title or "Без названия"
+        if len(title) > 48:
+            title = title[:47].rstrip() + "…"
+        label = f"#{d.dialog_id} · {title} · {d.history_len // 2} реплик"
+        if len(label) > 64:
+            label = label[:63] + "…"
+        rows.append(
+            [InlineKeyboardButton(label, callback_data=f"chat:open:{d.dialog_id}")],
+        )
+    rows.append(
+        [InlineKeyboardButton("Назад в меню чата", callback_data="chat:menu")],
+    )
+    return InlineKeyboardMarkup(rows)
+
+
+def _format_chat_dialog_when(updated_at_iso: str) -> str:
+    """Локальное «дд.мм HH:MM» из ISO-строки в UTC, для подписей в списке."""
+    if not updated_at_iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(updated_at_iso)
+    except ValueError:
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    try:
+        local = dt.astimezone()
+    except Exception:
+        local = dt
+    return local.strftime("%d.%m %H:%M")
+
+
+async def _send_chat_menu(
+    bot,
+    chat_id: int,
+    *,
+    user_id: int,
+    extra_html: str = "",
+) -> None:
+    until = await asyncio.to_thread(
+        user_storage.chat_session_active_until,
+        USER_DB_PATH,
+        user_id,
+    )
+    active = until is not None
+    if active:
+        body = (
+            "<b>ИИ-ассистент Cursor.</b> Можно задавать вопросы прямо здесь — "
+            "ответ приходит потоково. История диалога живёт в памяти бота "
+            "(перезапуск её сбрасывает).\n\n"
+            f"{_chat_session_status_html(until)}"
+        )
+    else:
+        body = (
+            "<b>ИИ-ассистент Cursor.</b> Доступ закрыт паролем. "
+            "Введи пароль одним сообщением, чтобы открыть диалог "
+            f"на {user_storage.CHAT_SESSION_TTL_DAYS} суток."
+        )
+    if extra_html:
+        body = body + "\n\n" + extra_html
+    mem_pref = await asyncio.to_thread(
+        user_storage.chat_memory_get_pref, USER_DB_PATH, user_id,
+    )
+    await bot.send_message(
+        chat_id,
+        body,
+        reply_markup=_chat_menu_keyboard(active, memory_enabled=mem_pref.enabled),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def chat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or not update.effective_user:
+        return
+    if await _reply_if_blocked_cmd(update, context):
+        return
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    logger.info("cmd /chat user_id=%s", user_id)
+    if not _chat_password_configured():
+        await update.message.reply_text("Раздел /chat недоступен.")
+        return
+    if not _cursor_recheck_available():
+        await update.message.reply_text(
+            "Чат через Cursor сейчас недоступен (на сервере не сконфигурирован fallback).",
+        )
+        return
+    until = await asyncio.to_thread(
+        user_storage.chat_session_active_until,
+        USER_DB_PATH,
+        user_id,
+    )
+    if until is None:
+        context.user_data[_CHAT_PW_WAIT] = True
+        await update.message.reply_text(
+            "Введи пароль одним сообщением, чтобы открыть чат-ассистент.",
+        )
+        return
+    context.user_data.pop(_CHAT_PW_WAIT, None)
+    context.user_data[_CHAT_ACTIVE] = True
+    await _send_chat_menu(context.bot, chat_id, user_id=user_id)
+
+
+async def _handle_chat_callback(
+    query: CallbackQuery,
+    context: ContextTypes.DEFAULT_TYPE,
+    data: str,
+) -> None:
+    user_id = query.from_user.id if query.from_user else 0
+    chat_id = query.message.chat_id
+    parts = data.split(":")
+    action = parts[1] if len(parts) > 1 else ""
+    if action == "logout":
+        await asyncio.to_thread(user_storage.chat_session_logout, USER_DB_PATH, user_id)
+        context.user_data.pop(_CHAT_ACTIVE, None)
+        context.user_data.pop(_CHAT_HISTORY, None)
+        context.user_data.pop(_CHAT_BUSY, None)
+        context.user_data.pop(_CHAT_DIALOG_ID, None)
+        context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
+        await _answer_query_once(query, "Сессия закрыта.")
+        with suppress(BadRequest, Exception):
+            await query.edit_message_text("Сессия /chat закрыта. Открой заново через /chat.")
+        return
+    if action == "new":
+        # Текущий диалог уже сохранён инкрементально; просто отвязываемся,
+        # чтобы следующий ответ Cursor создал новую запись.
+        context.user_data.pop(_CHAT_HISTORY, None)
+        context.user_data.pop(_CHAT_DIALOG_ID, None)
+        await _answer_query_once(query, "Начат новый диалог.")
+        await _send_chat_menu(
+            context.bot,
+            chat_id,
+            user_id=user_id,
+            extra_html="<i>Начат новый диалог. Предыдущий — в «Мои чаты».</i>",
+        )
+        return
+    if action == "back":
+        await _answer_query_once(query)
+        with suppress(BadRequest, Exception):
+            await query.delete_message()
+        return
+    if action == "menu":
+        await _answer_query_once(query)
+        with suppress(BadRequest, Exception):
+            await query.delete_message()
+        await _send_chat_menu(context.bot, chat_id, user_id=user_id)
+        return
+    if action == "list":
+        await _answer_query_once(query)
+        dialogs = await asyncio.to_thread(
+            user_storage.chat_dialog_list,
+            USER_DB_PATH,
+            user_id,
+        )
+        if not dialogs:
+            with suppress(BadRequest, Exception):
+                await query.edit_message_text(
+                    "Сохранённых диалогов пока нет — начни любую переписку, "
+                    "и она появится здесь.",
+                    reply_markup=_chat_menu_keyboard_for_user(True, user_id),
+                    parse_mode=ParseMode.HTML,
+                )
+            return
+        active_id = context.user_data.get(_CHAT_DIALOG_ID)
+        lines = ["<b>Мои чаты</b> — выбери, чтобы продолжить:"]
+        for d in dialogs:
+            when = _format_chat_dialog_when(d.updated_at)
+            marker = " ← активный" if d.dialog_id == active_id else ""
+            title = _h(d.title or "Без названия")
+            lines.append(f"• <b>#{d.dialog_id}</b> · {when} · {title}{marker}")
+        body = "\n".join(lines)
+        try:
+            await query.edit_message_text(
+                body,
+                reply_markup=_chat_dialog_list_keyboard(dialogs),
+                parse_mode=ParseMode.HTML,
+            )
+        except BadRequest:
+            await context.bot.send_message(
+                chat_id,
+                body,
+                reply_markup=_chat_dialog_list_keyboard(dialogs),
+                parse_mode=ParseMode.HTML,
+            )
+        return
+    if action == "open":
+        try:
+            dialog_id = int(parts[2]) if len(parts) > 2 else 0
+        except ValueError:
+            dialog_id = 0
+        history = (
+            await asyncio.to_thread(
+                user_storage.chat_dialog_load,
+                USER_DB_PATH,
+                user_id,
+                dialog_id,
+            )
+            if dialog_id > 0
+            else None
+        )
+        if not history:
+            await _answer_query_once(query, "Диалог не найден.")
+            return
+        context.user_data[_CHAT_HISTORY] = history
+        context.user_data[_CHAT_DIALOG_ID] = dialog_id
+        context.user_data.pop(_CHAT_BUSY, None)
+        await _answer_query_once(query, f"Открыт диалог #{dialog_id}.")
+        with suppress(BadRequest, Exception):
+            await query.delete_message()
+        await _send_chat_menu(
+            context.bot,
+            chat_id,
+            user_id=user_id,
+            extra_html=(
+                f"<i>Открыт диалог #{dialog_id}. История загружена "
+                f"({len(history)} сообщений). Пиши новое сообщение, "
+                "чтобы продолжить.</i>"
+            ),
+        )
+        return
+    if action == "imagine":
+        if not _is_image_gen_enabled():
+            await _answer_query_once(query, "Генерация изображений не настроена.")
+            with suppress(BadRequest, Exception):
+                await query.edit_message_text(
+                    "<i>Генерация изображений не настроена: задайте "
+                    "<code>IMAGE_GEN_BASE_URL</code> и <code>IMAGE_GEN_API_KEY</code> "
+                    "в .env.</i>",
+                    reply_markup=_chat_menu_keyboard_for_user(True, user_id),
+                    parse_mode=ParseMode.HTML,
+                )
+            return
+        context.user_data[_CHAT_IMG_PROMPT_WAIT] = True
+        await _answer_query_once(query, "Опиши, что нарисовать.")
+        with suppress(BadRequest, Exception):
+            await query.edit_message_text(
+                "<b>Опиши, что нарисовать</b> — пришли промпт одним сообщением "
+                f"(до {image_gen.PROMPT_MAX_LEN} символов). "
+                "Команда <code>/imagine</code> работает так же.",
+                reply_markup=_chat_menu_keyboard_for_user(True, user_id),
+                parse_mode=ParseMode.HTML,
+            )
+        return
+    if action == "purge":
+        deleted = await asyncio.to_thread(
+            user_storage.chat_dialog_purge,
+            USER_DB_PATH,
+            user_id,
+        )
+        # Активный диалог тоже отвязываем: его серверной записи больше нет.
+        context.user_data.pop(_CHAT_DIALOG_ID, None)
+        await _answer_query_once(query, f"Удалено: {deleted}.")
+        msg = (
+            f"Сохранённые диалоги очищены ({deleted})."
+            if deleted
+            else "Сохранённых диалогов не было."
+        )
+        with suppress(BadRequest, Exception):
+            await query.edit_message_text(
+                f"<i>{_h(msg)}</i>",
+                reply_markup=_chat_menu_keyboard_for_user(True, user_id),
+                parse_mode=ParseMode.HTML,
+            )
+        return
+    if action == "mem_toggle":
+        cur = await asyncio.to_thread(
+            user_storage.chat_memory_get_pref, USER_DB_PATH, user_id,
+        )
+        new_val = not cur.enabled
+        await asyncio.to_thread(
+            user_storage.chat_memory_set_enabled, USER_DB_PATH, user_id, new_val,
+        )
+        await _answer_query_once(
+            query, "Память включена." if new_val else "Память выключена.",
+        )
+        files_n = len(chat_memory.list_memory_files(user_id))
+        body = (
+            f"<i>Долговременная память: {'включена' if new_val else 'выключена'}. "
+            f"Файлов памяти: {files_n}. "
+            f"{'Сон будет запускаться автоматически.' if new_val else 'Сон отключён, файлы памяти не трогаются.'}</i>"
+        )
+        with suppress(BadRequest, Exception):
+            await query.edit_message_text(
+                body,
+                reply_markup=_chat_menu_keyboard(active=True, memory_enabled=new_val),
+                parse_mode=ParseMode.HTML,
+            )
+        return
+    if action == "mem_show":
+        await _answer_query_once(query)
+        files = chat_memory.list_memory_files(user_id)
+        pref = await asyncio.to_thread(
+            user_storage.chat_memory_get_pref, USER_DB_PATH, user_id,
+        )
+        if not files:
+            text = (
+                "<i>Память пока пуста.</i> Когда наберётся достаточно реплик, "
+                f"бот сам синтезирует первые заметки (порог: "
+                f"{_chat_memory_sleep_after_msgs()} реплик)."
+            )
+        else:
+            lines = [f"<b>Память</b> ({len(files)} файл(ов))."]
+            if pref.last_sleep_at:
+                lines.append(
+                    f"Последний сон: <code>{_h(pref.last_sleep_at)}</code> — "
+                    f"{_h(pref.last_sleep_status or '?')}",
+                )
+            lines.append("")
+            for fn in files:
+                body_text = chat_memory.read_memory_file(user_id, fn)
+                size = len(body_text.encode("utf-8"))
+                lines.append(f"<b>{_h(fn)}</b> ({size} байт):")
+                snippet = body_text.strip()
+                if len(snippet) > 1000:
+                    snippet = snippet[:1000].rstrip() + "…"
+                lines.append(f"<pre>{_h(snippet)}</pre>")
+            text = "\n".join(lines)[:4000]
+        with suppress(BadRequest, Exception):
+            await context.bot.send_message(
+                chat_id,
+                text,
+                reply_markup=_chat_menu_keyboard_for_user(True, user_id),
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+        return
+    if action == "mem_sleep":
+        if not _cursor_recheck_available():
+            await _answer_query_once(query, "Cursor сейчас недоступен.")
+            return
+        # Берём активную RAM-историю; если пусто — пробуем поднять последний серверный диалог.
+        history: list[dict[str, str]] = list(context.user_data.get(_CHAT_HISTORY) or [])
+        if not history:
+            try:
+                dlgs = await asyncio.to_thread(
+                    user_storage.chat_dialog_list, USER_DB_PATH, user_id,
+                )
+                if dlgs:
+                    history = (
+                        await asyncio.to_thread(
+                            user_storage.chat_dialog_load,
+                            USER_DB_PATH,
+                            user_id,
+                            dlgs[0].dialog_id,
+                        )
+                        or []
+                    )
+            except Exception:
+                logger.warning("mem_sleep: failed to load history user_id=%s", user_id, exc_info=True)
+        transcript = _chat_history_for_sleep(history)
+        if not transcript:
+            await _answer_query_once(query, "Нечего синтезировать — нет диалогов.")
+            return
+        # Лочим повторный запуск, пока авто-сон бежит.
+        if (existing := _CHAT_SLEEP_RUNNING.get(user_id)) and not existing.done():
+            await _answer_query_once(query, "Сон уже идёт, подожди немного.")
+            return
+        await _answer_query_once(query, "Запускаю сон…")
+        with suppress(BadRequest, Exception):
+            await query.edit_message_text(
+                "<i>Сон памяти запущен. Это занимает до пары минут — "
+                "пиши дальше, бот применит результат фоном.</i>",
+                reply_markup=_chat_menu_keyboard_for_user(True, user_id),
+                parse_mode=ParseMode.HTML,
+            )
+
+        async def _runner() -> None:
+            try:
+                ok, status = await _run_chat_sleep(
+                    user_id=user_id,
+                    transcript=transcript,
+                    trigger="manual",
+                )
+                short = ("OK" if ok else "не удалось") + ": " + status
+                with suppress(Exception):
+                    await context.bot.send_message(
+                        chat_id,
+                        f"Сон памяти завершён ({_h(short[:300])}).",
+                        parse_mode=ParseMode.HTML,
+                    )
+            finally:
+                _CHAT_SLEEP_RUNNING.pop(user_id, None)
+
+        _CHAT_SLEEP_RUNNING[user_id] = asyncio.create_task(_runner())
+        return
+    if action == "mem_purge":
+        n = await asyncio.to_thread(chat_memory.purge_memory, user_id)
+        await _answer_query_once(query, f"Удалено файлов: {n}.")
+        with suppress(BadRequest, Exception):
+            await query.edit_message_text(
+                f"<i>Память очищена ({n} файлов удалено).</i>",
+                reply_markup=_chat_menu_keyboard_for_user(True, user_id),
+                parse_mode=ParseMode.HTML,
+            )
+        return
+    await _answer_query_once(query)
+
+
+async def chat_logout_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or not update.effective_user:
+        return
+    user_id = update.effective_user.id
+    logger.info("cmd /chat_logout user_id=%s", user_id)
+    existed = await asyncio.to_thread(
+        user_storage.chat_session_logout,
+        USER_DB_PATH,
+        user_id,
+    )
+    context.user_data.pop(_CHAT_ACTIVE, None)
+    context.user_data.pop(_CHAT_PW_WAIT, None)
+    context.user_data.pop(_CHAT_HISTORY, None)
+    context.user_data.pop(_CHAT_BUSY, None)
+    context.user_data.pop(_CHAT_DIALOG_ID, None)
+    context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
+    msg = "Сессия /chat закрыта." if existed else "Сессии /chat не было."
+    await update.message.reply_text(msg)
 
 
 async def _typing_keepalive(bot, chat_id: int, stop: asyncio.Event) -> None:
@@ -2060,12 +2695,33 @@ async def handle_homework_text(update: Update, context: ContextTypes.DEFAULT_TYP
     text = (update.message.text or "").strip()
     user_id = update.effective_user.id
 
+    if context.user_data.get(_CHAT_ACTIVE) is None:
+        until = await asyncio.to_thread(
+            user_storage.chat_session_active_until,
+            USER_DB_PATH,
+            user_id,
+        )
+        if until is not None:
+            context.user_data[_CHAT_ACTIVE] = True
+    if not context.user_data.get(_BEGEMOT_OK):
+        # /begemot теперь живёт в БД до ADMIN_SESSION_TTL_DAYS суток —
+        # после рестарта бота RAM-флаг пуст, но сессия остаётся валидной.
+        adm_until = await asyncio.to_thread(
+            user_storage.admin_session_active_until,
+            USER_DB_PATH,
+            user_id,
+        )
+        if adm_until is not None:
+            context.user_data[_BEGEMOT_OK] = True
+
     if not (
         context.user_data.get(_BEGEMOT_OK)
         or context.user_data.get(_BEGEMOT_PW_WAIT)
         or context.user_data.get(_ADMIN_BAN_WAIT)
         or context.user_data.get(_FEEDBACK_STAFF_WAIT)
         or context.user_data.get(_CHECK_DISLIKE_FEEDBACK_WAIT)
+        or context.user_data.get(_CHAT_ACTIVE)
+        or context.user_data.get(_CHAT_PW_WAIT)
     ):
         st_blk, ok_blk = await _safe_blocked_state(user_id)
         if not ok_blk:
@@ -2345,35 +3001,40 @@ async def handle_homework_text(update: Update, context: ContextTypes.DEFAULT_TYP
             await update.message.reply_text("Неверный пароль.")
             return
         context.user_data[_BEGEMOT_OK] = True
-        total = await asyncio.to_thread(user_storage.count_user_feedback, USER_DB_PATH)
-        v_up, v_down = await asyncio.to_thread(
-            user_storage.check_result_vote_totals,
+        await asyncio.to_thread(
+            user_storage.admin_session_login,
             USER_DB_PATH,
+            user_id,
         )
-        rows = await asyncio.to_thread(
-            user_storage.list_user_feedback,
-            USER_DB_PATH,
-            limit=_FEEDBACK_PAGE,
-            offset=0,
+        await _send_begemot_dashboard(
+            context.bot,
+            update.effective_chat.id,
+            extra_header_html=(
+                f"<i>Доступ открыт на {user_storage.ADMIN_SESSION_TTL_DAYS} суток. "
+                f"Закрыть — /begemot_logout.</i>"
+            ),
         )
-        header = (
-            f"Доступ открыт. Пользователей с отзывами: <b>{total}</b>.\n"
-            f"Оценки проверки (👍/👎 под результатом): <b>{v_up}</b> / <b>{v_down}</b>."
-        )
-        body = _format_feedback_list_html(rows)
-        markup_rows: list[list[InlineKeyboardButton]] = []
-        if rows:
-            markup_rows.append(
-                [
-                    InlineKeyboardButton(str(r.user_id), callback_data=f"fb:v:{r.user_id}")
-                    for r in rows
-                ],
-            )
-        markup_rows.extend(_admin_feedback_nav_keyboard(0, total).inline_keyboard)
-        await update.message.reply_text(
-            header + "\n\n" + body,
-            reply_markup=InlineKeyboardMarkup(markup_rows),
-            parse_mode=ParseMode.HTML,
+        return
+
+    if context.user_data.get(_CHAT_PW_WAIT):
+        context.user_data.pop(_CHAT_PW_WAIT, None)
+        expected = _chat_password_expected()
+        if not expected:
+            await update.message.reply_text("Раздел /chat недоступен.")
+            return
+        if not _admin_password_matches(text, expected):
+            await update.message.reply_text("Неверный пароль.")
+            return
+        await asyncio.to_thread(user_storage.chat_session_login, USER_DB_PATH, user_id)
+        context.user_data[_CHAT_ACTIVE] = True
+        context.user_data.pop(_CHAT_HISTORY, None)
+        context.user_data.pop(_CHAT_DIALOG_ID, None)
+        context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
+        await _send_chat_menu(
+            context.bot,
+            update.effective_chat.id,
+            user_id=user_id,
+            extra_html="<i>Доступ открыт. Можно начинать диалог.</i>",
         )
         return
 
@@ -2432,6 +3093,38 @@ async def handle_homework_text(update: Update, context: ContextTypes.DEFAULT_TYP
 
     step = context.user_data.get(_HW_STEP)
     if not step:
+        if context.user_data.get(_CHAT_ACTIVE):
+            until = await asyncio.to_thread(
+                user_storage.chat_session_active_until,
+                USER_DB_PATH,
+                user_id,
+            )
+            if until is None:
+                context.user_data.pop(_CHAT_ACTIVE, None)
+                context.user_data.pop(_CHAT_HISTORY, None)
+                context.user_data.pop(_CHAT_DIALOG_ID, None)
+                context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
+                await update.message.reply_text(
+                    "Сессия чата истекла. Открой её заново через /chat.",
+                )
+                return
+            cid = update.effective_chat.id
+            if context.user_data.get(_CHAT_IMG_PROMPT_WAIT):
+                await _handle_chat_imagine_request(
+                    update,
+                    context,
+                    user_id=user_id,
+                    chat_id=cid,
+                    prompt=text,
+                )
+                return
+            await _handle_chat_user_message(
+                update,
+                context,
+                user_id=user_id,
+                chat_id=cid,
+                text=text,
+            )
         return
 
     logger.debug("hw_text user_id=%s step=%s text_len=%s", user_id, step, len(text))
@@ -2787,6 +3480,971 @@ def _check_result_task_condition_html(gdz_task_condition: str) -> str:
     return f"<b>Условие задачи</b> (по учебнику, с gdz.ru):\n{body}\n\n"
 
 
+async def _stream_chat_response(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    chat_id: int,
+    user_id: int,
+    history: list[dict[str, str]],
+    user_text: str,
+    image_b64: str | None = None,
+    image_mime: str | None = None,
+) -> str:
+    """Стрим ответа Cursor: одно сообщение, периодический edit_message_text.
+
+    Возвращает финальный текст модели (plain) — вызывающий код кладет его в
+    `_CHAT_HISTORY`. Никогда не пишем содержимое промпта в логи.
+    """
+
+    bot = context.bot
+    place_msg = await bot.send_message(
+        chat_id,
+        "<i>Cursor печатает…</i>",
+        parse_mode=ParseMode.HTML,
+    )
+
+    full_buf: list[str] = []
+    last_render = {"text": "", "ts": 0.0}
+    edit_lock = asyncio.Lock()
+    edit_throttle_s = 1.2  # Telegram Bot API: edit-rate ~1/с в чате
+
+    async def _render_partial(force: bool = False) -> None:
+        async with edit_lock:
+            now = asyncio.get_running_loop().time()
+            if not force and (now - last_render["ts"]) < edit_throttle_s:
+                return
+            current = "".join(full_buf)
+            if not current.strip():
+                return
+            html_text = telegram_format.markdown_to_telegram_html(current) + " <i>▌</i>"
+            if html_text == last_render["text"]:
+                last_render["ts"] = now
+                return
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=place_msg.message_id,
+                    text=html_text[:4096],
+                    parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=True,
+                )
+                last_render["text"] = html_text
+                last_render["ts"] = now
+            except BadRequest as e:
+                logger.debug("chat partial edit failed: %s", e)
+
+    async def on_delta(piece: str) -> None:
+        full_buf.append(piece)
+        await _render_partial(force=False)
+
+    base_messages: list[dict] = []
+    base_messages.extend(history)
+    if image_b64:
+        # Multimodal user-сообщение: текст-подпись + image_url с data: URL.
+        # Сервер `/chat/stream` валидирует и пробрасывает в `chat.completions`.
+        # Pre-OCR здесь сознательно пропущен — это исключение «/chat для админа».
+        mime = (image_mime or "image/jpeg").strip() or "image/jpeg"
+        data_url = f"data:{mime};base64,{image_b64}"
+        parts: list[dict] = []
+        text_for_part = (user_text or "").strip()
+        if text_for_part:
+            parts.append({"type": "text", "text": text_for_part})
+        parts.append({"type": "image_url", "image_url": {"url": data_url}})
+        base_messages.append({"role": "user", "content": parts})
+    else:
+        base_messages.append({"role": "user", "content": user_text})
+
+    payload: dict = {
+        "user_id": user_id,
+        "messages": base_messages,
+    }
+    # Долговременная память пользователя (если включено и непусто) — отдельной
+    # секцией в system_prompt; иначе сервер использует свой default.
+    try:
+        sp = await asyncio.to_thread(
+            _build_chat_system_prompt_with_memory, user_id,
+        )
+    except Exception:
+        logger.warning("chat memory inject failed user_id=%s", user_id, exc_info=True)
+        sp = None
+    if sp:
+        payload["system_prompt"] = sp
+
+    timeout_s = _check_request_timeout_s("cursor")
+    final_text = ""
+    error_text: str | None = None
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout_s),
+            transport=async_http_transport_ipv4_lookup(),
+        ) as client:
+            url = f"{SERVER_URL.rstrip('/')}/chat/stream"
+            async with client.stream("POST", url, json=payload) as resp:
+                if resp.status_code != 200:
+                    body_bytes = await resp.aread()
+                    error_text = (
+                        f"Сервер ответил {resp.status_code}: {body_bytes.decode('utf-8', 'replace')[:500]}"
+                    )
+                else:
+                    async for chunk in resp.aiter_text():
+                        if not chunk:
+                            continue
+                        await on_delta(chunk)
+            final_text = "".join(full_buf)
+    except httpx.RequestError as e:
+        error_text = f"Ошибка связи с сервером: {e}"
+    except Exception as e:
+        logger.exception("chat stream consume failed user_id=%s", user_id)
+        error_text = f"Ошибка чата: {e}"
+
+    final_text = (final_text or "").strip()
+    if not final_text and not error_text:
+        error_text = "Cursor не вернул ответа. Попробуй переформулировать."
+
+    if error_text:
+        with suppress(BadRequest, Exception):
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=place_msg.message_id,
+                text=_h(error_text)[:4096],
+                parse_mode=ParseMode.HTML,
+            )
+        return ""
+
+    final_html = telegram_format.markdown_to_telegram_html(final_text)
+    if len(final_html) > 4096:
+        final_html = final_html[:4090] + "…"
+    try:
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=place_msg.message_id,
+            text=final_html,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+    except BadRequest as e:
+        logger.warning("chat final HTML parse failed, plain fallback: %s", e)
+        plain = final_text[:4096]
+        with suppress(BadRequest, Exception):
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=place_msg.message_id,
+                text=plain,
+            )
+    return final_text
+
+
+async def _handle_chat_user_message(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user_id: int,
+    chat_id: int,
+    text: str,
+    image_b64: str | None = None,
+    image_mime: str | None = None,
+    history_text: str | None = None,
+) -> None:
+    if context.user_data.get(_CHAT_BUSY):
+        await update.message.reply_text(
+            "Подожди, Cursor ещё печатает предыдущий ответ.",
+        )
+        return
+    has_image = bool(image_b64)
+    if not has_image:
+        if not text.strip():
+            await update.message.reply_text("Пустое сообщение — нечего спросить.")
+            return
+        if len(text) > 8000:
+            await update.message.reply_text(
+                "Слишком длинное сообщение для чата (лимит 8000 символов).",
+            )
+            return
+
+    history: list[dict[str, str]] = list(context.user_data.get(_CHAT_HISTORY) or [])
+    if len(history) > _CHAT_HISTORY_RUNTIME_CAP:
+        history = history[-_CHAT_HISTORY_RUNTIME_CAP:]
+
+    context.user_data[_CHAT_BUSY] = True
+    logger.info(
+        "chat user msg user_id=%s history_msgs=%s in_chars=%s image=%s",
+        user_id,
+        len(history),
+        len(text),
+        bool(has_image),
+    )
+    try:
+        reply = await _stream_chat_response(
+            context,
+            chat_id=chat_id,
+            user_id=user_id,
+            history=history,
+            user_text=text,
+            image_b64=image_b64,
+            image_mime=image_mime,
+        )
+    finally:
+        context.user_data.pop(_CHAT_BUSY, None)
+    if not reply:
+        return
+    # В RAM/DB кладём только текстовый плейсхолдер (см. `history_text`):
+    # повторно отправлять image base64 в Cursor при следующем сообщении не нужно,
+    # а в `chat_dialog.history_json` храним ссылочное упоминание о фото.
+    saved_user_text = (history_text if history_text is not None else text).strip()
+    if not saved_user_text:
+        saved_user_text = "[фото без подписи]"
+    history.append({"role": "user", "content": saved_user_text})
+    history.append({"role": "assistant", "content": reply})
+    if len(history) > _CHAT_HISTORY_RUNTIME_CAP:
+        history = history[-_CHAT_HISTORY_RUNTIME_CAP:]
+    context.user_data[_CHAT_HISTORY] = history
+    # Сохраняем активный диалог в БД сразу после ответа: при рестарте бота
+    # пользователь сможет вернуться к нему через «Мои чаты».
+    dialog_id = context.user_data.get(_CHAT_DIALOG_ID)
+    saved_id: int | None = None
+    try:
+        saved_id = await asyncio.to_thread(
+            user_storage.chat_dialog_upsert,
+            USER_DB_PATH,
+            user_id,
+            dialog_id if isinstance(dialog_id, int) else None,
+            history,
+        )
+    except Exception:
+        logger.warning(
+            "chat_dialog_upsert failed user_id=%s", user_id, exc_info=True,
+        )
+    if saved_id is not None and saved_id != dialog_id:
+        context.user_data[_CHAT_DIALOG_ID] = saved_id
+    logger.info(
+        "chat assistant reply user_id=%s reply_chars=%s history_msgs=%s dialog_id=%s",
+        user_id,
+        len(reply),
+        len(history),
+        context.user_data.get(_CHAT_DIALOG_ID),
+    )
+
+    # Сон памяти: счётчик +1, при достижении порога — фоновая задача (не блокирует чат).
+    try:
+        await asyncio.to_thread(
+            user_storage.chat_memory_increment_msgs,
+            USER_DB_PATH,
+            user_id,
+        )
+        _maybe_schedule_auto_sleep(user_id, history)
+    except Exception:
+        logger.warning("chat memory bookkeeping failed user_id=%s", user_id, exc_info=True)
+
+
+# Лимит OCR-фрагмента в чате: сервер ограничивает любое сообщение в /chat/stream
+# в `_CHAT_MSG_CONTENT_MAX_LEN = 8000` символов; нужно оставить место и под подпись
+# пользователя, и под обёртку-инструкцию модели.
+# Используется только в legacy-обёртке `_compose_chat_photo_message` (тесты),
+# в активном пути `_handle_chat_photo` фото уходит в Cursor напрямую без OCR.
+_CHAT_PHOTO_OCR_MAX_CHARS = 6000
+
+# Подпись к фото по умолчанию, если пользователь прислал картинку без подписи.
+# Cursor увидит её как текстовую часть user-сообщения, а саму картинку — как
+# `image_url` data: URL. Намеренно открытая формулировка — чат для админа.
+_CHAT_PHOTO_DEFAULT_CAPTION = (
+    "Что на фото? Помоги разобрать содержимое."
+)
+
+
+def _compose_chat_photo_message(*, caption: str, ocr_text: str) -> str:
+    """Собрать chat-сообщение из подписи к фото и текста pre-OCR.
+
+    Cursor не «видит» картинку — поэтому единственный канал восприятия фото
+    в чате это распознанный текст. Если OCR пуст, честно говорим об этом и
+    просим уточнить вопрос текстом.
+    """
+    cap = (caption or "").strip()
+    ocr = (ocr_text or "").strip()
+    question = cap or "Опиши, что распознано на фото; если это задача — помоги её разобрать."
+
+    if ocr:
+        clipped = ocr[:_CHAT_PHOTO_OCR_MAX_CHARS]
+        if len(ocr) > _CHAT_PHOTO_OCR_MAX_CHARS:
+            clipped += "…"
+        composed = (
+            "Пользователь прислал в чат фото.\n"
+            f"Подпись/вопрос пользователя: {question}\n\n"
+            "Автоматический OCR-разбор фото (может содержать ошибки):\n"
+            "```\n"
+            f"{clipped}\n"
+            "```\n\n"
+            "Ответь по существу вопроса, опираясь на распознанный текст. "
+            "Если на фото не текст, а изображение объекта (например, цветок, "
+            "предмет, фотография), честно скажи, что в чате доступен только "
+            "OCR — визуальные образы я не вижу — и предложи описать фото "
+            "словами или прислать снимок с текстом."
+        )
+    else:
+        composed = (
+            "Пользователь прислал в чат фото.\n"
+            f"Подпись/вопрос пользователя: {question}\n\n"
+            "Автоматический OCR не нашёл текста на этом фото. "
+            "В чате я работаю только с текстом и не вижу изображений как картинку. "
+            "Сообщи об этом пользователю и попроси либо описать фото словами, "
+            "либо прислать снимок с разборчивым текстом/задачей."
+        )
+
+    if len(composed) > 7990:
+        composed = composed[:7985] + "…"
+    return composed
+
+
+async def _handle_chat_photo(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user_id: int,
+    chat_id: int,
+) -> None:
+    """Обработать фото в режиме `/chat`: фото уходит в Cursor **напрямую** (без pre-OCR).
+
+    Это сознательное исключение из общего правила «Cursor — текстовый ассистент»:
+    `/chat` доступен только админу (вход по паролю), и качество ответа модели
+    на «что это за цветок?» по фото важнее, чем строгая текст-only гарантия.
+    Поэтому фото тут конвертируется в `data:image/jpeg;base64,…` и отправляется
+    как `image_url`-часть multimodal user-сообщения OpenAI chat.completions
+    (бридж в `discourse-cursor-bridge` принимает такие запросы и пробрасывает
+    в `cursor-agent`). В RAM/DB-историю кладём только текстовый плейсхолдер
+    `[фото: подпись]`, чтобы не таскать base64 в `chat_dialog.history_json`.
+    """
+    if not update.message or not update.message.photo:
+        return
+    if context.user_data.get(_CHAT_BUSY):
+        await update.message.reply_text(
+            "Подожди, Cursor ещё печатает предыдущий ответ.",
+        )
+        return
+
+    photo = update.message.photo[-1]
+    caption = (update.message.caption or "").strip()
+
+    with suppress(Exception):
+        await context.bot.send_chat_action(chat_id, ChatAction.TYPING)
+
+    try:
+        file = await context.bot.get_file(photo.file_id)
+        raw = bytes(await file.download_as_bytearray())
+    except Exception as e:
+        logger.exception("chat photo download failed user_id=%s", user_id)
+        await update.message.reply_text(f"Не удалось скачать фото из Telegram: {e}")
+        return
+
+    try:
+        photo_jpeg = await asyncio.to_thread(
+            photo_prepare.prepare_photo_for_upload,
+            raw,
+        )
+    except Exception:
+        logger.exception("chat photo prepare failed user_id=%s; sending raw", user_id)
+        photo_jpeg = raw
+
+    import base64
+
+    image_b64 = base64.b64encode(photo_jpeg).decode("ascii")
+    text_for_llm = caption or _CHAT_PHOTO_DEFAULT_CAPTION
+    history_text = (
+        f"[фото: {caption}]" if caption else "[фото без подписи]"
+    )
+    logger.info(
+        "chat photo user_id=%s caption_chars=%s photo_bytes=%s b64_chars=%s",
+        user_id,
+        len(caption),
+        len(photo_jpeg),
+        len(image_b64),
+    )
+
+    await _handle_chat_user_message(
+        update,
+        context,
+        user_id=user_id,
+        chat_id=chat_id,
+        text=text_for_llm,
+        image_b64=image_b64,
+        image_mime="image/jpeg",
+        history_text=history_text,
+    )
+
+
+def _is_image_gen_enabled() -> bool:
+    return image_gen.is_image_gen_configured()
+
+
+# ====================== /chat: память + сон ======================
+#
+# Долговременная память пользователя живёт на диске (см. `chat_memory.py`),
+# индекс/тематические файлы. При каждом ответе бот:
+#   1) подмешивает snapshot памяти в system_prompt (если включено);
+#   2) инкрементит `msgs_since_sleep`;
+#   3) если порог достигнут — стартует **фоновую** задачу сна.
+# Пользователь видит результат не сразу — sleep идёт асинхронно, не блокирует чат.
+
+# Должен совпадать с `CHAT_DEFAULT_SYSTEM_PROMPT` в `ai_checker.py` —
+# bot не импортирует серверный код, дублирование осознанное (один docker-compose,
+# одинаковый `.env`, переопределение через `CHAT_SYSTEM_PROMPT`).
+_BOT_CHAT_DEFAULT_SYSTEM_PROMPT: Final[str] = (
+    "Ты — дружелюбный школьный ИИ-ассистент. Отвечай по-русски. "
+    "Объясняй кратко и понятно, опирайся на проверенные факты. Если вопрос "
+    "связан с учебой, давай пошаговое решение. Не выдумывай источники. "
+    "В ответе используй только обычный текст и базовую разметку: "
+    "**жирный**, _курсив_, `inline code`, ```fenced code```; не используй "
+    "таблицы и заголовки `#`."
+)
+
+# Авто-сон: после скольких пользовательских сообщений запускать.
+# Дефолт 12 (~средний диалог). Переопределяется `CHAT_MEMORY_SLEEP_AFTER_MSGS`.
+_CHAT_MEMORY_SLEEP_AFTER_MSGS_DEFAULT: Final[int] = 12
+# Минимальный интервал между двумя автоматическими снами одного пользователя
+# (защита от шторма: даже если порог по сообщениям достигнут несколько раз
+# подряд при очень коротких репликах, чаще не начинаем).
+_CHAT_MEMORY_SLEEP_MIN_GAP_SEC_DEFAULT: Final[int] = 600
+# Сколько последних реплик из RAM-истории отдаём sleep-промпту.
+_CHAT_MEMORY_SLEEP_TRANSCRIPT_TURNS_DEFAULT: Final[int] = 24
+# Таймаут одного sleep-вызова Cursor (сек, передаётся серверу).
+_CHAT_MEMORY_SLEEP_TIMEOUT_S_DEFAULT: Final[float] = 240.0
+
+
+def _chat_memory_sleep_after_msgs() -> int:
+    raw = (os.getenv("CHAT_MEMORY_SLEEP_AFTER_MSGS") or "").strip()
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return _CHAT_MEMORY_SLEEP_AFTER_MSGS_DEFAULT
+    return max(1, min(200, v))
+
+
+def _chat_memory_sleep_min_gap_sec() -> int:
+    raw = (os.getenv("CHAT_MEMORY_SLEEP_MIN_GAP_SEC") or "").strip()
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return _CHAT_MEMORY_SLEEP_MIN_GAP_SEC_DEFAULT
+    return max(0, min(86_400, v))
+
+
+def _chat_memory_sleep_transcript_turns() -> int:
+    raw = (os.getenv("CHAT_MEMORY_SLEEP_TRANSCRIPT_TURNS") or "").strip()
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return _CHAT_MEMORY_SLEEP_TRANSCRIPT_TURNS_DEFAULT
+    return max(2, min(64, v))
+
+
+def _chat_memory_sleep_timeout_s() -> float:
+    raw = (os.getenv("CHAT_MEMORY_SLEEP_TIMEOUT_S") or "").strip()
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return _CHAT_MEMORY_SLEEP_TIMEOUT_S_DEFAULT
+    return max(30.0, min(600.0, v))
+
+
+def _bot_chat_default_system_prompt() -> str:
+    raw = (os.getenv("CHAT_SYSTEM_PROMPT") or "").strip()
+    return raw or _BOT_CHAT_DEFAULT_SYSTEM_PROMPT
+
+
+def _build_chat_system_prompt_with_memory(user_id: int) -> str | None:
+    """Вернуть system_prompt с подмешанной памятью (или None, если памяти нет / выключено).
+
+    Возврат `None` означает «не указывать `system_prompt` в payload» — сервер тогда
+    использует свой `chat_default_system_prompt()`.
+    """
+    pref = user_storage.chat_memory_get_pref(USER_DB_PATH, user_id)
+    if not pref.enabled:
+        return None
+    snap = chat_memory.memory_snapshot_text(user_id)
+    if not snap:
+        return None
+    base = _bot_chat_default_system_prompt()
+    return chat_memory.system_prompt_with_memory(base, snap)
+
+
+def _chat_sleep_in_progress_key(user_id: int) -> str:
+    return f"chat_sleep_in_progress:{user_id}"
+
+
+# Фоновые задачи сна (в RAM): по одной на пользователя одновременно.
+_CHAT_SLEEP_RUNNING: dict[int, asyncio.Task] = {}
+
+
+async def _request_chat_once_from_server(
+    *,
+    user_id: int,
+    messages: list[dict[str, str]],
+    timeout_s: float,
+) -> str:
+    """POST `/chat/once` -> `text` (полный ответ модели). RuntimeError при не-200."""
+    url = f"{SERVER_URL.rstrip('/')}/chat/once"
+    # Клиентский таймаут — с запасом над серверным (сервер сам кэппит на 600 c).
+    client_timeout = max(60.0, float(timeout_s) + 30.0)
+    payload = {
+        "user_id": user_id,
+        "messages": messages,
+        "timeout_s": float(timeout_s),
+    }
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(client_timeout),
+        transport=async_http_transport_ipv4_lookup(),
+    ) as client:
+        r = await client.post(url, json=payload)
+        if r.status_code != 200:
+            body = r.text or ""
+            raise RuntimeError(f"server {r.status_code}: {body[:300]}")
+        try:
+            data = r.json()
+        except Exception as e:
+            raise RuntimeError(f"server returned non-json: {e}") from e
+    return str(data.get("text") or "")
+
+
+def _chat_history_for_sleep(history: list[dict[str, str]] | None) -> list[dict[str, str]]:
+    """Срез последних реплик (system отбрасываем — для sleep важна текстовая часть)."""
+    out: list[dict[str, str]] = []
+    if not history:
+        return out
+    keep = _chat_memory_sleep_transcript_turns()
+    tail = history[-keep:]
+    for m in tail:
+        role = (m.get("role") or "").strip().lower()
+        if role not in ("user", "assistant"):
+            continue
+        content = m.get("content") or ""
+        if not isinstance(content, str):
+            content = str(content)
+        if not content.strip():
+            continue
+        out.append({"role": role, "content": content})
+    return out
+
+
+async def _run_chat_sleep(
+    *,
+    user_id: int,
+    transcript: list[dict[str, str]],
+    trigger: str,
+) -> tuple[bool, str]:
+    """Один проход «сна»: собрать промпт, дёрнуть `/chat/once`, применить ops.
+
+    Возвращает `(ok, status_message)`. `status_message` пишется и в логи, и в БД.
+    Безопасен к повторному вызову — внутри только I/O в памяти пользователя.
+    """
+    sleep_msgs = chat_memory.build_sleep_messages(user_id, transcript=transcript)
+    timeout_s = _chat_memory_sleep_timeout_s()
+    logger.info(
+        "chat sleep start user_id=%s trigger=%s transcript_msgs=%s",
+        user_id,
+        trigger,
+        len(transcript),
+    )
+    try:
+        text = await _request_chat_once_from_server(
+            user_id=user_id,
+            messages=sleep_msgs,
+            timeout_s=timeout_s,
+        )
+    except Exception as e:
+        msg = f"error: {e}"
+        logger.warning("chat sleep failed user_id=%s err=%s", user_id, e)
+        await asyncio.to_thread(
+            user_storage.chat_memory_record_sleep,
+            USER_DB_PATH,
+            user_id,
+            status=msg[:200],
+        )
+        return False, msg
+    parsed = chat_memory.parse_sleep_response(text)
+    if not parsed.ops and not parsed.parse_warnings:
+        # Модель честно сказала «менять нечего» — не считаем ошибкой.
+        await asyncio.to_thread(
+            user_storage.chat_memory_record_sleep,
+            USER_DB_PATH,
+            user_id,
+            status="noop",
+        )
+        logger.info("chat sleep done user_id=%s noop reply_chars=%s", user_id, len(text))
+        return True, "noop"
+    stats = await asyncio.to_thread(chat_memory.apply_sleep_result, user_id, parsed)
+    summary = (
+        f"ok: written={stats.written} deleted={stats.deleted} "
+        f"skipped_cap={stats.skipped_total_cap} write_failed={stats.write_failed} "
+        f"warn={len(parsed.parse_warnings)}"
+    )
+    await asyncio.to_thread(
+        user_storage.chat_memory_record_sleep,
+        USER_DB_PATH,
+        user_id,
+        status=summary[:200],
+    )
+    logger.info(
+        "chat sleep done user_id=%s %s reply_chars=%s warnings=%s",
+        user_id,
+        summary,
+        len(text),
+        parsed.parse_warnings[:5],
+    )
+    return True, summary
+
+
+def _maybe_schedule_auto_sleep(
+    user_id: int,
+    history: list[dict[str, str]] | None,
+) -> None:
+    """Если включён авто-сон и счётчик достиг порога — поставить фоновую задачу.
+
+    Защита от дубля: для каждого `user_id` одновременно идёт максимум один sleep.
+    Защита от шторма: учитываем `last_sleep_at` и `CHAT_MEMORY_SLEEP_MIN_GAP_SEC`.
+    """
+    pref = user_storage.chat_memory_get_pref(USER_DB_PATH, user_id)
+    if not pref.enabled:
+        return
+    threshold = _chat_memory_sleep_after_msgs()
+    if pref.msgs_since_sleep < threshold:
+        return
+    # Не запускаем повторный sleep, если предыдущий был совсем недавно.
+    gap = _chat_memory_sleep_min_gap_sec()
+    if pref.last_sleep_at and gap > 0:
+        try:
+            last = datetime.fromisoformat(pref.last_sleep_at)
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - last).total_seconds() < gap:
+                return
+        except ValueError:
+            pass
+    existing = _CHAT_SLEEP_RUNNING.get(user_id)
+    if existing and not existing.done():
+        return
+    transcript = _chat_history_for_sleep(history)
+    if not transcript:
+        return
+
+    async def _runner() -> None:
+        try:
+            await _run_chat_sleep(
+                user_id=user_id,
+                transcript=transcript,
+                trigger="auto",
+            )
+        finally:
+            _CHAT_SLEEP_RUNNING.pop(user_id, None)
+
+    task = asyncio.create_task(_runner())
+    _CHAT_SLEEP_RUNNING[user_id] = task
+
+
+async def _request_image_from_server(*, user_id: int, prompt: str) -> bytes:
+    """POST `/image/generate` -> PNG-байты. Бросает RuntimeError при не-200.
+
+    Httpx-таймаут берём из `IMAGE_GEN_TIMEOUT_SEC` + запас, чтобы клиент не
+    отвалился раньше, чем upstream-провайдер успеет нарисовать картинку.
+    """
+    url = f"{SERVER_URL.rstrip('/')}/image/generate"
+    timeout_s = max(60.0, image_gen.image_gen_timeout_sec() + 30.0)
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(timeout_s),
+        transport=async_http_transport_ipv4_lookup(),
+    ) as client:
+        r = await client.post(url, json={"user_id": user_id, "prompt": prompt})
+        if r.status_code != 200:
+            body = r.text or ""
+            raise RuntimeError(f"server {r.status_code}: {body[:300]}")
+        return r.content
+
+
+async def _handle_chat_imagine_request(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user_id: int,
+    chat_id: int,
+    prompt: str,
+) -> None:
+    """Сгенерировать одну картинку и отправить как Telegram-фото.
+
+    Используется и из FSM-кнопки «Сгенерировать фото», и из команды `/imagine <text>`.
+    Кладёт в RAM/DB-историю плейсхолдеры (`[/imagine] <prompt>` и `[сгенерировано
+    фото: <prompt>]`), чтобы Cursor видел контекст последующих сообщений.
+    """
+    context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
+    if context.user_data.get(_CHAT_BUSY):
+        await update.message.reply_text(
+            "Подожди, чат ещё печатает предыдущий ответ.",
+        )
+        return
+    p = (prompt or "").strip()
+    if not p:
+        await update.message.reply_text("Пустой промпт — нечего генерировать.")
+        return
+    if len(p) > image_gen.PROMPT_MAX_LEN:
+        await update.message.reply_text(
+            f"Промпт слишком длинный (лимит {image_gen.PROMPT_MAX_LEN} символов).",
+        )
+        return
+    if not _is_image_gen_enabled():
+        await update.message.reply_text(
+            "Генерация изображений не настроена: задайте IMAGE_GEN_BASE_URL "
+            "и IMAGE_GEN_API_KEY в .env.",
+        )
+        return
+
+    context.user_data[_CHAT_BUSY] = True
+    placeholder = None
+    try:
+        with suppress(Exception):
+            await context.bot.send_chat_action(chat_id, ChatAction.UPLOAD_PHOTO)
+        with suppress(Exception):
+            placeholder = await context.bot.send_message(
+                chat_id,
+                "Генерирую изображение… Это может занять до пары минут.",
+            )
+        logger.info(
+            "chat imagine user_id=%s prompt_chars=%s model=%s",
+            user_id,
+            len(p),
+            image_gen.image_gen_model(),
+        )
+        try:
+            png_bytes = await _request_image_from_server(user_id=user_id, prompt=p)
+        except Exception as e:
+            logger.exception("chat imagine failed user_id=%s", user_id)
+            err_text = f"Не удалось сгенерировать изображение: {e}"
+            if placeholder is not None:
+                with suppress(BadRequest, Exception):
+                    await context.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=placeholder.message_id,
+                        text=err_text[:4096],
+                    )
+            else:
+                with suppress(Exception):
+                    await update.message.reply_text(err_text[:4096])
+            return
+
+        if placeholder is not None:
+            with suppress(BadRequest, Exception):
+                await context.bot.delete_message(
+                    chat_id=chat_id,
+                    message_id=placeholder.message_id,
+                )
+        cap = (
+            p
+            if len(p) <= _TG_PHOTO_CAPTION_MAX_LEN
+            else (p[: _TG_PHOTO_CAPTION_MAX_LEN - 1] + "…")
+        )
+        try:
+            await context.bot.send_photo(chat_id, photo=png_bytes, caption=cap)
+        except Exception:
+            logger.exception("chat imagine send_photo failed user_id=%s", user_id)
+            with suppress(Exception):
+                await update.message.reply_text(
+                    "Картинка сгенерирована, но Telegram отверг отправку. "
+                    "Попробуй другой промпт.",
+                )
+            return
+
+        history: list[dict[str, str]] = list(context.user_data.get(_CHAT_HISTORY) or [])
+        history.append({"role": "user", "content": f"[/imagine] {p}"})
+        history.append(
+            {"role": "assistant", "content": f"[сгенерировано фото: {p}]"},
+        )
+        if len(history) > _CHAT_HISTORY_RUNTIME_CAP:
+            history = history[-_CHAT_HISTORY_RUNTIME_CAP:]
+        context.user_data[_CHAT_HISTORY] = history
+
+        dialog_id = context.user_data.get(_CHAT_DIALOG_ID)
+        try:
+            saved_id = await asyncio.to_thread(
+                user_storage.chat_dialog_upsert,
+                USER_DB_PATH,
+                user_id,
+                history,
+                dialog_id if isinstance(dialog_id, int) else None,
+            )
+        except Exception:
+            logger.exception("chat dialog upsert (imagine) failed user_id=%s", user_id)
+        else:
+            if saved_id and not dialog_id:
+                context.user_data[_CHAT_DIALOG_ID] = saved_id
+        await _send_chat_menu(context.bot, chat_id, user_id=user_id)
+    finally:
+        context.user_data.pop(_CHAT_BUSY, None)
+
+
+async def imagine_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/imagine <prompt>` — сгенерировать картинку (только в активном /chat)."""
+    if not update.message or not update.effective_user or not update.effective_chat:
+        return
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    if not context.user_data.get(_CHAT_ACTIVE):
+        await update.message.reply_text(
+            "Команда /imagine доступна только из активного /chat.",
+        )
+        return
+    until = await asyncio.to_thread(
+        user_storage.chat_session_active_until,
+        USER_DB_PATH,
+        user_id,
+    )
+    if until is None:
+        context.user_data.pop(_CHAT_ACTIVE, None)
+        context.user_data.pop(_CHAT_HISTORY, None)
+        context.user_data.pop(_CHAT_DIALOG_ID, None)
+        context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
+        await update.message.reply_text(
+            "Сессия чата истекла. Открой её заново через /chat.",
+        )
+        return
+    raw = (update.message.text or "").strip()
+    # Срезаем команду (`/imagine`, `/imagine@bot`) и пробелы.
+    parts = raw.split(maxsplit=1)
+    prompt = parts[1].strip() if len(parts) > 1 else ""
+    if not prompt:
+        context.user_data[_CHAT_IMG_PROMPT_WAIT] = True
+        await update.message.reply_text(
+            "Опиши, что нарисовать — пришли промпт следующим сообщением "
+            f"(до {image_gen.PROMPT_MAX_LEN} символов).",
+        )
+        return
+    await _handle_chat_imagine_request(
+        update,
+        context,
+        user_id=user_id,
+        chat_id=chat_id,
+        prompt=prompt,
+    )
+
+
+async def sleep_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/sleep` — вручную запустить «сон памяти» (только из активного `/chat`).
+
+    Идёт фоном, не блокирует чат. Повторный вызов до завершения — отвергаем.
+    """
+    if not update.message or not update.effective_user or not update.effective_chat:
+        return
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    if not context.user_data.get(_CHAT_ACTIVE):
+        await update.message.reply_text(
+            "Команда /sleep доступна только из активного /chat.",
+        )
+        return
+    until = await asyncio.to_thread(
+        user_storage.chat_session_active_until, USER_DB_PATH, user_id,
+    )
+    if until is None:
+        context.user_data.pop(_CHAT_ACTIVE, None)
+        await update.message.reply_text("Сессия чата истекла. Открой её заново через /chat.")
+        return
+    if not _cursor_recheck_available():
+        await update.message.reply_text("Cursor сейчас недоступен (fallback не сконфигурирован).")
+        return
+    pref = await asyncio.to_thread(
+        user_storage.chat_memory_get_pref, USER_DB_PATH, user_id,
+    )
+    if not pref.enabled:
+        await update.message.reply_text(
+            "Память выключена. Включи в меню (/chat → «Память: выкл»), "
+            "потом запусти /sleep.",
+        )
+        return
+    history: list[dict[str, str]] = list(context.user_data.get(_CHAT_HISTORY) or [])
+    if not history:
+        try:
+            dlgs = await asyncio.to_thread(
+                user_storage.chat_dialog_list, USER_DB_PATH, user_id,
+            )
+            if dlgs:
+                history = (
+                    await asyncio.to_thread(
+                        user_storage.chat_dialog_load,
+                        USER_DB_PATH,
+                        user_id,
+                        dlgs[0].dialog_id,
+                    )
+                    or []
+                )
+        except Exception:
+            logger.warning("/sleep: load history failed user_id=%s", user_id, exc_info=True)
+    transcript = _chat_history_for_sleep(history)
+    if not transcript:
+        await update.message.reply_text("Нечего синтезировать — диалогов пока нет.")
+        return
+    if (existing := _CHAT_SLEEP_RUNNING.get(user_id)) and not existing.done():
+        await update.message.reply_text("Сон уже идёт, подожди немного.")
+        return
+    await update.message.reply_text(
+        "Сон памяти запущен. Это занимает до пары минут; "
+        "результат придёт отдельным сообщением.",
+    )
+
+    async def _runner() -> None:
+        try:
+            ok, status = await _run_chat_sleep(
+                user_id=user_id,
+                transcript=transcript,
+                trigger="manual:/sleep",
+            )
+            short = ("OK" if ok else "не удалось") + ": " + status
+            with suppress(Exception):
+                await context.bot.send_message(
+                    chat_id,
+                    f"Сон памяти завершён ({short[:300]}).",
+                )
+        finally:
+            _CHAT_SLEEP_RUNNING.pop(user_id, None)
+
+    _CHAT_SLEEP_RUNNING[user_id] = asyncio.create_task(_runner())
+
+
+async def memory_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/memory` — показать сохранённую память + текущие настройки тоггла."""
+    if not update.message or not update.effective_user:
+        return
+    user_id = update.effective_user.id
+    if not context.user_data.get(_CHAT_ACTIVE):
+        await update.message.reply_text("Команда /memory доступна только из активного /chat.")
+        return
+    pref = await asyncio.to_thread(
+        user_storage.chat_memory_get_pref, USER_DB_PATH, user_id,
+    )
+    files = chat_memory.list_memory_files(user_id)
+    lines = [
+        "<b>Память пользователя</b>",
+        f"Тоггл: {'включена' if pref.enabled else 'выключена'}",
+        f"Файлов: {len(files)}",
+        f"Реплик с прошлого сна: {pref.msgs_since_sleep} (порог {_chat_memory_sleep_after_msgs()})",
+    ]
+    if pref.last_sleep_at:
+        lines.append(
+            f"Последний сон: <code>{_h(pref.last_sleep_at)}</code> — "
+            f"{_h(pref.last_sleep_status or '?')}",
+        )
+    else:
+        lines.append("Сон ещё ни разу не запускался.")
+    if files:
+        lines.append("")
+        for fn in files:
+            body = chat_memory.read_memory_file(user_id, fn)
+            size = len(body.encode("utf-8"))
+            lines.append(f"<b>{_h(fn)}</b> ({size} байт):")
+            snippet = body.strip()
+            if len(snippet) > 1000:
+                snippet = snippet[:1000].rstrip() + "…"
+            lines.append(f"<pre>{_h(snippet)}</pre>")
+    await update.message.reply_text(
+        "\n".join(lines)[:4000],
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
 async def _run_homework_text_answer_check(
     update: Update | None,
     context: ContextTypes.DEFAULT_TYPE,
@@ -2858,6 +4516,18 @@ async def _run_homework_text_answer_check(
     }
     _check_url = f"{SERVER_URL.rstrip('/')}/check"
     outs: list[str] = []
+    _log_hw_anchor(
+        user_id,
+        profile,
+        engine=engine_norm,
+        tag="check text anchor",
+    )
+    # Текст ученика в лог не пишем (персональные данные); только длина и факт.
+    logger.info(
+        "check text student_answer user_id=%s chars=%s",
+        user_id,
+        len(answer_plain),
+    )
 
     try:
         async with httpx.AsyncClient(
@@ -2888,6 +4558,12 @@ async def _run_homework_text_answer_check(
             response.raise_for_status()
             result = response.json()
             outs.append(result.get("result", "Результат не получен."))
+            logger.info(
+                "check text model_result user_id=%s engine=%s text=%s",
+                user_id,
+                engine_norm,
+                clip_check_log_body(outs[0]),
+            )
     except httpx.RequestError as e:
         logger.warning("check text request error user_id=%s err=%s", user_id, e)
         await asyncio.to_thread(bot_stats.record_check_technical_failed, USER_DB_PATH)
@@ -3056,6 +4732,12 @@ async def _run_homework_check(
         _check_url = f"{SERVER_URL.rstrip('/')}/check"
         _summarize_url = f"{SERVER_URL.rstrip('/')}/check/summarize"
         outs: list[str] = []
+        _log_hw_anchor(
+            user_id,
+            profile,
+            engine=engine_norm,
+            tag="check photo anchor",
+        )
 
         async with httpx.AsyncClient(
             timeout=_check_request_timeout_s(engine_norm),
@@ -3111,7 +4793,16 @@ async def _run_homework_check(
                     )
                     response.raise_for_status()
                     result = response.json()
-                    outs.append(result.get("result", "Результат не получен."))
+                    part_text = result.get("result", "Результат не получен.")
+                    outs.append(part_text)
+                    logger.info(
+                        "check photo model_part user_id=%s engine=%s idx=%s/%s model_result=%s",
+                        user_id,
+                        engine_norm,
+                        idx + 1,
+                        n_img,
+                        clip_check_log_body(part_text),
+                    )
                 except httpx.RequestError as e:
                     logger.warning(
                         "check request error user_id=%s idx=%s err=%s",
@@ -3176,6 +4867,13 @@ async def _run_homework_check(
                     if not bad:
                         summary_ok = True
                         final_text = merged
+                        logger.info(
+                            "check photo summarize_merged user_id=%s engine=%s parts=%s merged=%s",
+                            user_id,
+                            engine_norm,
+                            len(outs),
+                            clip_check_log_body(merged),
+                        )
                 except Exception as e:
                     logger.warning("summarize request failed user_id=%s err=%s", user_id, e)
 
@@ -3189,6 +4887,13 @@ async def _run_homework_check(
                     )
                     await asyncio.to_thread(bot_stats.record_check_completed, USER_DB_PATH, body_raw)
                     prefix = homework_check_status.format_merged_check_prefix(outs)
+                    logger.info(
+                        "check photo merged_fallback user_id=%s engine=%s parts=%s body=%s",
+                        user_id,
+                        engine_norm,
+                        len(outs),
+                        clip_check_log_body(body_raw),
+                    )
 
         prof = await asyncio.to_thread(user_storage.get_profile, USER_DB_PATH, user_id)
         assert prof is not None
@@ -3314,6 +5019,10 @@ async def _button_callback_dispatch(
         await _handle_ban_lift(query, context)
         return
 
+    if data.startswith("chat:"):
+        await _handle_chat_callback(query, context, data)
+        return
+
     if await _reply_if_blocked_callback(query, context):
         return
 
@@ -3330,6 +5039,14 @@ async def _button_callback_dispatch(
         return
 
     if data.startswith("fb:"):
+        if not context.user_data.get(_BEGEMOT_OK):
+            adm_until = await asyncio.to_thread(
+                user_storage.admin_session_active_until,
+                USER_DB_PATH,
+                user_id,
+            )
+            if adm_until is not None:
+                context.user_data[_BEGEMOT_OK] = True
         if not context.user_data.get(_BEGEMOT_OK):
             await _answer_query_once(query, "Сначала войдите: команда /begemot", show_alert=True)
             return
@@ -4478,6 +6195,44 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 ),
             )
             return
+    # Если пользователь сейчас в `/chat` — фото обрабатываем как часть чата
+    # (pre-OCR + chat stream), а НЕ возвращаем во флоу проверки ДЗ.
+    # Сначала «лениво» поднимаем флаг из БД на случай рестарта бота.
+    if context.user_data.get(_CHAT_ACTIVE) is None:
+        until_lazy = await asyncio.to_thread(
+            user_storage.chat_session_active_until,
+            USER_DB_PATH,
+            user_id,
+        )
+        if until_lazy is not None:
+            context.user_data[_CHAT_ACTIVE] = True
+    if context.user_data.get(_CHAT_ACTIVE):
+        until_chk = await asyncio.to_thread(
+            user_storage.chat_session_active_until,
+            USER_DB_PATH,
+            user_id,
+        )
+        if until_chk is None:
+            context.user_data.pop(_CHAT_ACTIVE, None)
+            context.user_data.pop(_CHAT_HISTORY, None)
+            context.user_data.pop(_CHAT_BUSY, None)
+            context.user_data.pop(_CHAT_DIALOG_ID, None)
+            context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
+            await update.message.reply_text(
+                "Сессия чата истекла. Открой её заново через /chat.",
+            )
+            return
+        # Фото в /chat сбрасывает «ожидание промпта»: пользователь решил
+        # вернуться к multimodal-картинкам, а не к /imagine.
+        context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
+        chat_id = update.effective_chat.id
+        await _handle_chat_photo(
+            update,
+            context,
+            user_id=user_id,
+            chat_id=chat_id,
+        )
+        return
     step_photo = context.user_data.get(_HW_STEP)
     if step_photo:
         hint = (
@@ -4628,6 +6383,12 @@ def main() -> None:
     app.add_handler(CommandHandler("my_support", my_support_cmd))
     app.add_handler(CommandHandler("polling", polling_cmd))
     app.add_handler(CommandHandler("begemot", begemot_cmd))
+    app.add_handler(CommandHandler("begemot_logout", begemot_logout_cmd))
+    app.add_handler(CommandHandler("chat", chat_cmd))
+    app.add_handler(CommandHandler("chat_logout", chat_logout_cmd))
+    app.add_handler(CommandHandler("imagine", imagine_cmd))
+    app.add_handler(CommandHandler("sleep", sleep_cmd))
+    app.add_handler(CommandHandler("memory", memory_cmd))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_homework_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))

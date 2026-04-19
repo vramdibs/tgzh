@@ -10,6 +10,25 @@ import os
 import sys
 
 
+def check_log_body_max_chars() -> int:
+    """Макс. длина полей «ответ ученика» / «ответ модели» в логах `/check` (символы)."""
+    raw = (os.getenv("CHECK_LOG_BODY_MAX_CHARS") or "").strip()
+    if raw.isdigit():
+        return max(1, min(int(raw), 256_000))
+    return 16_384
+
+
+def clip_check_log_body(text: str | None) -> str:
+    """Обрезка одного текстового поля для логов (без исключений на None)."""
+    if text is None:
+        return ""
+    s = str(text)
+    cap = check_log_body_max_chars()
+    if len(s) <= cap:
+        return s
+    return s[:cap] + f"\n...[truncated log body len={len(s)} cap={cap}]"
+
+
 def setup_logging(name: str) -> logging.Logger:
     level_str = os.getenv("LOG_LEVEL", "INFO").strip().upper()
     level = getattr(logging, level_str, logging.INFO)
