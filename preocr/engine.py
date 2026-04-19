@@ -8,17 +8,25 @@ import io
 import logging
 import os
 import tempfile
+import threading
 from typing import Any
 
 import numpy as np
 from PIL import Image, ImageOps
 
-from preocr.schemas import PreOcrRegion, PreOcrResponse, RegionType
+# ВАЖНО: paddleocr/paddlex импортируем на уровне модуля. При ленивом импорте внутри
+# request-хендлера paddlex (3.x) даёт RuntimeError "PDX has already been initialized"
+# из-за реентерабельности _initialize() при загрузке под uvicorn worker-потоком.
+# Импорт на уровне модуля гарантирует одноразовую инициализацию в main thread.
+from paddleocr import PaddleOCR, PPStructureV3  # noqa: E402
+
+from preocr.schemas import PreOcrRegion, PreOcrResponse, RegionType  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 _ocr_singleton: Any = None
 _structure_singleton: Any = None
+_singleton_lock = threading.Lock()
 
 
 def _max_side() -> int:
@@ -73,31 +81,39 @@ def _bbox_from_poly(poly: Any) -> list[list[float]] | None:
 def _get_ocr():
     global _ocr_singleton
     if _ocr_singleton is None:
-        from paddleocr import PaddleOCR
-
-        _ocr_singleton = PaddleOCR(
-            lang=_lang(),
-            use_doc_orientation_classify=False,
-            use_doc_unwarping=False,
-        )
+        with _singleton_lock:
+            if _ocr_singleton is None:
+                _ocr_singleton = PaddleOCR(
+                    lang=_lang(),
+                    use_doc_orientation_classify=False,
+                    use_doc_unwarping=False,
+                )
     return _ocr_singleton
 
 
 def _get_structure():
     global _structure_singleton
     if _structure_singleton is None:
-        from paddleocr import PPStructureV3
-
-        _structure_singleton = PPStructureV3(
-            lang=_lang(),
-            use_doc_orientation_classify=False,
-            use_doc_unwarping=False,
-            use_formula_recognition=True,
-            use_chart_recognition=True,
-            use_table_recognition=False,
-            use_seal_recognition=False,
-        )
+        with _singleton_lock:
+            if _structure_singleton is None:
+                _structure_singleton = PPStructureV3(
+                    lang=_lang(),
+                    use_doc_orientation_classify=False,
+                    use_doc_unwarping=False,
+                    use_formula_recognition=True,
+                    use_chart_recognition=True,
+                    use_table_recognition=False,
+                    use_seal_recognition=False,
+                )
     return _structure_singleton
+
+
+def warm_up() -> None:
+    """Предзагрузка модели согласно PREOCR_PIPELINE — вызывается из FastAPI lifespan."""
+    if _pipeline_name() == "structure":
+        _get_structure()
+    else:
+        _get_ocr()
 
 
 def _map_block_label(label: str) -> RegionType:
