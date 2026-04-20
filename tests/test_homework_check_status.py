@@ -26,10 +26,16 @@ def test_verdict_fully_correct() -> None:
     assert hcs.homework_check_status_emoji(text) == "\u2705"
 
 
-def test_verdict_correct_but_caveat_partial_stats() -> None:
+def test_verdict_correct_with_soft_caveat_stays_correct() -> None:
     text = (
         "Вывод: Решение верно. Однако оформление можно улучшить."
     )
+    assert hcs.homework_check_stats_verdict(text) == "correct"
+    assert hcs.homework_check_status_emoji(text) == "\u2705"
+
+
+def test_verdict_correct_with_hard_partial_marker_drops_to_partial() -> None:
+    text = "Вывод: Ответ верный, но в вычислениях есть ошибки."
     assert hcs.homework_check_stats_verdict(text) == "partial"
     assert hcs.homework_check_status_emoji(text) == "\u2705"
 

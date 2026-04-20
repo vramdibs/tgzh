@@ -181,7 +181,24 @@ def _compute_verdict(raw: str) -> VerdictKind:
     zone = _verdict_zone(s)
     zl = zone.lower()
 
-    partial_markers = (
+    hard_partial_markers = (
+        "существенн",
+        "неверно",
+        "неправильно",
+        "не верно",
+        "с ошибками",
+        "есть ошибки",
+        "содержит ошибки",
+        "ошибк",
+        "недочёт",
+        "недочет",
+        "нужно исправить",
+        "требует доработки",
+        "не удалось проверить",
+        "частичная проверка",
+        "полностью проверить не удалось",
+    )
+    soft_partial_markers = (
         "частично",
         "не полностью",
         "не целиком",
@@ -189,15 +206,6 @@ def _compute_verdict(raw: str) -> VerdictKind:
         "однако",
         " но ",
         ", но ",
-        "с ошибками",
-        "есть ошибки",
-        "содержит ошибки",
-        "существенн",
-        "неверно",
-        "неправильно",
-        "не верно",
-        "нужно исправить",
-        "требует доработки",
         "неполн",
         "недостаточно",
         "неясно",
@@ -206,13 +214,9 @@ def _compute_verdict(raw: str) -> VerdictKind:
         "только часть",
         "лишь часть",
         "проблем",
-        "недочёт",
-        "недочет",
-        "не удалось проверить",
-        "частичная проверка",
-        "полностью проверить не удалось",
     )
-    has_partial = any(m in zl for m in partial_markers)
+    has_hard_partial = any(m in zl for m in hard_partial_markers)
+    has_soft_partial = any(m in zl for m in soft_partial_markers)
 
     correct_markers = (
         "решение верно",
@@ -230,13 +234,16 @@ def _compute_verdict(raw: str) -> VerdictKind:
     )
     has_correct = any(m in zl for m in correct_markers)
 
-    if has_correct and not has_partial:
+    # Жёсткие partial-маркеры всегда блокируют correct: модель прямо сказала «ошибки/неверно».
+    if has_hard_partial:
+        return "partial"
+    # Хоть один correct-маркер и нет жёстких partial → correct.
+    # Мягкие partial («но», «частично», «однако» и т. п.) при наличии явного correct
+    # больше не понижают вердикт — это были стилистические оговорки модели.
+    if has_correct:
         return "correct"
-    if has_correct and has_partial:
+    if has_soft_partial:
         return "partial"
-    if has_partial:
-        return "partial"
-
     if any(m in zl for m in ("ошибок нет", "без ошибок", "все верно")):
         return "correct"
 
