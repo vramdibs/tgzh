@@ -39,9 +39,7 @@ def test_chat_safety_policy_always_present(monkeypatch: pytest.MonkeyPatch) -> N
         "ЗАПРЕЩЕНО",
         "shell",
         "листинг",
-        "пути в файловой системе",
-        # Новый раздел: разрешаем работать с приложенными картинками/STT — это явно
-        # часть пользовательского сообщения, а не «чтение файлов с диска».
+        "соседние файлы",
         "multimodal-контент",
     ):
         assert keyword in default_prompt

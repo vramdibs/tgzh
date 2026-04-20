@@ -121,7 +121,7 @@ def test_bot_safety_policy_always_present(monkeypatch: pytest.MonkeyPatch) -> No
         "ЗАПРЕЩЕНО",
         "shell",
         "листинг",
-        "пути в файловой системе",
+        "соседние файлы",
         "multimodal-контент",
     ):
         assert keyword in default_prompt
