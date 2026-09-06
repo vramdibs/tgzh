@@ -147,7 +147,7 @@ flowchart LR
 
 - Контейнер `tgzh-stt`, `restart: always`, том **`tgzh-stt-models`** для кэша моделей (на первом старте качается ~465 МБ для `WHISPER_MODEL=small`).
 - Healthcheck по `GET /v1/models`. Бот его не ждёт (`condition: service_started`) — пока модель грузится 1–3 минуты, голосовые честно возвращают «не вернул текст»/таймаут, но всё остальное работает.
-- Хост-порт `127.0.0.1:9100->9000` — для локальной отладки (`curl http://127.0.0.1:9100/v1/models`); из интернета не доступно.
+- Хост-порт `127.0.0.1:9110->9000` — для локальной отладки (`curl http://127.0.0.1:9110/v1/models`); из интернета не доступно. Порт 9100 на хосте занят node_exporter.
 - Дефолт `WHISPER_DEVICE=cpu`. На GPU sm_120 (RTX 50xx) ctranslate2 пока без поддержки — оставлен CPU + `int8` + 4 потока. Для других карт можно переключить через `.env` (см. блок `WHISPER_*`).
 
 Альтернатива — внешний провайдер: `STT_BASE_URL=https://api.openai.com/v1`, `STT_API_KEY=sk-...`, `STT_MODEL=whisper-1`. Тогда сервис `tgzh-stt` можно остановить/удалить — `stt_client.is_configured()` смотрит только на `STT_BASE_URL`.
@@ -168,7 +168,7 @@ flowchart LR
 
 | Переменная             | Значение по умолчанию              | Назначение                                                                                              |
 |------------------------|------------------------------------|---------------------------------------------------------------------------------------------------------|
-| `STT_BASE_URL`         | `http://tgzh-stt:9000/v1`          | OpenAI-совместимый base URL до `/v1`. Пусто — фича выключена. На хосте без compose: `http://127.0.0.1:9100/v1`. |
+| `STT_BASE_URL`         | `http://tgzh-stt:9000/v1`          | OpenAI-совместимый base URL до `/v1`. Пусто — фича выключена. На хосте без compose: `http://127.0.0.1:9110/v1`. |
 | `STT_API_KEY`          | пусто                              | Bearer-ключ. Локальный `tgzh-stt` не требует. Для OpenAI/Groq — обязательно.                            |
 | `STT_MODEL`            | `whisper-1`                        | `whisper-server` использует свою активную модель из `WHISPER_MODEL` независимо от этого поля.           |
 | `STT_LANGUAGE`         | `ru`                               | ISO-код. Спецзначение `auto` — не передавать `language`, дать модели угадать.                           |
@@ -188,7 +188,7 @@ flowchart LR
 
 Метрика — **`tgzh_stt_requests_total{outcome}`** (`ok`/`disabled`/`too_large`/`timeout`/`http_error`/`empty`/`other`). Логи бота для каждого голосового пишут только метаданные (длительность, mime, размер, длина распознанного текста) — содержимое распознавания **не** логируется.
 
-Сменить модель: правишь `WHISPER_MODEL` в `.env`, делаешь `docker compose up -d tgzh-stt`. Старая модель остаётся в томе, новая подкачивается на первом запросе. Прогрев — обращение `curl http://127.0.0.1:9100/v1/audio/transcriptions -F file=@1s.wav -F model=whisper-1`.
+Сменить модель: правишь `WHISPER_MODEL` в `.env`, делаешь `docker compose up -d tgzh-stt`. Старая модель остаётся в томе, новая подкачивается на первом запросе. Прогрев — обращение `curl http://127.0.0.1:9110/v1/audio/transcriptions -F file=@1s.wav -F model=whisper-1`.
 
 ### Нужен ли работающий инстанс Cursor на ПК?
 
@@ -203,7 +203,7 @@ flowchart LR
 ```bash
 docker compose ps                # tgzh-bot, tgzh-server, tgzh-stt, postgres → Up (healthy)
 curl -fsS http://127.0.0.1:8000/health        # server жив
-curl -fsS http://127.0.0.1:9100/v1/models     # tgzh-stt жив, активная модель видна
+curl -fsS http://127.0.0.1:9110/v1/models     # tgzh-stt жив, активная модель видна
 docker compose exec tgzh-bot getent hosts tgzh-server tgzh-stt   # DNS внутри сети ОК
 docker compose exec tgzh-bot alembic current   # схема в актуальной ревизии
 # опц.:

@@ -101,7 +101,8 @@ services:
   # из контейнера через имя сервиса tgzh-stt:9000 (см. .env: STT_BASE_URL).
   # Карта sm_120 (Blackwell, RTX 5060 Ti) — используем CPU (как и tgzh-preocr); int8
   # на 4 потоках укладывается в ~1.5 ГБ RAM с моделью small.
-  # Порт хоста 127.0.0.1:9100 — только для локальной отладки (curl /v1/models).
+  # Порт хоста 127.0.0.1:9110 — только для локальной отладки (curl /v1/models).
+  # 9100 занят node_exporter на хосте.
   # Модели кэшируются в томе tgzh-stt-models (на первом старте качается ~465 МБ).
   tgzh-stt:
     image: hwdsl2/whisper-server:latest
@@ -110,7 +111,7 @@ services:
     networks:
       - tgzh-internal
     ports:
-      - "127.0.0.1:9100:9000"
+      - "127.0.0.1:9110:9000"
     environment:
       WHISPER_MODEL: ${WHISPER_MODEL:-small}
       WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-ru}
