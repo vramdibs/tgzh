@@ -44,6 +44,7 @@ def hw_ready_user(db_path: str) -> int:
         url="https://gdz.ru/x",
         label="Учебник 6",
         is_premium=False,
+        subject_slug="matematika",
     )
     user_storage.set_homework_meta(
         db_path,

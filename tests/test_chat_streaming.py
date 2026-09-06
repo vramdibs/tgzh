@@ -6,6 +6,7 @@ import asyncio
 import os
 import tempfile
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -265,3 +266,64 @@ def test_stream_chat_via_cursor_requires_fallback(monkeypatch: pytest.MonkeyPatc
 
     with pytest.raises(RuntimeError):
         asyncio.run(_runner())
+
+
+def test_chat_cursor_model_catalog_filters_fast(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "CHAT_CURSOR_MODELS",
+        "composer-2.5,composer-2.5-fast,cursor-grok-4.6-low",
+    )
+    slugs = [slug for slug, _ in ai_checker.chat_cursor_model_catalog()]
+    assert slugs == ["composer-2.5", "cursor-grok-4.6-low"]
+
+
+def test_chat_cursor_model_try_chain_default_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CHAT_CURSOR_MODEL_DEFAULT", raising=False)
+    monkeypatch.delenv("CHAT_CURSOR_MODEL_FALLBACK", raising=False)
+    assert ai_checker.chat_cursor_model_try_chain("composer-2.5") == [
+        "composer-2.5",
+        "cursor-grok-4.6-low",
+    ]
+    assert ai_checker.chat_cursor_model_try_chain("cursor-grok-4.6-low") == [
+        "cursor-grok-4.6-low",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_model_fallback_on_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VLLM_FALLBACK_ENABLE", "1")
+    monkeypatch.setenv("VLLM_FALLBACK_BASE_URL", "http://bridge:8787/v1")
+
+    calls: list[str] = []
+    from openai import APIStatusError
+    from unittest.mock import MagicMock
+
+    async def _fake_once(client, model, messages, *, on_delta):
+        calls.append(model)
+        if model == "composer-2.5":
+            resp = MagicMock(status_code=400)
+            resp.text = "model 'composer-2.5' is not in allowed"
+            raise APIStatusError(message="bad model", response=resp, body=None)
+        await on_delta("ok")
+        return "ok"
+
+    with (
+        patch(
+            "ai_checker._cursor_openai_client",
+            AsyncMock(return_value=MagicMock()),
+        ),
+        patch(
+            "ai_checker._stream_chat_model_once",
+            side_effect=_fake_once,
+        ),
+    ):
+        out = await ai_checker.stream_chat_via_cursor(
+            [{"role": "user", "content": "hi"}],
+            on_delta=AsyncMock(),
+            model="composer-2.5",
+        )
+    assert out == "ok"
+    assert calls == ["composer-2.5", "cursor-grok-4.6-low"]
+

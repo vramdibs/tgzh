@@ -3,7 +3,8 @@
 -- Либо: alembic upgrade head (ревизия вызывает тот же SQL).
 
 CREATE TABLE IF NOT EXISTS user_profile (
-    user_id BIGINT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    subject_slug TEXT NOT NULL DEFAULT 'matematika',
     grade INTEGER NOT NULL CHECK (grade >= 6 AND grade <= 11),
     textbook_slug TEXT NOT NULL,
     textbook_url TEXT NOT NULL,
@@ -13,7 +14,13 @@ CREATE TABLE IF NOT EXISTS user_profile (
     hw_paragraph TEXT,
     hw_exercise TEXT,
     hw_page INTEGER,
-    subject_slug TEXT NOT NULL DEFAULT 'matematika'
+    PRIMARY KEY (user_id, subject_slug)
+);
+
+CREATE TABLE IF NOT EXISTS user_settings (
+    user_id BIGINT PRIMARY KEY NOT NULL,
+    active_subject_slug TEXT NOT NULL DEFAULT 'matematika',
+    updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS user_feedback (
@@ -140,5 +147,6 @@ CREATE TABLE IF NOT EXISTS chat_memory_pref (
     msgs_since_sleep INTEGER NOT NULL DEFAULT 0,
     last_sleep_at TEXT,
     last_sleep_status TEXT,
+    chat_model_slug TEXT,
     updated_at TEXT NOT NULL
 );

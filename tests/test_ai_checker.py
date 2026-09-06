@@ -600,7 +600,7 @@ async def test_check_vllm_plain_text_branch(monkeypatch: pytest.MonkeyPatch) -> 
     call_kw = inst.chat.completions.create.await_args.kwargs
     text = call_kw["messages"][0]["content"][0]["text"]
     assert "привет" in text
-    assert "--- Текст файла ---" in text
+    assert "<<<USER_FILE>>>" in text
     assert "/no_think" in text
 
 
@@ -1159,3 +1159,78 @@ async def test_fallback_http_client_echo_without_target_host_falls_through(
     fb_kwargs = mock_cls.call_args.kwargs
     backend = fb_kwargs["http_client"]._transport._pool._network_backend
     assert isinstance(backend, tgzh_httpx._UpstreamDnsBackend)
+
+
+def test_model_accepts_images_from_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("VLLM_VISION", raising=False)
+    monkeypatch.setenv("VLLM_MODEL", "qwen/qwen3-vl-8b")
+    assert ai_checker.model_accepts_images() is True
+    monkeypatch.setenv("VLLM_MODEL", "qwen/qwen3-8b")
+    assert ai_checker.model_accepts_images() is False
+    monkeypatch.setenv("VLLM_VISION", "1")
+    assert ai_checker.model_accepts_images() is True
+    monkeypatch.setenv("VLLM_VISION", "0")
+    monkeypatch.setenv("VLLM_MODEL", "qwen/qwen3-vl-8b")
+    assert ai_checker.model_accepts_images() is False
+
+
+@pytest.mark.asyncio
+async def test_text_model_image_without_preocr_returns_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VLLM_VISION", "0")
+    monkeypatch.setenv("VLLM_MODEL", "qwen/qwen3-8b")
+    with patch(
+        "preocr_client.fetch_preocr_block",
+        AsyncMock(return_value=""),
+    ):
+        out = await ai_checker._check_vllm(
+            b"\xff\xd8\xff" + b"\x00" * 20,
+            "image/jpeg",
+            paragraph="1",
+            exercise=None,
+            page=None,
+            textbook_label="",
+            grade=None,
+        )
+    assert "PREOCR_URL" in out
+    assert "без зрения" in out
+
+
+@pytest.mark.asyncio
+async def test_text_model_image_uses_preocr_text_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VLLM_VISION", "0")
+    monkeypatch.setenv("VLLM_MODEL", "qwen/qwen3-8b")
+    monkeypatch.setenv("VLLM_BASE_URL", "http://lms:1234/v1")
+    captured: dict = {}
+    import sys
+
+    fake_openai = MagicMock()
+    fake_openai.APIConnectionError = type("APIConnectionError", (Exception,), {})
+    fake_openai.APIStatusError = type("APIStatusError", (Exception,), {})
+    monkeypatch.setitem(sys.modules, "openai", fake_openai)
+
+    async def _fake_chat(*, stage, primary_kwargs, force_fallback=False):
+        captured["content"] = primary_kwargs["messages"][0]["content"]
+        return _make_mock_response("ok text"), False, "qwen/qwen3-8b"
+
+    with (
+        patch("ai_checker._chat_with_fallback", _fake_chat),
+        patch(
+            "preocr_client.fetch_preocr_block",
+            AsyncMock(return_value="OCR: 12"),
+        ),
+    ):
+        await ai_checker._check_vllm(
+            b"\xff\xd8\xff" + b"\x00" * 20,
+            "image/jpeg",
+            paragraph="1",
+            exercise=None,
+            page=None,
+            textbook_label="",
+            grade=None,
+        )
+    content = captured["content"]
+    assert all(c.get("type") == "text" for c in content)

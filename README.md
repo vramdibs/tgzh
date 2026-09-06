@@ -365,6 +365,20 @@ SERVER_URL=https://xxxx.ngrok.io
 docker compose up -d --build
 ```
 
+<a id="homework-stack-smoke"></a>
+
+**motok hub + LM Studio (smoke):** хаб на mf (`../motok/local/hub.env`), в **`.env`** — `MOTOK_HUB_*` как в хабе. LM Studio на `127.0.0.1:1234`. Сервер в host-сети (иначе bridge не видит localhost LM Studio):
+
+```bash
+export MOTOK_INTERNAL_TOKEN MOTOK_HUB_TOKEN_SECRET   # из hub.env; MOTOK_HUB_URL для compose не экспортировать
+export SERVER_URL=http://host.docker.internal:8000 # если tgzh-server в host network (lmstudio.yml)
+export VLLM_BASE_URL=http://127.0.0.1:1234/v1
+export VLLM_MODEL=qwen3.8-27b-xs-16gb-vram   # id из GET /v1/models
+export VLLM_VISION=0 VLLM_FALLBACK_ENABLE=0
+docker compose -f docker-compose.yml -f docker-compose.lmstudio.yml up -d --build tgzh-server postgres
+bash scripts/smoke_homework_stack.sh
+```
+
 **Предварительное OCR (опционально)**
 
 Сервис **`tgzh-preocr`** (каталог [`preocr/`](preocr/), по умолчанию [`Dockerfile.preocr`](Dockerfile.preocr) — CPU; для GPU есть [`Dockerfile.preocr.gpu`](Dockerfile.preocr.gpu)) поднимается профилем Compose. Как пользоваться:
@@ -499,7 +513,10 @@ VLLM_NO_THINK=1
 ```
 
 - **`VLLM_BASE_URL`** — можно указать полный URL до `.../v1/chat/completions` или базу `http://HOST:PORT/v1`
+- Временный backend: LM Studio на хосте, например `http://host.docker.internal:1234/v1`. Позже тот же контракт на vLLM +
+- **`VLLM_VISION`**: `1`/`0` явно. Пусто — по имени модели (`vl` / `vision`). Текстовые Qwen 3 8b / 3.5 9b: фото только через pre-OCR
 - Модель с **VL (vision)** — для фото ДЗ передается `image_url` с `data:image/...;base64,...`
+- Если на tgzh-server задан **`MOTOK_HUB_TOKEN_SECRET`**, `POST /check` требует `Authorization: Bearer` (JWT хаба motok)
 - Контекст **32768** задается для справки; лимит ответа ограничивается **`VLLM_MAX_TOKENS`**
 - **`VLLM_NO_THINK`** (по умолчанию **1**) — для Qwen3: в текст запроса добавляется **` /no_think`**, в вызов API — **`extra_body`** с **`chat_template_kwargs.enable_thinking: false`** (vLLM); **`0`** — не добавлять
 - К **тексту ответа** проверки и к **сводке** по нескольким фото сервер дописывает **`Модель: {VLLM_MODEL}`**; при ошибках обращения к VLLM та же подпись добавляется к сообщению об ошибке. Если сработал pre-OCR (непустой ответ **`POST /v1/preocr`** для **изображения**), в результат добавляется строка про **pre-OCR**; для **`text/plain`** и прочих текстовых MIME pre-OCR **не** вызывается. Метка смешанных чисел остается в хвосте ответа для логики статистики (**`detach_trailing_mixed_numbers_marker`** в **`homework_check_status.py`** вставляет футер **перед** ней)

@@ -1,6 +1,6 @@
 """
-Telegram-бот для проверки домашних заданий по математике.
-Учебник (GDZ) → параграф (§1…§N или текст) → шаг 2: упражнения/проверочные из оглавления (кнопки и умная клавиатура) → фото → проверка.
+Telegram-бот для проверки домашних заданий (математика, алгебра, геометрия, русский, физика).
+Учебник (GDZ) → параграф → задание → фото или текст → проверка.
 """
 
 from __future__ import annotations
@@ -164,15 +164,24 @@ from telegram.ext import (
 from telegram.request import HTTPXRequest
 
 import bot_stats
+import ai_checker
 import chat_memory
 import feedback_tei
 import gdz_solution
 import homework_check_status
+import hub_client
 import photo_prepare
 import stt_client
 import telegram_format
 import tgzh_metrics
 import user_storage
+from catalog import books_for, load_catalog
+from subjects import (
+    ALL_SUBJECT_SLUGS,
+    SUBJECT_LABELS,
+    grades_for_subject,
+    subject_label,
+)
 
 
 def _log_hw_anchor(
@@ -231,8 +240,17 @@ if "SERVER_URL" in os.environ:
             "SERVER_URL в окружении пуст или без http/https; для API проверки используется %s",
             SERVER_URL,
         )
+
+
+async def _hub_check_headers(user_id: int) -> dict[str, str]:
+    token = await hub_client.ensure_token(user_id)
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    return {}
+
+
 USER_DB_PATH = os.getenv("USER_DB_PATH", "data/users.sqlite")
-GDZ_CATALOG_PATH = os.getenv("GDZ_CATALOG_PATH", "data/gdz_matematika_textbooks.json")
+GDZ_CATALOG_PATH = os.getenv("GDZ_CATALOG_PATH", "data/gdz_catalog.json")
 
 
 def _cursor_recheck_available() -> bool:
@@ -441,9 +459,9 @@ async def _continue_start_after_consent(
         await flow_remove_reply_keyboard(bot, chat_id)
         await bot.send_message(
             chat_id,
-            "<b>Привет! 👋</b> Я проверяю домашние задания по математике.\n\n"
-            "Сначала выбери класс, затем учебник из списка.",
-            reply_markup=grade_keyboard(back_to_main=False),
+            "<b>Привет! 👋</b> Я проверяю домашние задания по школьным предметам.\n\n"
+            "Сначала выбери предмет, затем класс и учебник из списка.",
+            reply_markup=subject_keyboard(back_to_main=False),
             parse_mode=ParseMode.HTML,
         )
         return
@@ -496,7 +514,7 @@ async def _disclaimer_consent_ok(update: Update, context: ContextTypes.DEFAULT_T
     return False
 
 
-CATALOG: dict[str, list[dict]] = {}
+CATALOG: dict[str, dict[str, list[dict]]] = {}
 
 PAGE_SIZE = 6
 
@@ -932,7 +950,7 @@ async def _send_stats_message(
 ) -> None:
     text = await asyncio.to_thread(bot_stats.format_all_stats_html, USER_DB_PATH)
     profile = await asyncio.to_thread(user_storage.get_profile, USER_DB_PATH, user_id)
-    kb = grade_keyboard(back_to_main=False) if profile is None else None
+    kb = subject_keyboard(back_to_main=False) if profile is None else None
     msg = await bot.send_message(
         chat_id,
         text,
@@ -1354,17 +1372,40 @@ def _chat_session_status_html(session_until) -> str:
 def _chat_menu_keyboard_for_user(active: bool, user_id: int) -> InlineKeyboardMarkup:
     """Клавиатура меню чата, подтянув текущий тоггл памяти из БД (sync, дёшево)."""
     mem_enabled = True
+    model_slug = ai_checker.chat_cursor_model_default()
     try:
         mem_enabled = user_storage.chat_memory_get_pref(USER_DB_PATH, user_id).enabled
+        model_slug = user_storage.chat_model_get(USER_DB_PATH, user_id)
     except Exception:
         pass
-    return _chat_menu_keyboard(active, memory_enabled=mem_enabled)
+    return _chat_menu_keyboard(
+        active,
+        memory_enabled=mem_enabled,
+        model_slug=model_slug,
+    )
+
+
+def _chat_model_keyboard(current_slug: str) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for slug, label in ai_checker.chat_cursor_model_catalog():
+        marker = " ✓" if slug == current_slug else ""
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"{label}{marker}",
+                    callback_data=f"chat:ms:{slug}",
+                ),
+            ],
+        )
+    rows.append([InlineKeyboardButton("Назад в меню чата", callback_data="chat:menu")])
+    return InlineKeyboardMarkup(rows)
 
 
 def _chat_menu_keyboard(
     active: bool,
     *,
     memory_enabled: bool = True,
+    model_slug: str | None = None,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if active:
@@ -1381,6 +1422,12 @@ def _chat_menu_keyboard(
         )
         rows.append(
             [InlineKeyboardButton("Мои чаты — очистить", callback_data="chat:purge")],
+        )
+        model_label = ai_checker.chat_cursor_model_label(
+            model_slug or ai_checker.chat_cursor_model_default(),
+        )
+        rows.append(
+            [InlineKeyboardButton(f"Модель: {model_label}", callback_data="chat:model")],
         )
         # Долговременная память + «сон». Подпись кнопки тоггла зависит от текущего состояния.
         mem_label = (
@@ -1473,10 +1520,20 @@ async def _send_chat_menu(
     mem_pref = await asyncio.to_thread(
         user_storage.chat_memory_get_pref, USER_DB_PATH, user_id,
     )
+    model_slug = await asyncio.to_thread(
+        user_storage.chat_model_get, USER_DB_PATH, user_id,
+    )
+    if active:
+        model_label = ai_checker.chat_cursor_model_label(model_slug)
+        body = body + f"\n\nМодель: <b>{_h(model_label)}</b> (reasoning Low, без Fast)."
     await bot.send_message(
         chat_id,
         body,
-        reply_markup=_chat_menu_keyboard(active, memory_enabled=mem_pref.enabled),
+        reply_markup=_chat_menu_keyboard(
+            active,
+            memory_enabled=mem_pref.enabled,
+            model_slug=model_slug,
+        ),
         parse_mode=ParseMode.HTML,
     )
 
@@ -1653,6 +1710,41 @@ async def _handle_chat_callback(
                 parse_mode=ParseMode.HTML,
             )
         return
+    if action == "model":
+        await _answer_query_once(query)
+        current = await asyncio.to_thread(
+            user_storage.chat_model_get, USER_DB_PATH, user_id,
+        )
+        body = (
+            "<b>Модель Cursor</b>\n"
+            "Только варианты без Fast, reasoning — Low.\n"
+            f"Сейчас: <b>{_h(ai_checker.chat_cursor_model_label(current))}</b>"
+        )
+        with suppress(BadRequest, Exception):
+            await query.edit_message_text(
+                body,
+                reply_markup=_chat_model_keyboard(current),
+                parse_mode=ParseMode.HTML,
+            )
+        return
+    if action == "ms":
+        slug = parts[2] if len(parts) > 2 else ""
+        saved = await asyncio.to_thread(
+            user_storage.chat_model_set, USER_DB_PATH, user_id, slug,
+        )
+        await _answer_query_once(
+            query, f"Модель: {ai_checker.chat_cursor_model_label(saved)}",
+        )
+        with suppress(BadRequest, Exception):
+            await query.edit_message_text(
+                (
+                    "<b>Модель Cursor</b>\n"
+                    f"Выбрано: <b>{_h(ai_checker.chat_cursor_model_label(saved))}</b>"
+                ),
+                reply_markup=_chat_model_keyboard(saved),
+                parse_mode=ParseMode.HTML,
+            )
+        return
     if action == "mem_toggle":
         cur = await asyncio.to_thread(
             user_storage.chat_memory_get_pref, USER_DB_PATH, user_id,
@@ -1673,7 +1765,7 @@ async def _handle_chat_callback(
         with suppress(BadRequest, Exception):
             await query.edit_message_text(
                 body,
-                reply_markup=_chat_menu_keyboard(active=True, memory_enabled=new_val),
+                reply_markup=_chat_menu_keyboard_for_user(True, user_id),
                 parse_mode=ParseMode.HTML,
             )
         return
@@ -1944,52 +2036,93 @@ async def _send_recheck_reward_sticker(
     return True
 
 
-def load_catalog(path: str) -> dict[str, list[dict]]:
-    p = Path(path)
-    if not p.is_file():
-        raise SystemExit(f"Нет файла каталога учебников: {p.resolve()}")
-    data = json.loads(p.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise SystemExit("Каталог: ожидается объект JSON с ключами классов")
-    for key in ("6", "7", "8", "9", "10", "11"):
-        if key not in data:
-            data[key] = []
-    return data
+def _catalog_books(subject_slug: str, grade: int) -> list[dict]:
+    return books_for(CATALOG, subject_slug, grade)
 
 
-def grade_keyboard(back_to_main: bool = False) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = [
-        [
-            InlineKeyboardButton("6 класс", callback_data="g:6"),
-            InlineKeyboardButton("7 класс", callback_data="g:7"),
-        ],
-        [
-            InlineKeyboardButton("8 класс", callback_data="g:8"),
-            InlineKeyboardButton("9 класс", callback_data="g:9"),
-        ],
-        [
-            InlineKeyboardButton("10 класс", callback_data="g:10"),
-            InlineKeyboardButton("11 класс", callback_data="g:11"),
-        ],
-    ]
+def subject_keyboard(back_to_main: bool = False) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    pair: list[InlineKeyboardButton] = []
+    for slug in ALL_SUBJECT_SLUGS:
+        pair.append(
+            InlineKeyboardButton(SUBJECT_LABELS[slug], callback_data=f"sub:{slug}"),
+        )
+        if len(pair) == 2:
+            rows.append(pair)
+            pair = []
+    if pair:
+        rows.append(pair)
     if back_to_main:
         rows.append([InlineKeyboardButton("Назад в меню", callback_data="back_main")])
     return InlineKeyboardMarkup(rows)
 
 
-def _total_pages(grade: int) -> int:
-    items = CATALOG.get(str(grade), [])
+def grade_keyboard(
+    subject_slug: str,
+    back_to_main: bool = False,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    grades = grades_for_subject(subject_slug)
+    row: list[InlineKeyboardButton] = []
+    for grade in grades:
+        row.append(
+            InlineKeyboardButton(
+                f"{grade} класс",
+                callback_data=f"g:{subject_slug}:{grade}",
+            ),
+        )
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton("Назад", callback_data="chg_sub")])
+    if back_to_main:
+        rows.append([InlineKeyboardButton("Назад в меню", callback_data="back_main")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _total_pages(subject_slug: str, grade: int) -> int:
+    items = _catalog_books(subject_slug, grade)
     return max(1, (len(items) + PAGE_SIZE - 1) // PAGE_SIZE)
 
 
-def textbook_caption(grade: int, page: int) -> str:
-    total = _total_pages(grade)
+def textbook_caption(subject_slug: str, grade: int, page: int) -> str:
+    total = _total_pages(subject_slug, grade)
     page = max(0, min(page, total - 1))
+    subj = subject_label(subject_slug)
     return (
-        f"Класс {grade}. Страница {page + 1} из {total}.\n"
+        f"{subj}, класс {grade}. Страница {page + 1} из {total}.\n"
         "Выбери учебник (источник: gdz.ru). "
         "🔥 только у одного варианта — чаще всего его выбирают в этом классе по данным бота "
         "(подсказка, если не уточняли у учителя, какой учебник открыть)."
+    )
+
+
+def _empty_catalog_hint(subject_slug: str, grade: int) -> str:
+    subj = subject_label(subject_slug)
+    if grade == 6 and subject_slug in ("algebra", "geometriya", "fizika"):
+        return (
+            f"Для {grade} класса по предмету «{subj}» в каталоге пока нет учебников. "
+            "В 6 классе обычно выбирают математику — вернись к выбору предмета."
+        )
+    return (
+        f"Для {subj}, {grade} класс, в каталоге пока нет учебников. "
+        "Обнови data/gdz_catalog.json или запусти scripts/fetch_gdz_textbooks.py"
+    )
+
+
+async def _active_subject_slug(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> str:
+    sub = context.user_data.get("hw_tb_subject")
+    if sub and str(sub) in ALL_SUBJECT_SLUGS:
+        return str(sub)
+    return await asyncio.to_thread(user_storage.get_active_subject, USER_DB_PATH, user_id)
+
+
+async def _show_subject_pick(query: CallbackQuery) -> None:
+    await query.edit_message_text(
+        "Выбери предмет:",
+        reply_markup=subject_keyboard(back_to_main=False),
     )
 
 
@@ -2026,11 +2159,12 @@ def _truncate_inline_button_text(text: str, max_len: int = _TG_INLINE_BTN_TEXT_M
 
 
 def textbook_keyboard(
+    subject_slug: str,
     grade: int,
     page: int,
     slug_counts: dict[str, int] | None = None,
 ) -> InlineKeyboardMarkup:
-    items = CATALOG.get(str(grade), [])
+    items = _catalog_books(subject_slug, grade)
     n = len(items)
     total_pages = max(1, (n + PAGE_SIZE - 1) // PAGE_SIZE)
     page = max(0, min(page, total_pages - 1))
@@ -2051,13 +2185,30 @@ def textbook_keyboard(
         flame = "🔥 " if (leader_slug and slug == leader_slug) else ""
         full = flame + label
         full = _truncate_inline_button_text(full)
-        rows.append([InlineKeyboardButton(full, callback_data=f"tb:{grade}:{idx}")])
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    full,
+                    callback_data=f"tb:{subject_slug}:{grade}:{idx}",
+                ),
+            ],
+        )
 
     nav: list[InlineKeyboardButton] = []
     if page > 0:
-        nav.append(InlineKeyboardButton("Назад", callback_data=f"pg:{grade}:{page - 1}"))
+        nav.append(
+            InlineKeyboardButton(
+                "Назад",
+                callback_data=f"pg:{subject_slug}:{grade}:{page - 1}",
+            ),
+        )
     if page < total_pages - 1:
-        nav.append(InlineKeyboardButton("Далее", callback_data=f"pg:{grade}:{page + 1}"))
+        nav.append(
+            InlineKeyboardButton(
+                "Далее",
+                callback_data=f"pg:{subject_slug}:{grade}:{page + 1}",
+            ),
+        )
     if nav:
         rows.append(nav)
     rows.append([InlineKeyboardButton("Назад", callback_data="chg_tb")])
@@ -2098,6 +2249,8 @@ def get_main_keyboard(
         rows.append(
             [InlineKeyboardButton("Выбрать упражнение или проверочную", callback_data="chg_hw")],
         )
+    rows.append([InlineKeyboardButton("Сменить предмет", callback_data="chg_sub")])
+    rows.append([InlineKeyboardButton("Сменить учебник", callback_data="chg_tb")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -2243,8 +2396,9 @@ def _main_menu_caption(profile: user_storage.UserProfile) -> str:
     hw_line = _hw_summary_html(profile) if up else _h("еще не задана")
     book = _textbook_label_html(profile)
     g = profile.grade
+    subj = subject_label(profile.subject_slug)
     return (
-        f"<b>Привет! 👋</b> Твой учебник{prem}: {book} ({g} класс).\n"
+        f"<b>Привет! 👋</b> Предмет: {subj}. Учебник{prem}: {book} ({g} класс).\n"
         f"<i>Текущая привязка:</i> {hw_line}.{hint}"
     )
 
@@ -2614,6 +2768,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if await _reply_if_blocked_cmd(update, context):
         return
     user_id = update.effective_user.id
+    if hub_client.hub_configured():
+        try:
+            await hub_client.ensure_token(user_id)
+        except hub_client.HubUnavailable:
+            logger.warning("hub upsert on /start failed user_id=%s", user_id)
     context.user_data.pop(_HW_STEP, None)
     context.user_data.pop("hw_paragraph_draft", None)
     context.user_data.pop(_HW_PAGE_BUF, None)
@@ -2640,6 +2799,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _continue_start_after_consent(context.bot, cid, context, user_id)
 
 
+async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user or not update.message:
+        return
+    if await _reply_if_blocked_cmd(update, context):
+        return
+    args = context.args or []
+    if not args:
+        await update.message.reply_text(
+            "Пришлите /link КОД со страницы привязки на https://hub.example.com/link"
+        )
+        return
+    try:
+        await hub_client.consume_link(update.effective_user.id, args[0])
+    except hub_client.HubUnavailable as exc:
+        if str(exc) == "conflict":
+            await update.message.reply_text(
+                "Этот Telegram уже привязан к другому аккаунту хаба."
+            )
+            return
+        await update.message.reply_text("Вход хаба недоступен. Попробуйте позже.")
+        return
+    await update.message.reply_text("Telegram привязан к аккаунту хаба.")
+
+
 async def textbook_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user:
         logger.info("cmd /textbook user_id=%s", update.effective_user.id)
@@ -2660,7 +2843,7 @@ async def textbook_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await flow_purge_except(context.bot, cid, context, keep_message_id=None)
     if not await _disclaimer_consent_ok(update, context):
         return
-    await update.message.reply_text("Выбери класс:", reply_markup=grade_keyboard(back_to_main=False))
+    await update.message.reply_text("Выбери предмет:", reply_markup=subject_keyboard(back_to_main=False))
 
 
 async def handle_homework_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3022,7 +3205,7 @@ async def handle_homework_text(update: Update, context: ContextTypes.DEFAULT_TYP
                 context,
                 await update.message.reply_text(
                     "Сначала укажи задание — кнопка «Указать задание» или /start.",
-                    reply_markup=grade_keyboard(back_to_main=False)
+                    reply_markup=subject_keyboard(back_to_main=False)
                     if profile is None
                     else get_main_keyboard(
                         uploaded=_user_has_uploaded_photo(user_id),
@@ -3100,7 +3283,7 @@ async def handle_homework_text(update: Update, context: ContextTypes.DEFAULT_TYP
             context,
             await update.message.reply_text(
                 "Сначала выбери учебник: /start",
-                reply_markup=grade_keyboard(back_to_main=False),
+                reply_markup=subject_keyboard(back_to_main=False),
             ),
         )
         return
@@ -3521,6 +3704,13 @@ async def _stream_chat_response(
         "user_id": user_id,
         "messages": base_messages,
     }
+    try:
+        model_slug = await asyncio.to_thread(
+            user_storage.chat_model_get, USER_DB_PATH, user_id,
+        )
+        payload["model"] = model_slug
+    except Exception:
+        logger.warning("chat model load failed user_id=%s", user_id, exc_info=True)
     # Долговременная память пользователя (если включено и непусто) — отдельной
     # секцией в system_prompt; иначе сервер использует свой default.
     try:
@@ -4004,6 +4194,7 @@ async def _request_chat_once_from_server(
     user_id: int,
     messages: list[dict[str, str]],
     timeout_s: float,
+    model: str | None = None,
 ) -> str:
     """POST `/chat/once` -> `text` (полный ответ модели). RuntimeError при не-200."""
     url = f"{SERVER_URL.rstrip('/')}/chat/once"
@@ -4014,6 +4205,8 @@ async def _request_chat_once_from_server(
         "messages": messages,
         "timeout_s": float(timeout_s),
     }
+    if model:
+        payload["model"] = model
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(client_timeout),
         transport=async_http_transport_ipv4_lookup(),
@@ -4062,17 +4255,22 @@ async def _run_chat_sleep(
     """
     sleep_msgs = chat_memory.build_sleep_messages(user_id, transcript=transcript)
     timeout_s = _chat_memory_sleep_timeout_s()
+    model_slug = await asyncio.to_thread(
+        user_storage.chat_model_get, USER_DB_PATH, user_id,
+    )
     logger.info(
-        "chat sleep start user_id=%s trigger=%s transcript_msgs=%s",
+        "chat sleep start user_id=%s trigger=%s transcript_msgs=%s model=%s",
         user_id,
         trigger,
         len(transcript),
+        model_slug,
     )
     try:
         text = await _request_chat_once_from_server(
             user_id=user_id,
             messages=sleep_msgs,
             timeout_s=timeout_s,
+            model=model_slug,
         )
     except Exception as e:
         msg = f"error: {e}"
@@ -4351,6 +4549,7 @@ async def _run_homework_text_answer_check(
         "page": str(profile.hw_page) if profile.hw_page is not None else "",
         "textbook_label": profile.textbook_label,
         "grade": str(profile.grade),
+        "subject_slug": profile.subject_slug,
         "gdz_exercises": gdz_ex,
         "gdz_verif_pages": gdz_vp,
         "gdz_verif_works": gdz_vw,
@@ -4373,6 +4572,11 @@ async def _run_homework_text_answer_check(
     )
 
     try:
+        hub_headers = await _hub_check_headers(user_id)
+    except hub_client.HubUnavailable:
+        await status_msg.edit_text("Вход хаба недоступен. Проверка без person_id не выполняется.")
+        return
+    try:
         async with httpx.AsyncClient(
             timeout=_check_request_timeout_s(engine_norm),
             transport=async_http_transport_ipv4_lookup(),
@@ -4388,6 +4592,7 @@ async def _run_homework_text_answer_check(
                     ),
                 },
                 data=form,
+                headers=hub_headers,
             )
             elapsed = time.perf_counter() - t0
             logger.info(
@@ -4566,6 +4771,7 @@ async def _run_homework_check(
             "page": str(profile.hw_page) if profile.hw_page is not None else "",
             "textbook_label": profile.textbook_label,
             "grade": str(profile.grade),
+            "subject_slug": profile.subject_slug,
             "gdz_exercises": gdz_ex,
             "gdz_verif_pages": gdz_vp,
             "gdz_verif_works": gdz_vw,
@@ -4581,6 +4787,14 @@ async def _run_homework_check(
             engine=engine_norm,
             tag="check photo anchor",
         )
+
+        try:
+            hub_headers = await _hub_check_headers(user_id)
+        except hub_client.HubUnavailable:
+            await query.edit_message_text(
+                "Вход хаба недоступен. Проверка без person_id не выполняется.",
+            )
+            return
 
         async with httpx.AsyncClient(
             timeout=_check_request_timeout_s(engine_norm),
@@ -4625,6 +4839,7 @@ async def _run_homework_check(
                         _check_url,
                         files={"photo": ("photo.jpg", photo_jpeg, "image/jpeg")},
                         data=form,
+                        headers=hub_headers,
                     )
                     elapsed = time.perf_counter() - t0
                     logger.info(
@@ -4696,7 +4911,12 @@ async def _run_homework_check(
                 try:
                     sr = await client.post(
                         _summarize_url,
-                        json={"parts": outs, "engine": engine_norm},
+                        json={
+                            "parts": outs,
+                            "engine": engine_norm,
+                            "subject_slug": profile.subject_slug,
+                        },
+                        headers=hub_headers,
                     )
                     sr.raise_for_status()
                     merged = (sr.json().get("result") or "").strip()
@@ -5251,6 +5471,53 @@ async def _button_callback_dispatch(
         await _send_stats_message(context.bot, chat_id, user_id, context)
         return
 
+    if data == "chg_sub":
+        context.user_data.pop(_HW_STEP, None)
+        context.user_data.pop("hw_paragraph_draft", None)
+        context.user_data.pop(_HW_PAGE_BUF, None)
+        context.user_data.pop(_HW_PAR_BTN_MAX, None)
+        context.user_data.pop("hw_tb_subject", None)
+        _pop_step2_gdz_meta(context)
+        _clear_begemot_session(context)
+        await flow_purge_except(
+            context.bot,
+            chat_id,
+            context,
+            keep_message_id=query.message.message_id,
+        )
+        await _show_subject_pick(query)
+        return
+
+    if data.startswith("sub:"):
+        subj = data[4:]
+        if subj not in ALL_SUBJECT_SLUGS:
+            return
+        context.user_data["hw_tb_subject"] = subj
+        await asyncio.to_thread(user_storage.set_active_subject, USER_DB_PATH, user_id, subj)
+        prof = await asyncio.to_thread(
+            user_storage.get_profile,
+            USER_DB_PATH,
+            user_id,
+            subj,
+        )
+        if prof is not None:
+            has_photo = _user_has_uploaded_photo(user_id)
+            await query.edit_message_text(
+                _main_menu_caption(prof),
+                reply_markup=get_main_keyboard(
+                    uploaded=has_photo,
+                    profile=prof,
+                    user_id=user_id,
+                ),
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        await query.edit_message_text(
+            f"Выбери класс ({subject_label(subj)}):",
+            reply_markup=grade_keyboard(subj, back_to_main=False),
+        )
+        return
+
     if data == "chg_tb":
         context.user_data.pop(_HW_STEP, None)
         context.user_data.pop("hw_paragraph_draft", None)
@@ -5264,16 +5531,18 @@ async def _button_callback_dispatch(
             context,
             keep_message_id=query.message.message_id,
         )
+        subj = await _active_subject_slug(user_id, context)
+        context.user_data["hw_tb_subject"] = subj
         await query.edit_message_text(
-            "Выбери класс:",
-            reply_markup=grade_keyboard(back_to_main=False),
+            f"Выбери класс ({subject_label(subj)}):",
+            reply_markup=grade_keyboard(subj, back_to_main=False),
         )
         return
 
     if data == "back_main":
         profile = await asyncio.to_thread(user_storage.get_profile, USER_DB_PATH, user_id)
         if profile is None:
-            await query.edit_message_text("Выбери класс:", reply_markup=grade_keyboard(back_to_main=False))
+            await query.edit_message_text("Выбери предмет:", reply_markup=subject_keyboard(back_to_main=False))
             return
         has_photo = _user_has_uploaded_photo(user_id)
         await query.edit_message_text(
@@ -5301,27 +5570,31 @@ async def _button_callback_dispatch(
         _pop_step2_gdz_meta(context)
         entry = context.user_data.get("hw_entry", "main")
         if entry == "textbook":
+            subj = context.user_data.get("hw_tb_subject")
             grade = context.user_data.get("hw_tb_grade")
             page = int(context.user_data.get("hw_tb_page") or 0)
-            if isinstance(grade, int) and CATALOG.get(str(grade)):
+            if (
+                isinstance(subj, str)
+                and subj in ALL_SUBJECT_SLUGS
+                and isinstance(grade, int)
+                and _catalog_books(subj, grade)
+            ):
                 slug_counts = await asyncio.to_thread(
                     user_storage.textbook_popularity_by_grade,
                     USER_DB_PATH,
                     grade,
+                    subj,
                 )
                 await query.edit_message_text(
-                    textbook_caption(grade, page),
-                    reply_markup=textbook_keyboard(grade, page, slug_counts),
+                    textbook_caption(subj, grade, page),
+                    reply_markup=textbook_keyboard(subj, grade, page, slug_counts),
                 )
             else:
-                await query.edit_message_text(
-                    "Выбери класс:",
-                    reply_markup=grade_keyboard(back_to_main=False),
-                )
+                await _show_subject_pick(query)
             return
         profile = await asyncio.to_thread(user_storage.get_profile, USER_DB_PATH, user_id)
         if profile is None:
-            await query.edit_message_text("Выбери класс:", reply_markup=grade_keyboard(back_to_main=False))
+            await query.edit_message_text("Выбери предмет:", reply_markup=subject_keyboard(back_to_main=False))
             return
         has_photo = _user_has_uploaded_photo(user_id)
         await query.edit_message_text(
@@ -5710,7 +5983,7 @@ async def _button_callback_dispatch(
         if profile is None:
             await query.edit_message_text(
                 "Сначала выбери учебник: /start",
-                reply_markup=grade_keyboard(back_to_main=False),
+                reply_markup=subject_keyboard(back_to_main=False),
             )
             return
         context.user_data["hw_entry"] = "main"
@@ -5740,7 +6013,7 @@ async def _button_callback_dispatch(
     if data == "chg_hw":
         profile = await asyncio.to_thread(user_storage.get_profile, USER_DB_PATH, user_id)
         if profile is None:
-            await query.edit_message_text("Сначала выбери учебник: /start", reply_markup=grade_keyboard(back_to_main=False))
+            await query.edit_message_text("Сначала выбери учебник: /start", reply_markup=subject_keyboard(back_to_main=False))
             return
         context.user_data.pop(_AWAIT_TEXT_ANSWER, None)
         context.user_data.pop(_AWAIT_PHOTO_ANSWER, None)
@@ -5767,7 +6040,7 @@ async def _button_callback_dispatch(
         if profile is None:
             await query.edit_message_text(
                 "Сначала выбери класс и учебник: команда /start",
-                reply_markup=grade_keyboard(back_to_main=False),
+                reply_markup=subject_keyboard(back_to_main=False),
             )
             return
         has_photo = _user_has_uploaded_photo(user_id)
@@ -5780,49 +6053,57 @@ async def _button_callback_dispatch(
 
     if data.startswith("g:"):
         parts = data.split(":")
-        if len(parts) == 2 and parts[1] in ("6", "7", "8", "9", "10", "11"):
-            grade = int(parts[1])
-            if not CATALOG.get(str(grade)):
+        if (
+            len(parts) == 3
+            and parts[1] in ALL_SUBJECT_SLUGS
+            and parts[2] in ("6", "7", "8", "9", "10", "11")
+        ):
+            subj = parts[1]
+            grade = int(parts[2])
+            context.user_data["hw_tb_subject"] = subj
+            if not _catalog_books(subj, grade):
                 await query.edit_message_text(
-                    f"Для класса {grade} нет учебников в каталоге. Обнови data/gdz_matematika_textbooks.json",
-                    reply_markup=grade_keyboard(back_to_main=False),
+                    _empty_catalog_hint(subj, grade),
+                    reply_markup=subject_keyboard(back_to_main=False),
                 )
                 return
             slug_counts = await asyncio.to_thread(
                 user_storage.textbook_popularity_by_grade,
                 USER_DB_PATH,
                 grade,
+                subj,
             )
             await query.edit_message_text(
-                textbook_caption(grade, 0),
-                reply_markup=textbook_keyboard(grade, 0, slug_counts),
+                textbook_caption(subj, grade, 0),
+                reply_markup=textbook_keyboard(subj, grade, 0, slug_counts),
             )
         return
 
     if data.startswith("pg:"):
         parts = data.split(":")
-        if len(parts) == 3:
-            grade, page = int(parts[1]), int(parts[2])
+        if len(parts) == 4 and parts[1] in ALL_SUBJECT_SLUGS:
+            subj, grade, page = parts[1], int(parts[2]), int(parts[3])
             slug_counts = await asyncio.to_thread(
                 user_storage.textbook_popularity_by_grade,
                 USER_DB_PATH,
                 grade,
+                subj,
             )
             await query.edit_message_text(
-                textbook_caption(grade, page),
-                reply_markup=textbook_keyboard(grade, page, slug_counts),
+                textbook_caption(subj, grade, page),
+                reply_markup=textbook_keyboard(subj, grade, page, slug_counts),
             )
         return
 
     if data.startswith("tb:"):
         parts = data.split(":")
-        if len(parts) == 3:
-            grade, idx = int(parts[1]), int(parts[2])
-            books = CATALOG.get(str(grade), [])
+        if len(parts) == 4 and parts[1] in ALL_SUBJECT_SLUGS:
+            subj, grade, idx = parts[1], int(parts[2]), int(parts[3])
+            books = _catalog_books(subj, grade)
             if idx < 0 or idx >= len(books):
                 await query.edit_message_text(
                     "Неверный выбор. Начни с /start",
-                    reply_markup=grade_keyboard(back_to_main=False),
+                    reply_markup=subject_keyboard(back_to_main=False),
                 )
                 return
             book = books[idx]
@@ -5836,9 +6117,7 @@ async def _button_callback_dispatch(
             context.user_data.pop(_HW_PAR_BTN_MAX, None)
             _pop_step2_gdz_meta(context)
             await _clear_user_photos(user_id)
-
-            prev_prof = await asyncio.to_thread(user_storage.get_profile, USER_DB_PATH, user_id)
-            subj = prev_prof.subject_slug if prev_prof else "matematika"
+            context.user_data["hw_tb_subject"] = subj
 
             async def _after_textbook_pick() -> None:
                 await asyncio.to_thread(
@@ -5856,7 +6135,12 @@ async def _button_callback_dispatch(
                 context.user_data["hw_tb_grade"] = grade
                 context.user_data["hw_tb_page"] = idx // PAGE_SIZE
                 prem = " (Премиум)" if premium else ""
-                prof = await asyncio.to_thread(user_storage.get_profile, USER_DB_PATH, user_id)
+                prof = await asyncio.to_thread(
+                    user_storage.get_profile,
+                    USER_DB_PATH,
+                    user_id,
+                    subj,
+                )
                 assert prof is not None
                 await query.edit_message_text(
                     _textbook_pick_saved_html(label, slug, grade, prem),
@@ -5873,7 +6157,7 @@ async def _button_callback_dispatch(
         if profile is None:
             await query.edit_message_text(
                 "Сначала выбери класс и учебник: команда /start",
-                reply_markup=grade_keyboard(back_to_main=False),
+                reply_markup=subject_keyboard(back_to_main=False),
             )
             return
         if not user_storage.homework_complete(profile):
@@ -5896,7 +6180,7 @@ async def _button_callback_dispatch(
         if profile is None:
             await query.edit_message_text(
                 "Сначала выбери класс и учебник: команда /start",
-                reply_markup=grade_keyboard(back_to_main=False),
+                reply_markup=subject_keyboard(back_to_main=False),
             )
             return
         if not user_storage.homework_complete(profile):
@@ -5943,7 +6227,7 @@ async def _button_callback_dispatch(
         if profile is None:
             await query.edit_message_text(
                 "Сначала выбери учебник: /start",
-                reply_markup=grade_keyboard(back_to_main=False),
+                reply_markup=subject_keyboard(back_to_main=False),
             )
             return
         if not user_storage.homework_complete(profile):
@@ -5982,7 +6266,7 @@ async def _button_callback_dispatch(
         if profile is None:
             await query.edit_message_text(
                 "Сначала выбери учебник: /start",
-                reply_markup=grade_keyboard(back_to_main=False),
+                reply_markup=subject_keyboard(back_to_main=False),
             )
             return
         cached_files = context.user_data.get(_LAST_CHECK_FILE_IDS) or []
@@ -6112,7 +6396,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             context,
             await update.message.reply_text(
                 "Сначала выбери класс и учебник: команда /start",
-                reply_markup=grade_keyboard(back_to_main=False),
+                reply_markup=subject_keyboard(back_to_main=False),
             ),
         )
         return
@@ -6410,7 +6694,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 context,
                 await update.message.reply_text(
                     "Сначала укажи задание — кнопка «Указать задание» или /start.",
-                    reply_markup=grade_keyboard(back_to_main=False)
+                    reply_markup=subject_keyboard(back_to_main=False)
                     if profile is None
                     else get_main_keyboard(
                         uploaded=_user_has_uploaded_photo(user_id),
@@ -6585,6 +6869,7 @@ def main() -> None:
     app.add_handler(TypeHandler(Update, _metrics_on_update), group=-1)
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("link", link_cmd))
     app.add_handler(CommandHandler("textbook", textbook_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
     app.add_handler(CommandHandler("support", support_cmd))

@@ -296,6 +296,7 @@ def test_handle_voice_homework_route_sends_to_check(
         url="https://gdz.ru/x",
         label="Мерзляк 6",
         is_premium=False,
+        subject_slug="matematika",
     )
     user_storage.set_homework_meta(
         db_path,

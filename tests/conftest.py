@@ -3,7 +3,39 @@
 
 from __future__ import annotations
 
+import sys
+import types
+from unittest.mock import MagicMock
+
 import pytest
+
+
+def _openai_exc(name: str) -> type[Exception]:
+    class _Exc(Exception):
+        def __init__(self, *args, **kwargs):
+            super().__init__(args[0] if args else kwargs.get("message", name))
+
+    _Exc.__name__ = name
+    return _Exc
+
+
+class _APIStatusError(Exception):
+    def __init__(self, *args, message: str = "", response=None, body=None, **kwargs):
+        self.message = message or (args[0] if args else "")
+        super().__init__(self.message)
+        self.response = response
+        self.status_code = getattr(response, "status_code", None) if response else None
+        self.body = body
+
+
+@pytest.fixture(autouse=True)
+def _stub_openai_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Локальные import openai в ai_checker.py; без пакета openai patch() падает."""
+    module = types.ModuleType("openai")
+    module.APIConnectionError = _openai_exc("APIConnectionError")
+    module.APIStatusError = _APIStatusError
+    module.AsyncOpenAI = MagicMock()
+    monkeypatch.setitem(sys.modules, "openai", module)
 
 
 @pytest.fixture(autouse=True)
@@ -60,5 +92,9 @@ def _clear_env_for_unit_tests(monkeypatch: pytest.MonkeyPatch) -> None:
         "DISCLAIMER_QUIZ_OPT_2",
         "DISCLAIMER_QUIZ_OPT_3",
         "DISCLAIMER_ACCEPT_BUTTON",
+        "MOTOK_HUB_URL",
+        "MOTOK_HUB_TOKEN_SECRET",
+        "MOTOK_INTERNAL_TOKEN",
+        "VLLM_VISION",
     ):
         monkeypatch.delenv(key, raising=False)

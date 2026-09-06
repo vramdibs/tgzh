@@ -51,6 +51,17 @@ VLLM_MODEL_DEFAULT: Final = "qwen/qwen3-vl-8b"
 VLLM_CONTEXT_WINDOW: Final = 32768
 VLLM_VISION: Final = True
 
+
+def model_accepts_images() -> bool:
+    """VL payload (image_url). VLLM_VISION=0|1 перекрывает эвристику по имени модели."""
+    raw = (os.getenv("VLLM_VISION") or "").strip().lower()
+    if raw in ("0", "false", "no"):
+        return False
+    if raw in ("1", "true", "yes"):
+        return True
+    model = (os.getenv("VLLM_MODEL") or VLLM_MODEL_DEFAULT).strip().lower()
+    return "vl" in model.split("/")[-1] or "vision" in model
+
 # Строка в конце ответа ученику, если pre-OCR дал непустой блок (см. summarize_check_parts)
 PREOCR_RESULT_FOOTER_LINE: Final = (
     "Предварительное распознавание текста (pre-OCR) использовано."
@@ -95,6 +106,32 @@ _DEFAULT_CHECK_HOMEWORK: Final = (
     "Для любых заданий: опиши существенные ошибки и что сделано верно. Не используй отдельный блок или заголовок Вывод "
     "(в том числе **Вывод:** в markdown). Если на фото другое задание - явно напиши об этом. Пиши по-русски."
 )
+
+_MATH_SUBJECT_SLUGS: Final = frozenset({"matematika", "algebra", "geometriya"})
+
+_DEFAULT_SUBJECT_ROLE: Final = {
+    "matematika": (
+        "Ты помогаешь проверять домашнее задание по математике. "
+        "Сверяй вычисления, рассуждения и оформление ответа."
+    ),
+    "algebra": (
+        "Ты помогаешь проверять домашнее задание по алгебре. "
+        "Сверяй уравнения, преобразования выражений и числовые ответы."
+    ),
+    "geometriya": (
+        "Ты помогаешь проверять домашнее задание по геометрии. "
+        "Сверяй чертежи, доказательства, вычисления длин, площадей и углов."
+    ),
+    "russkiy-yazyk": (
+        "Ты помогаешь проверять домашнее задание по русскому языку. "
+        "Сверяй орфографию, пунктуацию, разбор слов и предложений, правописание. "
+        "Не применяй правила проверки математических вычислений."
+    ),
+    "fizika": (
+        "Ты помогаешь проверять домашнее задание по физике. "
+        "Сверяй формулы, единицы измерения, чертежи и ход решения задач."
+    ),
+}
 
 _DEFAULT_PROMPT_IGNORE_GDZ: Final = (
     "Если на изображении виден текст сайта готовых домашних заданий — латиницей **gdz.ru** (любой регистр, в том числе водяной знак) "
@@ -668,17 +705,108 @@ def chat_max_response_tokens() -> int:
     return _int_env("CHAT_MAX_RESPONSE_TOKENS", default=2048, lo=128, hi=8192)
 
 
-async def stream_chat_via_cursor(
-    messages: list[dict[str, str]],
-    *,
-    on_delta,
-):
-    """Стрим chat.completions через **fallback OpenAI-эндпоинт** (Cursor-bridge).
+CHAT_CURSOR_MODEL_DEFAULT: Final = "composer-2.5"
+CHAT_CURSOR_MODEL_FALLBACK: Final = "cursor-grok-4.6-low"
 
-    `on_delta(piece: str)` вызывается на каждый непустой фрагмент токена. Возвращает
-    итоговую полную строку ответа (накопленную). Кидает RuntimeError, если fallback
-    не сконфигурирован, или прокидывает исключение клиента OpenAI при сетевой ошибке.
-    """
+CHAT_CURSOR_MODEL_LABELS: Final[dict[str, str]] = {
+    "composer-2.5": "Composer 2.5",
+    "composer-2": "Composer 2",
+    "cursor-grok-4.6-low": "Grok 4.6 Low",
+}
+
+
+def _chat_cursor_model_slug_blocked(slug: str) -> bool:
+    """Исключаем Fast-варианты и reasoning выше Low из каталога /chat."""
+    name = (slug or "").strip().lower()
+    if not name:
+        return True
+    if "-fast" in name or name.endswith("fast"):
+        return True
+    if "-thinking-high" in name or "-thinking-medium" in name:
+        return True
+    if name.endswith("-high") or name.endswith("-medium"):
+        return True
+    return False
+
+
+def chat_cursor_model_default() -> str:
+    raw = (os.getenv("CHAT_CURSOR_MODEL_DEFAULT") or CHAT_CURSOR_MODEL_DEFAULT).strip()
+    return raw or CHAT_CURSOR_MODEL_DEFAULT
+
+
+def chat_cursor_model_fallback() -> str:
+    raw = (os.getenv("CHAT_CURSOR_MODEL_FALLBACK") or CHAT_CURSOR_MODEL_FALLBACK).strip()
+    return raw or CHAT_CURSOR_MODEL_FALLBACK
+
+
+def chat_cursor_model_catalog() -> tuple[tuple[str, str], ...]:
+    """Допустимые модели /chat: без Fast, reasoning только Low (по slug)."""
+    raw = (os.getenv("CHAT_CURSOR_MODELS") or "").strip()
+    if raw:
+        slugs = [item.strip() for item in raw.split(",") if item.strip()]
+    else:
+        slugs = [chat_cursor_model_default(), chat_cursor_model_fallback()]
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for slug in slugs:
+        if _chat_cursor_model_slug_blocked(slug) or slug in seen:
+            continue
+        seen.add(slug)
+        label = CHAT_CURSOR_MODEL_LABELS.get(slug, slug)
+        out.append((slug, label))
+    if out:
+        return tuple(out)
+    default = chat_cursor_model_default()
+    return ((default, CHAT_CURSOR_MODEL_LABELS.get(default, default)),)
+
+
+def chat_cursor_model_label(slug: str) -> str:
+    for model_slug, label in chat_cursor_model_catalog():
+        if model_slug == slug:
+            return label
+    return CHAT_CURSOR_MODEL_LABELS.get(slug, slug)
+
+
+def chat_resolve_cursor_model(requested: str | None) -> str:
+    allowed = {slug for slug, _ in chat_cursor_model_catalog()}
+    name = (requested or "").strip()
+    if name and name in allowed:
+        return name
+    default = chat_cursor_model_default()
+    if default in allowed:
+        return default
+    return next(iter(allowed))
+
+
+def chat_cursor_model_try_chain(primary: str) -> list[str]:
+    """При дефолтной модели добавляем fallback Grok Low, если она другая."""
+    chain = [primary]
+    if primary == chat_cursor_model_default():
+        fb = chat_cursor_model_fallback()
+        if fb and fb not in chain:
+            chain.append(fb)
+    return chain
+
+
+def _cursor_model_unavailable(exc: Any) -> bool:
+    from openai import APIStatusError
+
+    if not isinstance(exc, APIStatusError):
+        return False
+    if exc.status_code not in (400, 404, 422):
+        return False
+    body_text = ""
+    try:
+        body_text = (exc.response.text or "").lower() if exc.response is not None else ""
+    except Exception:
+        body_text = ""
+    if not body_text:
+        return exc.status_code in (404, 422)
+    markers = ("model", "allowed", "not in", "unavailable", "invalid")
+    return any(marker in body_text for marker in markers)
+
+
+async def _cursor_openai_client():
     from openai import AsyncOpenAI
 
     if not _fallback_ready():
@@ -686,26 +814,32 @@ async def stream_chat_via_cursor(
 
     fb_url = _fallback_base_url()
     fb_key = _fallback_api_key() or "EMPTY"
-    fb_model = _fallback_model()
     fb_timeout = _fallback_timeout_s()
     fb_http_client = await _get_fallback_http_client()
     if fb_http_client is not None:
-        client = AsyncOpenAI(
+        return AsyncOpenAI(
             base_url=fb_url,
             api_key=fb_key,
             timeout=fb_timeout,
             http_client=fb_http_client,
         )
-    else:
-        client = AsyncOpenAI(base_url=fb_url, api_key=fb_key, timeout=fb_timeout)
+    return AsyncOpenAI(base_url=fb_url, api_key=fb_key, timeout=fb_timeout)
 
+
+async def _stream_chat_model_once(
+    client,
+    model: str,
+    messages: list[dict[str, str]],
+    *,
+    on_delta,
+) -> str:
     from openai import APIStatusError
 
     full_parts: list[str] = []
 
     async def _consume_stream() -> None:
         stream = await client.chat.completions.create(
-            model=fb_model,
+            model=model,
             messages=messages,
             temperature=chat_stream_temperature(),
             max_tokens=chat_max_response_tokens(),
@@ -736,9 +870,6 @@ async def stream_chat_via_cursor(
     try:
         await _consume_stream()
     except APIStatusError as e:
-        # cursor-bridge может не поддерживать stream=true (отвечает 400). В этом случае
-        # делаем один обычный (нестримовый) вызов и эмитим ответ целиком одной дельтой —
-        # для бота это выглядит как стрим из одного куска, без падения сессии чата.
         body_text = ""
         try:
             body_text = (e.response.text or "") if e.response is not None else ""
@@ -750,7 +881,7 @@ async def stream_chat_via_cursor(
             )
             full_parts.clear()
             response = await client.chat.completions.create(
-                model=fb_model,
+                model=model,
                 messages=messages,
                 temperature=chat_stream_temperature(),
                 max_tokens=chat_max_response_tokens(),
@@ -766,14 +897,55 @@ async def stream_chat_via_cursor(
                         await on_delta(content)
         else:
             raise
-
     return "".join(full_parts)
+
+
+async def stream_chat_via_cursor(
+    messages: list[dict[str, str]],
+    *,
+    on_delta,
+    model: str | None = None,
+):
+    """Стрим chat.completions через **fallback OpenAI-эндпоинт** (Cursor-bridge).
+
+    `on_delta(piece: str)` вызывается на каждый непустой фрагмент токена. Возвращает
+    итоговую полную строку ответа (накопленную). Кидает RuntimeError, если fallback
+    не сконфигурирован, или прокидывает исключение клиента OpenAI при сетевой ошибке.
+    """
+    client = await _cursor_openai_client()
+    primary = chat_resolve_cursor_model(model)
+    models_to_try = chat_cursor_model_try_chain(primary)
+    last_exc: Exception | None = None
+
+    for idx, model_slug in enumerate(models_to_try):
+        try:
+            if idx > 0:
+                logger.warning(
+                    "chat: model %s unavailable, retrying with %s",
+                    models_to_try[idx - 1],
+                    model_slug,
+                )
+            return await _stream_chat_model_once(
+                client,
+                model_slug,
+                messages,
+                on_delta=on_delta,
+            )
+        except Exception as e:
+            last_exc = e
+            if idx < len(models_to_try) - 1 and _cursor_model_unavailable(e):
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
+    return ""
 
 
 async def chat_once_via_cursor(
     messages: list[dict],
     *,
     timeout_s: float | None = None,
+    model: str | None = None,
 ) -> str:
     """Одноразовый (нестримовый) chat.completions через Cursor-bridge.
 
@@ -788,37 +960,55 @@ async def chat_once_via_cursor(
     """
     from openai import AsyncOpenAI
 
-    if not _fallback_ready():
-        raise RuntimeError("vllm fallback not configured (CHAT requires VLLM_FALLBACK_*)")
+    client = await _cursor_openai_client()
+    if timeout_s and timeout_s > 0:
+        fb_timeout = float(timeout_s)
+        fb_url = _fallback_base_url()
+        fb_key = _fallback_api_key() or "EMPTY"
+        fb_http_client = await _get_fallback_http_client()
+        if fb_http_client is not None:
+            client = AsyncOpenAI(
+                base_url=fb_url,
+                api_key=fb_key,
+                timeout=fb_timeout,
+                http_client=fb_http_client,
+            )
+        else:
+            client = AsyncOpenAI(base_url=fb_url, api_key=fb_key, timeout=fb_timeout)
 
-    fb_url = _fallback_base_url()
-    fb_key = _fallback_api_key() or "EMPTY"
-    fb_model = _fallback_model()
-    fb_timeout = float(timeout_s) if timeout_s and timeout_s > 0 else _fallback_timeout_s()
-    fb_http_client = await _get_fallback_http_client()
-    if fb_http_client is not None:
-        client = AsyncOpenAI(
-            base_url=fb_url,
-            api_key=fb_key,
-            timeout=fb_timeout,
-            http_client=fb_http_client,
-        )
-    else:
-        client = AsyncOpenAI(base_url=fb_url, api_key=fb_key, timeout=fb_timeout)
+    primary = chat_resolve_cursor_model(model)
+    models_to_try = chat_cursor_model_try_chain(primary)
+    last_exc: Exception | None = None
 
-    response = await client.chat.completions.create(
-        model=fb_model,
-        messages=messages,
-        temperature=chat_stream_temperature(),
-        max_tokens=chat_max_response_tokens(),
-        stream=False,
-    )
-    choices = getattr(response, "choices", None) or []
-    if not choices:
-        return ""
-    msg = getattr(choices[0], "message", None)
-    content = getattr(msg, "content", None) if msg is not None else None
-    return content or ""
+    for idx, model_slug in enumerate(models_to_try):
+        try:
+            if idx > 0:
+                logger.warning(
+                    "chat once: model %s unavailable, retrying with %s",
+                    models_to_try[idx - 1],
+                    model_slug,
+                )
+            response = await client.chat.completions.create(
+                model=model_slug,
+                messages=messages,
+                temperature=chat_stream_temperature(),
+                max_tokens=chat_max_response_tokens(),
+                stream=False,
+            )
+            choices = getattr(response, "choices", None) or []
+            if not choices:
+                return ""
+            msg = getattr(choices[0], "message", None)
+            content = getattr(msg, "content", None) if msg is not None else None
+            return content or ""
+        except Exception as e:
+            last_exc = e
+            if idx < len(models_to_try) - 1 and _cursor_model_unavailable(e):
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
+    return ""
 
 
 def _mime_from_bytes(data: bytes) -> str:
@@ -865,6 +1055,33 @@ def _prompt_mixed_numbers() -> str:
     t = _env_prompt("VLLM_PROMPT_MIXED_NUMBERS", _DEFAULT_PROMPT_MIXED_NUMBERS)
     return t.replace("{marker}", TGZH_MIXED_NUMBERS_MARKER).replace(
         "{MARKER}", TGZH_MIXED_NUMBERS_MARKER
+    )
+
+
+def _normalize_subject_slug(subject_slug: str | None) -> str:
+    s = (subject_slug or "").strip()
+    if s in _DEFAULT_SUBJECT_ROLE:
+        return s
+    return "matematika"
+
+
+def _subject_role_block(subject_slug: str | None) -> str:
+    return _DEFAULT_SUBJECT_ROLE[_normalize_subject_slug(subject_slug)]
+
+
+def _multi_summary_intro(subject_slug: str | None) -> str:
+    subj = _normalize_subject_slug(subject_slug)
+    if subj in _MATH_SUBJECT_SLUGS:
+        return _env_prompt("VLLM_PROMPT_MULTI_SUMMARY_INTRO", _DEFAULT_PROMPT_MULTI_SUMMARY_INTRO)
+    role = _DEFAULT_SUBJECT_ROLE[subj]
+    return (
+        f"{role} Ниже - текстовые результаты проверки каждого снимка по отдельности (уже без картинок). "
+        "Сформируй один ответ ученику на русском с кратким общим итогом и при необходимости по каждому фото. "
+        "ОБЯЗАТЕЛЬНО соблюдай оформление для чата: по каждому заданию РОВНО ОДНА строка-пункт списка "
+        "(- Задание N: ...), 1-2 коротких предложения. "
+        "Неверные ответы - в markdown **жирным** вокруг короткой фразы. "
+        "Не используй отдельный заголовок \"Вывод:\". "
+        "Условие задачи ученик видит отдельно — не вставляй в сводку дословный текст условия."
     )
 
 
@@ -979,7 +1196,9 @@ def _full_check_prompt(
     gdz_verif_pages: str = "",
     gdz_verif_works: str = "",
     gdz_task_condition: str = "",
+    subject_slug: str = "matematika",
 ) -> str:
+    subj = _normalize_subject_slug(subject_slug)
     base = _homework_instruction(paragraph, exercise, page, textbook_label, grade)
     gdz_block = _gdz_paragraph_checklist_block(
         gdz_exercises,
@@ -987,7 +1206,9 @@ def _full_check_prompt(
         gdz_verif_works,
     )
     rubric = _check_rubric()
-    chunks = [_prompt_response_format(), _prompt_mixed_numbers(), base]
+    chunks = [_prompt_response_format(), _subject_role_block(subj), base]
+    if subj in _MATH_SUBJECT_SLUGS:
+        chunks.insert(1, _prompt_mixed_numbers())
     tc_block = _gdz_task_condition_block(gdz_task_condition)
     if tc_block:
         chunks.append(tc_block)
@@ -1014,6 +1235,7 @@ async def check_homework(
     gdz_verif_works: str = "",
     gdz_task_condition: str = "",
     force_fallback: bool = False,
+    subject_slug: str = "matematika",
 ) -> str:
     """
     Анализирует вложение (фото ДЗ или поддерживаемый документ).
@@ -1064,6 +1286,7 @@ async def check_homework(
         gdz_verif_works=gdz_verif_works,
         gdz_task_condition=gdz_task_condition,
         force_fallback=force_fallback,
+        subject_slug=subject_slug,
     )
 
 
@@ -1160,9 +1383,8 @@ async def _check_vllm(
     gdz_verif_works: str = "",
     gdz_task_condition: str = "",
     force_fallback: bool = False,
+    subject_slug: str = "matematika",
 ) -> str:
-    from openai import APIConnectionError, APIStatusError
-
     model = os.getenv("VLLM_MODEL", VLLM_MODEL_DEFAULT)
     max_tokens = _int_env(
         "VLLM_MAX_TOKENS",
@@ -1188,6 +1410,7 @@ async def _check_vllm(
             gdz_verif_pages=gdz_verif_pages,
             gdz_verif_works=gdz_verif_works,
             gdz_task_condition=gdz_task_condition,
+            subject_slug=subject_slug,
         )
     )
 
@@ -1199,22 +1422,25 @@ async def _check_vllm(
         if preocr_used:
             instr = f"{pre_block.strip()}\n\n{instr}"
 
-        if force_fallback:
-            # Cursor-bridge ходит к cursor-agent (text-only): base64-картинки бесполезны,
-            # модель всё равно не «видит» рисунок. Поэтому при повторной проверке через
-            # Cursor отправляем ТЕКСТОВЫЙ payload — pre-OCR-блок (уже без водяных
-            # gdz.ru/гдз.ру) + основная инструкция со сверкой по gdz_task_condition.
-            # Если pre-OCR недоступен — возвращаем явное сообщение, чтобы пользователь
-            # увидел, что повторная проверка не на чем основываться.
+        text_only = force_fallback or not model_accepts_images()
+        if text_only:
+            # Cursor-bridge и текстовые Qwen 3 / 3.5 картинку не видят: только pre-OCR.
             if not preocr_used:
                 logger.warning(
-                    "cursor recheck without preocr: PREOCR_URL not configured or returned empty"
+                    "text-only image check without preocr force_fallback=%s",
+                    force_fallback,
                 )
+                if force_fallback:
+                    return (
+                        "Повторная проверка через Cursor не выполнена: "
+                        "не удалось получить предварительное OCR-распознавание изображения "
+                        "(переменная PREOCR_URL не настроена или сервис не вернул текст). "
+                        "Cursor работает только с текстом."
+                        + _analysis_result_footer(model=model, preocr_used=False)
+                    )
                 return (
-                    "Повторная проверка через Cursor не выполнена: "
-                    "не удалось получить предварительное OCR-распознавание изображения "
-                    "(переменная PREOCR_URL не настроена или сервис не вернул текст). "
-                    "Cursor работает только с текстом."
+                    "Проверка по фото не выполнена: модель без зрения, "
+                    "не удалось получить OCR (PREOCR_URL не настроена или пустой ответ)."
                     + _analysis_result_footer(model=model, preocr_used=False)
                 )
             content: list[dict] = [{"type": "text", "text": instr}]
@@ -1225,6 +1451,12 @@ async def _check_vllm(
                 {"type": "image_url", "image_url": {"url": f"data:{ct};base64,{b64}"}},
             ]
     elif ct == "application/pdf":
+        if force_fallback or not model_accepts_images():
+            return (
+                "PDF для текстовой модели не поддерживается. "
+                "Пришлите фото страницы или текст решения."
+                + _analysis_result_footer(model=model, preocr_used=False)
+            )
         b64 = base64.standard_b64encode(data).decode()
         content = [
             {"type": "text", "text": instr},
@@ -1254,6 +1486,8 @@ async def _check_vllm(
         return unsup.format(mime=ct or "неизвестно")
 
     foot = _analysis_result_footer(model=model, preocr_used=preocr_used)
+    from openai import APIConnectionError, APIStatusError
+
     try:
         response, used_fb, model_used = await _chat_with_fallback(
             stage="check",
@@ -1293,7 +1527,7 @@ async def _check_vllm(
     )
 
 
-def _multi_summary_user_text(parts: list[str]) -> str:
+def _multi_summary_user_text(parts: list[str], subject_slug: str = "matematika") -> str:
     chunks: list[str] = []
     for i, p in enumerate(parts, start=1):
         t = (p or "").strip()
@@ -1312,12 +1546,17 @@ def _multi_summary_user_text(parts: list[str]) -> str:
             if cov.strip():
                 return f"{cov}\n\n{inner}"
             return inner
-    intro = _env_prompt("VLLM_PROMPT_MULTI_SUMMARY_INTRO", _DEFAULT_PROMPT_MULTI_SUMMARY_INTRO)
+    intro = _multi_summary_intro(subject_slug)
     rem = _prompt_response_format_reminder()
     return f"{intro}\n\n{cov}\n\n{rem}\n\n{block}"
 
 
-async def summarize_check_parts(parts: list[str], *, force_fallback: bool = False) -> str:
+async def summarize_check_parts(
+    parts: list[str],
+    *,
+    force_fallback: bool = False,
+    subject_slug: str = "matematika",
+) -> str:
     """
     Второй вызов LLM: объединить несколько текстовых результатов проверки в одну сводку.
     При одном элементе возвращает его без вызова API.
@@ -1349,7 +1588,7 @@ async def summarize_check_parts(parts: list[str], *, force_fallback: bool = Fals
         )
 
     max_tokens = _int_env("VLLM_MAX_TOKENS", 4096, lo=64, hi=2048)
-    instr = _append_no_think_to_prompt(_multi_summary_user_text(clean))
+    instr = _append_no_think_to_prompt(_multi_summary_user_text(clean, subject_slug))
 
     foot = _analysis_result_footer(model=model, preocr_used=preocr_in_parts)
     try:

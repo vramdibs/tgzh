@@ -8,7 +8,7 @@ import time
 from contextlib import asynccontextmanager, suppress
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
 load_dotenv()
@@ -18,12 +18,14 @@ from pydantic import BaseModel, Field
 
 import preocr_client
 import tgzh_metrics
+from motok_jwt import HubJwtError, verify_homework_jwt
 from ai_checker import (
     allowed_check_mime,
     check_homework,
     chat_default_system_prompt,
     chat_max_history_turns,
     chat_once_via_cursor,
+    chat_resolve_cursor_model,
     generate_check_quip,
     stream_chat_via_cursor,
     summarize_check_parts,
@@ -79,6 +81,7 @@ class SummarizeRequest(BaseModel):
         max_length=_MAX_SUMMARIZE_PARTS,
     )
     engine: str = Field(default="auto")
+    subject_slug: str = Field(default="matematika")
 
 
 class QuipRequest(BaseModel):
@@ -106,8 +109,11 @@ async def check_quip(body: QuipRequest) -> CheckResponse:
 
 
 @app.post("/check/summarize", response_model=CheckResponse)
-async def check_summarize(body: SummarizeRequest) -> CheckResponse:
+async def check_summarize(request: Request, body: SummarizeRequest) -> CheckResponse:
     """Текстовая сводка нескольких результатов проверки (второй вызов LLM)."""
+    person_id = _hub_person_id(request)
+    if person_id:
+        logger.info("summarize person_id=%s", person_id)
     if len(body.parts) < 2:
         raise HTTPException(400, "Нужно минимум два фрагмента для сводки")
     too_long = next((i for i, p in enumerate(body.parts) if len(p) > _MAX_SUMMARIZE_PART_LEN), -1)
@@ -119,7 +125,11 @@ async def check_summarize(body: SummarizeRequest) -> CheckResponse:
     engine = _resolve_engine(body.engine)
     t0 = time.perf_counter()
     try:
-        result = await summarize_check_parts(body.parts, force_fallback=engine == "cursor")
+        result = await summarize_check_parts(
+            body.parts,
+            force_fallback=engine == "cursor",
+            subject_slug=body.subject_slug,
+        )
     except Exception:
         logger.exception("summarize_check_parts failed")
         raise
@@ -143,6 +153,21 @@ async def check_summarize(body: SummarizeRequest) -> CheckResponse:
     return CheckResponse(result=result)
 
 
+def _hub_person_id(request: Request) -> str | None:
+    secret = (os.getenv("MOTOK_HUB_TOKEN_SECRET") or "").strip()
+    if not secret:
+        return None
+    raw = request.headers.get("authorization") or ""
+    if not raw.lower().startswith("bearer "):
+        raise HTTPException(401, "Нужен токен хаба")
+    token = raw.split(" ", 1)[1].strip()
+    try:
+        payload = verify_homework_jwt(token, secret=secret)
+    except HubJwtError:
+        raise HTTPException(401, "Токен хаба недействителен") from None
+    return str(payload["sub"])
+
+
 def _max_check_upload_bytes() -> int:
     raw = (os.getenv("CHECK_MAX_UPLOAD_BYTES") or "").strip()
     if raw.isdigit():
@@ -152,6 +177,7 @@ def _max_check_upload_bytes() -> int:
 
 @app.post("/check", response_model=CheckResponse)
 async def check_photo(
+    request: Request,
     photo: UploadFile = File(...),
     paragraph: str = Form(""),
     exercise: str = Form(""),
@@ -162,9 +188,12 @@ async def check_photo(
     gdz_verif_pages: str = Form(""),
     gdz_verif_works: str = Form(""),
     gdz_task_condition: str = Form(""),
+    subject_slug: str = Form("matematika"),
     engine: str = Form("auto"),
+    check_id: str = Form(""),
 ) -> CheckResponse:
     """Принимает фото или документ (см. allowed_check_mime), возвращает результат проверки."""
+    person_id = _hub_person_id(request)
     if not allowed_check_mime(photo.content_type):
         logger.warning("check reject bad mime content_type=%r", photo.content_type)
         raise HTTPException(
@@ -196,11 +225,13 @@ async def check_photo(
         student_excerpt = f"<non-text submission {len(data)} bytes>"
 
     logger.info(
-        "check start bytes=%s content_type=%r engine=%s paragraph=%r exercise=%r page=%s grade=%s "
+        "check start bytes=%s content_type=%r engine=%s person_id=%s check_id=%s paragraph=%r exercise=%r page=%s grade=%s "
         "textbook_label=%r gdz_ex_len=%s gdz_vp_len=%s gdz_vw_len=%s gdz_tc_len=%s submission=%s",
         len(data),
         photo.content_type,
         engine_norm,
+        person_id or "-",
+        (check_id or "").strip() or "-",
         para_s[:200] + ("…" if len(para_s) > 200 else ""),
         ex,
         page_val,
@@ -229,6 +260,7 @@ async def check_photo(
             gdz_verif_works=gdz_verif_works.strip(),
             gdz_task_condition=gdz_task_condition.strip(),
             force_fallback=engine_norm == "cursor",
+            subject_slug=subject_slug.strip() or "matematika",
         )
     except Exception:
         failed = True
@@ -284,6 +316,7 @@ class ChatStreamRequest(BaseModel):
     user_id: int = 0
     messages: list[ChatMessage] = Field(default_factory=list)
     system_prompt: str | None = None
+    model: str | None = None
 
 
 def _content_text_chars(content: str | list[ChatMessageContentPart]) -> int:
@@ -420,9 +453,10 @@ async def chat_stream(req: ChatStreamRequest):
                 elif part.get("type") == "image_url":
                     last_image_count += 1
     logger.info(
-        "chat stream start user_id=%s msgs=%s last_user_chars=%s last_user_images=%s",
+        "chat stream start user_id=%s msgs=%s model=%s last_user_chars=%s last_user_images=%s",
         req.user_id,
         len(messages),
+        chat_resolve_cursor_model(req.model),
         last_text_chars,
         last_image_count,
     )
@@ -435,7 +469,11 @@ async def chat_stream(req: ChatStreamRequest):
 
     async def runner() -> None:
         try:
-            full = await stream_chat_via_cursor(messages, on_delta=on_delta)
+            full = await stream_chat_via_cursor(
+                messages,
+                on_delta=on_delta,
+                model=req.model,
+            )
             elapsed = time.perf_counter() - t0
             logger.info(
                 "chat stream done user_id=%s elapsed_s=%.2f reply_chars=%s",
@@ -481,6 +519,7 @@ class ChatOnceRequest(BaseModel):
     user_id: int = 0
     messages: list[ChatMessage] = Field(default_factory=list)
     timeout_s: float | None = None
+    model: str | None = None
 
 
 @app.post("/chat/once")
@@ -529,15 +568,20 @@ async def chat_once(req: ChatOnceRequest) -> dict:
     timeout = min(max(30.0, timeout), _CHAT_ONCE_MAX_TIMEOUT_S)
 
     logger.info(
-        "chat once start user_id=%s msgs=%s total_chars=%s timeout_s=%.1f",
+        "chat once start user_id=%s msgs=%s total_chars=%s model=%s timeout_s=%.1f",
         req.user_id,
         len(out_msgs),
         total_chars,
+        chat_resolve_cursor_model(req.model),
         timeout,
     )
     t0 = time.perf_counter()
     try:
-        text = await chat_once_via_cursor(out_msgs, timeout_s=timeout)
+        text = await chat_once_via_cursor(
+            out_msgs,
+            timeout_s=timeout,
+            model=req.model,
+        )
     except RuntimeError as e:
         # fallback не сконфигурирован — это конфигурационная, не upstream-ошибка.
         raise HTTPException(503, str(e)) from e

@@ -1,0 +1,9 @@
+# LM Studio на хосте слушает 127.0.0.1:1234 — из bridge-сети контейнера не виден.
+# Подключение: docker compose -f docker-compose.yml -f docker-compose.lmstudio.yml up -d tgzh-server
+# Перед up export VLLM_* и MOTOK_HUB_TOKEN_SECRET (см. README, якорь homework-stack-smoke).
+services:
+  tgzh-server:
+    network_mode: host
+    networks: !reset []
+    ports: !reset []
+    extra_hosts: !reset []

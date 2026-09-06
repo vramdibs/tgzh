@@ -1,0 +1,219 @@
+{
+  "matematika": {
+    "6": [
+      {
+        "grade": 6,
+        "slug": "vilenkin-shvacburd",
+        "url": "https://gdz.ru/class-6/matematika/vilenkin-shvacburd/",
+        "label": "Авторы: Виленкин Н.Я., Жохов В.И., Чесноков А.С., Алекс...",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "vilenkin-13-23",
+        "url": "https://gdz.ru/class-6/matematika/vilenkin-13-23/",
+        "label": "Авторы: Н.Я. Виленкин, В.И. Жохов, А.С. Чесноков, С.И. ...",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "a-g-merzlyak",
+        "url": "https://gdz.ru/class-6/matematika/a-g-merzlyak/",
+        "label": "Авторы: А.Г. Мерзляк, В.Б. Полонский, М.С. Якир Издател...",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "dorofeev",
+        "url": "https://gdz.ru/class-6/matematika/dorofeev/",
+        "label": "Авторы: Л. Г. Петерсон, Г. В. Дорофеев Издательство: Юв...",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "reshebnik-nikolskiy-s-m-2013",
+        "url": "https://gdz.ru/class-6/matematika/reshebnik-nikolskiy-s-m-2013/",
+        "label": "Авторы: Никольский С.М., М.К. Потапов, Н.Н. Решетников,...",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "dorofeev-sharygin",
+        "url": "https://gdz.ru/class-6/matematika/dorofeev-sharygin/",
+        "label": "Авторы: Г.В. Дорофеев, И.Ф. Шарыгин, С.Б. Суворова, Е.А...",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "bunimovich-sferi",
+        "url": "https://gdz.ru/class-6/matematika/bunimovich-sferi/",
+        "label": "Авторы: Е. А. Бунимович, Л. В. Кузнецова, С. С. Минаева...",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "kapustina",
+        "url": "https://gdz.ru/class-6/matematika/kapustina/",
+        "label": "Для обучающихся с интеллектуальными нарушениями Авторы:...",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "zubareva-i-mordkovich-6",
+        "url": "https://gdz.ru/class-6/matematika/zubareva-i-mordkovich-6/",
+        "label": "Авторы: Зубарева И.И., Мордкович А.Г. Издательство: Мне...",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "tkacheva",
+        "url": "https://gdz.ru/class-6/matematika/tkacheva/",
+        "label": "Автор: Ткачева М.В.",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "aldamuratova",
+        "url": "https://gdz.ru/class-6/matematika/aldamuratova/",
+        "label": "Авторы: Алдамуратова Т.А., Байшоланова К.С., Байшоланов...",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "abilkasimova",
+        "url": "https://gdz.ru/class-6/matematika/abilkasimova/",
+        "label": "Авторы: Абылкасымова А.Е., Кучер Т.П., Жумагулова З.А. ...",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "istomina",
+        "url": "https://gdz.ru/class-6/matematika/istomina/",
+        "label": "Автор: Истомина Н.Б. Издательство: Ассоциация 21 век",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "muravin",
+        "url": "https://gdz.ru/class-6/matematika/muravin/",
+        "label": "Авторы: Муравин Г.К., Муравина О.В. Издательство: Дрофа",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "alisheva-amosova",
+        "url": "https://gdz.ru/class-6/matematika/alisheva-amosova/",
+        "label": "Для обучающихся с интеллектуальными нарушениями Авторы:...",
+        "is_premium": true
+      },
+      {
+        "grade": 6,
+        "slug": "hodot",
+        "url": "https://gdz.ru/class-6/matematika/hodot/",
+        "label": "Наглядная геометрия Авторы: Ходот Т.Г., Ходот А.Ю.",
+        "is_premium": true
+      },
+      {
+        "grade": 6,
+        "slug": "kozlov",
+        "url": "https://gdz.ru/class-6/matematika/kozlov/",
+        "label": "Авторы: Козлов В.В., Никитин А.А., Белоносов В.С., Маль...",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "bashmakov",
+        "url": "https://gdz.ru/class-6/matematika/bashmakov/",
+        "label": "Автор: Башмаков М.И. Издательство: Аст/Астрель Серия: П...",
+        "is_premium": true
+      },
+      {
+        "grade": 6,
+        "slug": "kozlova-rubin",
+        "url": "https://gdz.ru/class-6/matematika/kozlova-rubin/",
+        "label": "Авторы: Козлова С.А., Рубин А.Г. Издательство: Баласс С...",
+        "is_premium": false
+      }
+    ],
+    "7": [
+      {
+        "grade": 7,
+        "slug": "vysockij-yashenko-bazovij-uroven",
+        "url": "https://gdz.ru/class-7/matematika/vysockij-yashenko-bazovij-uroven/",
+        "label": "Математика 7-9 класс Вероятность и статистика Базовый у...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "peterson",
+        "url": "https://gdz.ru/class-7/matematika/peterson/",
+        "label": "(Алгебра) Базовый уровень Авторы: Петерсон Л.Г., Абраро...",
+        "is_premium": true
+      },
+      {
+        "grade": 7,
+        "slug": "alisheva",
+        "url": "https://gdz.ru/class-7/matematika/alisheva/",
+        "label": "Для обучающихся с интеллектуальными нарушениями Автор: ...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "kozlov",
+        "url": "https://gdz.ru/class-7/matematika/kozlov/",
+        "label": "Авторы: Козлов В.В., Никитин А.А., Белоносов В.С., Маль...",
+        "is_premium": true
+      },
+      {
+        "grade": 7,
+        "slug": "bunimovich-uglublennyj-uroven",
+        "url": "https://gdz.ru/class-7/matematika/bunimovich-uglublennyj-uroven/",
+        "label": "Вероятность и статистика Углубленный уровень Авторы: Бу...",
+        "is_premium": true
+      },
+      {
+        "grade": 7,
+        "slug": "vysockij-yashchenko-uglublennyj-uroven",
+        "url": "https://gdz.ru/class-7/matematika/vysockij-yashchenko-uglublennyj-uroven/",
+        "label": "Математика 7-9 класс Вероятность и статистика Углубленн...",
+        "is_premium": true
+      }
+    ],
+    "8": [],
+    "9": [],
+    "10": [],
+    "11": []
+  },
+  "algebra": {
+    "6": [],
+    "7": [],
+    "8": [],
+    "9": [],
+    "10": [],
+    "11": []
+  },
+  "geometriya": {
+    "6": [],
+    "7": [],
+    "8": [],
+    "9": [],
+    "10": [],
+    "11": []
+  },
+  "russkiy-yazyk": {
+    "6": [],
+    "7": [],
+    "8": [],
+    "9": [],
+    "10": [],
+    "11": []
+  },
+  "fizika": {
+    "6": [],
+    "7": [],
+    "8": [],
+    "9": [],
+    "10": [],
+    "11": []
+  }
+}

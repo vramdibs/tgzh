@@ -42,6 +42,16 @@ services:
       - "host.docker.internal:host-gateway"
     env_file:
       - .env
+    environment:
+      # JWT от motok hub на POST /check (тот же секрет, что MOTOK_HUB_TOKEN_SECRET в хабе).
+      MOTOK_HUB_TOKEN_SECRET: ${MOTOK_HUB_TOKEN_SECRET:-}
+      # LM Studio на хосте (перекрывает .env при export перед compose up).
+      AI_MOCK: ${AI_MOCK:-0}
+      VLLM_BASE_URL: ${VLLM_BASE_URL:-http://host.docker.internal:1234/v1}
+      VLLM_MODEL: ${VLLM_MODEL:-}
+      VLLM_VISION: ${VLLM_VISION:-0}
+      VLLM_API_KEY: ${VLLM_API_KEY:-lm-studio}
+      VLLM_NO_THINK: ${VLLM_NO_THINK:-1}
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status==200 else 1)\""]
       interval: 10s
@@ -135,8 +145,12 @@ services:
       - .env
     environment:
       # Поверх .env: в рантайме контейнеры в сети compose (имя сервиса tgzh-server), не на host; 127.0.0.1 в боте — это сам контейнер
-      SERVER_URL: http://tgzh-server:8000
-      GDZ_CATALOG_PATH: /app/static/gdz_matematika_textbooks.json
+      SERVER_URL: ${SERVER_URL:-http://tgzh-server:8000}
+      # Хаб motok на хосте mf. Не подставлять MOTOK_HUB_URL=127.0.0.1 из hub.env — в контейнере это loopback.
+      MOTOK_HUB_URL: http://host.docker.internal:54326
+      MOTOK_INTERNAL_TOKEN: ${MOTOK_INTERNAL_TOKEN:-}
+      MOTOK_HUB_TOKEN_SECRET: ${MOTOK_HUB_TOKEN_SECRET:-}
+      GDZ_CATALOG_PATH: /app/static/gdz_catalog.json
       GDZ_CACHE_DIR: /app/data/gdz_cache
       # Граница учебного года для статистики (сентябрь — август). Берём из .env (STATS_TIMEZONE);
       # дефолт оставлен Europe/Moscow и совпадает с .env.example / README.

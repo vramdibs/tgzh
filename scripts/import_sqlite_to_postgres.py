@@ -57,6 +57,12 @@ def main() -> int:
         _copy_table(
             lite,
             pg,
+            "user_settings",
+            ["user_id", "active_subject_slug", "updated_at"],
+        )
+        _copy_table(
+            lite,
+            pg,
             "user_feedback",
             ["user_id", "username", "body", "created_at", "updated_at"],
         )

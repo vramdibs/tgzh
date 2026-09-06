@@ -21,12 +21,13 @@ def test_textbook_popularity_by_grade() -> None:
     with tempfile.TemporaryDirectory() as td:
         path = str(Path(td) / "u.sqlite")
         user_storage.init_db(path)
-        user_storage.set_textbook(path, 1, 6, "book-a", "http://a", "A", False)
-        user_storage.set_textbook(path, 2, 6, "book-a", "http://a", "A", False)
-        user_storage.set_textbook(path, 3, 6, "book-b", "http://b", "B", False)
-        pop = user_storage.textbook_popularity_by_grade(path, 6)
-        assert pop.get("book-a") == 2
-        assert pop.get("book-b") == 1
+        user_storage.set_textbook(path, 1, 6, "book-a", "http://a", "A", False, "matematika")
+        user_storage.set_textbook(path, 2, 6, "book-a", "http://a", "A", False, "matematika")
+        user_storage.set_textbook(path, 3, 6, "book-b", "http://b", "B", False, "algebra")
+        pop_math = user_storage.textbook_popularity_by_grade(path, 6, "matematika")
+        pop_alg = user_storage.textbook_popularity_by_grade(path, 6, "algebra")
+        assert pop_math.get("book-a") == 2
+        assert pop_alg.get("book-b") == 1
 
 
 def test_truncate_inline_button_text() -> None:

@@ -12,6 +12,8 @@ from typing import Any
 
 from tgzh_db import connect, db_path_usable, execute as _e, use_postgres
 
+DEFAULT_SUBJECT_SLUG = "matematika"
+
 
 @dataclass(frozen=True)
 class UserProfile:
@@ -147,6 +149,207 @@ def _migrate_user_profile_grade_subject(conn: Any) -> None:
         _e(conn, "ALTER TABLE user_profile__new RENAME TO user_profile")
 
 
+def _migrate_user_profile_multi_subject(conn: Any) -> None:
+    """Одна строка user_profile на (user_id, subject_slug); таблица user_settings."""
+    has_composite_pk = False
+    if use_postgres():
+        pk = _e(
+            conn,
+            """
+            SELECT a.attname
+            FROM pg_index i
+            JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+            WHERE i.indrelid = 'user_profile'::regclass AND i.indisprimary
+            """,
+        ).fetchall()
+        pk_cols = {r[0] for r in pk}
+        has_composite_pk = pk_cols == {"user_id", "subject_slug"}
+    else:
+        row = _e(
+            conn,
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='user_profile'",
+        ).fetchone()
+        if not row:
+            return
+        info = _e(conn, "PRAGMA table_info(user_profile)").fetchall()
+        pk_cols = [r[1] for r in info if r[5]]
+        has_composite_pk = pk_cols == ["user_id", "subject_slug"]
+
+    if not has_composite_pk:
+        user_type = "BIGINT" if use_postgres() else "INTEGER"
+        _e(
+            conn,
+            f"""
+            CREATE TABLE user_profile__new (
+                user_id {user_type} NOT NULL,
+                subject_slug TEXT NOT NULL DEFAULT 'matematika',
+                grade INTEGER NOT NULL CHECK (grade >= 6 AND grade <= 11),
+                textbook_slug TEXT NOT NULL,
+                textbook_url TEXT NOT NULL,
+                textbook_label TEXT NOT NULL,
+                is_premium INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                hw_paragraph TEXT,
+                hw_exercise TEXT,
+                hw_page INTEGER,
+                PRIMARY KEY (user_id, subject_slug)
+            )
+            """,
+        )
+        _e(
+            conn,
+            """
+            INSERT INTO user_profile__new (
+                user_id, subject_slug, grade, textbook_slug, textbook_url, textbook_label,
+                is_premium, updated_at, hw_paragraph, hw_exercise, hw_page
+            )
+            SELECT user_id,
+                   COALESCE(NULLIF(TRIM(subject_slug), ''), 'matematika'),
+                   grade, textbook_slug, textbook_url, textbook_label,
+                   is_premium, updated_at, hw_paragraph, hw_exercise, hw_page
+            FROM user_profile
+            """,
+        )
+        _e(conn, "DROP TABLE user_profile")
+        _e(conn, "ALTER TABLE user_profile__new RENAME TO user_profile")
+
+    settings_exists = False
+    if use_postgres():
+        settings_exists = bool(
+            _e(
+                conn,
+                """
+                SELECT 1 FROM information_schema.tables
+                WHERE table_name = 'user_settings'
+                """,
+            ).fetchone()
+        )
+    else:
+        settings_exists = bool(
+            _e(
+                conn,
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='user_settings'",
+            ).fetchone()
+        )
+
+    if not settings_exists:
+        user_type = "BIGINT" if use_postgres() else "INTEGER"
+        _e(
+            conn,
+            f"""
+            CREATE TABLE user_settings (
+                user_id {user_type} PRIMARY KEY NOT NULL,
+                active_subject_slug TEXT NOT NULL DEFAULT 'matematika',
+                updated_at TEXT NOT NULL
+            )
+            """,
+        )
+
+    if use_postgres():
+        _e(
+            conn,
+            """
+            INSERT INTO user_settings (user_id, active_subject_slug, updated_at)
+            SELECT user_id,
+                   COALESCE(NULLIF(TRIM(subject_slug), ''), 'matematika'),
+                   updated_at
+            FROM user_profile
+            ON CONFLICT (user_id) DO NOTHING
+            """,
+        )
+    else:
+        _e(
+            conn,
+            """
+            INSERT OR IGNORE INTO user_settings (user_id, active_subject_slug, updated_at)
+            SELECT user_id,
+                   COALESCE(NULLIF(TRIM(subject_slug), ''), 'matematika'),
+                   updated_at
+            FROM user_profile
+            """,
+        )
+
+
+def _row_to_profile(row: Any) -> UserProfile:
+    subj = row[1]
+    if not (subj and str(subj).strip()):
+        subj = DEFAULT_SUBJECT_SLUG
+    return UserProfile(
+        user_id=row[0],
+        grade=row[2],
+        textbook_slug=row[3],
+        textbook_url=row[4],
+        textbook_label=row[5],
+        is_premium=bool(row[6]),
+        hw_paragraph=row[7],
+        hw_exercise=row[8],
+        hw_page=row[9],
+        subject_slug=str(subj),
+    )
+
+
+def _profile_select_sql() -> str:
+    return (
+        "SELECT user_id, subject_slug, grade, textbook_slug, textbook_url, textbook_label, "
+        "is_premium, hw_paragraph, hw_exercise, hw_page "
+        "FROM user_profile WHERE user_id = ? AND subject_slug = ?"
+    )
+
+
+def get_active_subject(path: str, user_id: int) -> str:
+    if not db_path_usable(path):
+        return DEFAULT_SUBJECT_SLUG
+    conn = connect(path)
+    try:
+        row = _e(
+            conn,
+            "SELECT active_subject_slug FROM user_settings WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return DEFAULT_SUBJECT_SLUG
+    sub = str(row[0] or "").strip()
+    return sub or DEFAULT_SUBJECT_SLUG
+
+
+def set_active_subject(path: str, user_id: int, subject_slug: str) -> None:
+    sub = (subject_slug or "").strip() or DEFAULT_SUBJECT_SLUG
+    now = datetime.now(timezone.utc).isoformat()
+    conn = connect(path)
+    try:
+        _e(
+            conn,
+            """
+            INSERT INTO user_settings (user_id, active_subject_slug, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                active_subject_slug = excluded.active_subject_slug,
+                updated_at = excluded.updated_at
+            """,
+            (user_id, sub, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_subject_profiles(path: str, user_id: int) -> list[UserProfile]:
+    if not db_path_usable(path):
+        return []
+    conn = connect(path)
+    try:
+        rows = _e(
+            conn,
+            _profile_select_sql().replace(" AND subject_slug = ?", ""),
+            (user_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [_row_to_profile(r) for r in rows]
+
+
 def _migrate_feedback_ticket_archived(conn: Any) -> None:
     """Колонка archived: рассмотренные/отклоненные не показываются пользователю в /my_support."""
     if use_postgres():
@@ -235,7 +438,8 @@ def init_db(path: str) -> None:
             conn,
             """
             CREATE TABLE IF NOT EXISTS user_profile (
-                user_id BIGINT PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                subject_slug TEXT NOT NULL DEFAULT 'matematika',
                 grade INTEGER NOT NULL CHECK (grade >= 6 AND grade <= 11),
                 textbook_slug TEXT NOT NULL,
                 textbook_url TEXT NOT NULL,
@@ -245,7 +449,17 @@ def init_db(path: str) -> None:
                 hw_paragraph TEXT,
                 hw_exercise TEXT,
                 hw_page INTEGER,
-                subject_slug TEXT NOT NULL DEFAULT 'matematika'
+                PRIMARY KEY (user_id, subject_slug)
+            )
+            """,
+        )
+        _e(
+            conn,
+            """
+            CREATE TABLE IF NOT EXISTS user_settings (
+                user_id BIGINT PRIMARY KEY NOT NULL,
+                active_subject_slug TEXT NOT NULL DEFAULT 'matematika',
+                updated_at TEXT NOT NULL
             )
             """,
         )
@@ -479,17 +693,22 @@ def init_db(path: str) -> None:
                     msgs_since_sleep INTEGER NOT NULL DEFAULT 0,
                     last_sleep_at TEXT,
                     last_sleep_status TEXT,
+                    chat_model_slug TEXT,
                     updated_at TEXT NOT NULL
                 )
                 """,
             )
         conn.commit()
+        _migrate_user_profile_grade_subject(conn)
+        conn.commit()
+        _migrate_user_profile_multi_subject(conn)
+        conn.commit()
+        _migrate_chat_memory_model_slug(conn)
+        conn.commit()
         if not use_postgres():
             _migrate(conn)
             conn.commit()
             _migrate_feedback_ticket_archived(conn)
-            conn.commit()
-            _migrate_user_profile_grade_subject(conn)
             conn.commit()
     finally:
         conn.close()
@@ -503,35 +722,20 @@ def homework_complete(p: UserProfile) -> bool:
     return has_ex or has_page
 
 
-def get_profile(path: str, user_id: int) -> UserProfile | None:
+def get_profile(path: str, user_id: int, subject_slug: str | None = None) -> UserProfile | None:
+    sub = (subject_slug or "").strip() or get_active_subject(path, user_id)
     conn = connect(path)
     try:
         row = _e(
             conn,
-            "SELECT user_id, grade, textbook_slug, textbook_url, textbook_label, is_premium, "
-            "hw_paragraph, hw_exercise, hw_page, subject_slug "
-            "FROM user_profile WHERE user_id = ?",
-            (user_id,),
+            _profile_select_sql(),
+            (user_id, sub),
         ).fetchone()
     finally:
         conn.close()
     if row is None:
         return None
-    subj = row[9] if len(row) > 9 else "matematika"
-    if not (subj and str(subj).strip()):
-        subj = "matematika"
-    return UserProfile(
-        user_id=row[0],
-        grade=row[1],
-        textbook_slug=row[2],
-        textbook_url=row[3],
-        textbook_label=row[4],
-        is_premium=bool(row[5]),
-        hw_paragraph=row[6],
-        hw_exercise=row[7],
-        hw_page=row[8],
-        subject_slug=str(subj),
-    )
+    return _row_to_profile(row)
 
 
 def set_textbook(
@@ -542,21 +746,20 @@ def set_textbook(
     url: str,
     label: str,
     is_premium: bool,
-    subject_slug: str | None = None,
+    subject_slug: str,
 ) -> None:
     now = datetime.now(timezone.utc).isoformat()
-    existing = get_profile(path, user_id)
-    sub = (subject_slug or "").strip() or (existing.subject_slug if existing else "") or "matematika"
+    sub = (subject_slug or "").strip() or DEFAULT_SUBJECT_SLUG
     conn = connect(path)
     try:
         _e(
             conn,
             """
             INSERT INTO user_profile (
-                user_id, grade, textbook_slug, textbook_url, textbook_label, is_premium,
-                updated_at, hw_paragraph, hw_exercise, hw_page, subject_slug
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)
-            ON CONFLICT(user_id) DO UPDATE SET
+                user_id, subject_slug, grade, textbook_slug, textbook_url, textbook_label,
+                is_premium, updated_at, hw_paragraph, hw_exercise, hw_page
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
+            ON CONFLICT(user_id, subject_slug) DO UPDATE SET
                 grade = excluded.grade,
                 textbook_slug = excluded.textbook_slug,
                 textbook_url = excluded.textbook_url,
@@ -565,14 +768,14 @@ def set_textbook(
                 updated_at = excluded.updated_at,
                 hw_paragraph = NULL,
                 hw_exercise = NULL,
-                hw_page = NULL,
-                subject_slug = excluded.subject_slug
+                hw_page = NULL
             """,
-            (user_id, grade, slug, url, label, 1 if is_premium else 0, now, sub),
+            (user_id, sub, grade, slug, url, label, 1 if is_premium else 0, now),
         )
         conn.commit()
     finally:
         conn.close()
+    set_active_subject(path, user_id, sub)
 
 
 def set_homework_meta(
@@ -581,7 +784,9 @@ def set_homework_meta(
     paragraph: str,
     exercise: str | None,
     page: int | None,
+    subject_slug: str | None = None,
 ) -> None:
+    sub = (subject_slug or "").strip() or get_active_subject(path, user_id)
     now = datetime.now(timezone.utc).isoformat()
     conn = connect(path)
     try:
@@ -593,41 +798,47 @@ def set_homework_meta(
                 hw_exercise = ?,
                 hw_page = ?,
                 updated_at = ?
-            WHERE user_id = ?
+            WHERE user_id = ? AND subject_slug = ?
             """,
-            (paragraph.strip(), exercise.strip() if exercise else None, page, now, user_id),
+            (paragraph.strip(), exercise.strip() if exercise else None, page, now, user_id, sub),
         )
         conn.commit()
     finally:
         conn.close()
 
 
-def textbook_popularity_by_grade(path: str, grade: int) -> dict[str, int]:
-    """Сколько пользователей сейчас с привязкой к учебнику (slug) в данном классе."""
+def textbook_popularity_by_grade(
+    path: str,
+    grade: int,
+    subject_slug: str = DEFAULT_SUBJECT_SLUG,
+) -> dict[str, int]:
+    """Сколько пользователей с привязкой к учебнику (slug) в данном классе и предмете."""
     if not db_path_usable(path):
         return {}
+    sub = (subject_slug or "").strip() or DEFAULT_SUBJECT_SLUG
     conn = connect(path)
     try:
         rows = _e(
             conn,
-            "SELECT textbook_slug, COUNT(*) FROM user_profile WHERE grade = ? "
+            "SELECT textbook_slug, COUNT(*) FROM user_profile WHERE grade = ? AND subject_slug = ? "
             "GROUP BY textbook_slug",
-            (grade,),
+            (grade, sub),
         ).fetchall()
     finally:
         conn.close()
     return {str(r[0]): int(r[1]) for r in rows}
 
 
-def clear_homework_meta(path: str, user_id: int) -> None:
+def clear_homework_meta(path: str, user_id: int, subject_slug: str | None = None) -> None:
+    sub = (subject_slug or "").strip() or get_active_subject(path, user_id)
     now = datetime.now(timezone.utc).isoformat()
     conn = connect(path)
     try:
         _e(
             conn,
             "UPDATE user_profile SET hw_paragraph = NULL, hw_exercise = NULL, "
-            "hw_page = NULL, updated_at = ? WHERE user_id = ?",
-            (now, user_id),
+            "hw_page = NULL, updated_at = ? WHERE user_id = ? AND subject_slug = ?",
+            (now, user_id, sub),
         )
         conn.commit()
     finally:
@@ -2050,3 +2261,75 @@ def chat_memory_record_sleep(
         last_sleep_at=when,
         last_sleep_status=(status or "ok")[:200],
     )
+
+
+def _migrate_chat_memory_model_slug(conn: Any) -> None:
+    """Добавить chat_model_slug в chat_memory_pref (SQLite; Postgres — alembic 014)."""
+    if use_postgres():
+        return
+    row = _e(
+        conn,
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='chat_memory_pref'",
+    ).fetchone()
+    if row is None:
+        return
+    cols = {
+        str(r[1])
+        for r in _e(conn, "PRAGMA table_info(chat_memory_pref)").fetchall()
+    }
+    if "chat_model_slug" not in cols:
+        _e(conn, "ALTER TABLE chat_memory_pref ADD COLUMN chat_model_slug TEXT")
+
+
+def chat_model_get(path: str, user_id: int) -> str:
+    """Выбранная модель /chat; без строки — дефолт из ai_checker."""
+    import ai_checker
+
+    if not db_path_usable(path):
+        return ai_checker.chat_cursor_model_default()
+    conn = connect(path)
+    try:
+        row = _e(
+            conn,
+            "SELECT chat_model_slug FROM chat_memory_pref WHERE user_id = ?",
+            (int(user_id),),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None or not row[0]:
+        return ai_checker.chat_cursor_model_default()
+    return ai_checker.chat_resolve_cursor_model(str(row[0]))
+
+
+def chat_model_set(path: str, user_id: int, slug: str) -> str:
+    """Сохранить модель /chat; возвращает нормализованный slug."""
+    import ai_checker
+
+    resolved = ai_checker.chat_resolve_cursor_model(slug)
+    if not db_path_usable(path):
+        return resolved
+    now_iso = datetime.now(timezone.utc).isoformat()
+    conn = connect(path)
+    try:
+        _e(
+            conn,
+            """
+            INSERT INTO chat_memory_pref
+                (user_id, enabled, msgs_since_sleep, last_sleep_at, last_sleep_status,
+                 chat_model_slug, updated_at)
+            VALUES (?, ?, 0, NULL, NULL, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                chat_model_slug = excluded.chat_model_slug,
+                updated_at = excluded.updated_at
+            """,
+            (
+                int(user_id),
+                1 if CHAT_MEMORY_DEFAULT_ENABLED else 0,
+                resolved,
+                now_iso,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return resolved
