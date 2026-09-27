@@ -77,6 +77,8 @@ curl -N -X POST http://127.0.0.1:8000/chat/stream \
 
 ## Контракт с cursor-bridge
 
+Исходники и установка bridge: [discourse-cursor-bridge](https://github.com/vramdibs/discourse-cursor-bridge) (Discourse webhook + OpenAI `/v1/chat/completions`). Ниже - только контракт для tgzh.
+
 Внешний сервис: **OpenAI-compatible** `POST /v1/chat/completions` на хосте bridge (типично порт **8787**).
 
 ### На стороне tgzh (`.env`)

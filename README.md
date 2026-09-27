@@ -10,6 +10,10 @@ Telegram-бот принимает **фото** тетрадного листа 
 - [docs/error-registry.md](docs/error-registry.md) - реестр известных инцидентов (симптом, причина, решение)
 - [docs/README.md](docs/README.md) - оглавление каталога `docs/`
 
+## Связанные репозитории
+
+- [discourse-cursor-bridge](https://github.com/vramdibs/discourse-cursor-bridge) - OpenAI-совместимый proxy к `cursor-agent` (порт 8787); нужен для `/chat` и «Проверить ещё раз (Cursor)»
+
 ## Быстрый старт
 
 ```bash
@@ -111,7 +115,7 @@ flowchart LR
 | **`tgzh-server`** (FastAPI) | всегда | Docker `tgzh-server` (или `python3 server.py`) | `PORT`, `VLLM_*`, `PREOCR_URL` |
 | **PostgreSQL** *или* SQLite | одно из двух | `postgres`-контейнер либо том `tgzh-data` | `DATABASE_URL` (пусто → SQLite по `USER_DB_PATH`) |
 | **VLLM (Qwen3-VL)** | для проверки ДЗ при `AI_MOCK=0` | внешний хост (см. `VLLM_BASE_URL`) | `VLLM_BASE_URL`/`API_KEY`/`MODEL` |
-| *cursor-bridge* + *cursor-agent CLI* | для `/chat` и кнопки «Проверить ещё раз (Cursor)» | хост `BRIDGE_HOST` (см. `discourse-cursor-bridge`) | `VLLM_FALLBACK_*` (включая `_BASE_URL`, `_API_KEY`, `_MODEL=cursor-agent`) |
+| *cursor-bridge* + *cursor-agent CLI* | для `/chat` и кнопки «Проверить ещё раз (Cursor)» | [discourse-cursor-bridge](https://github.com/vramdibs/discourse-cursor-bridge) на хосте `BRIDGE_HOST` | `VLLM_FALLBACK_*` (включая `_BASE_URL`, `_API_KEY`, `_MODEL=cursor-agent`) |
 | *tgzh-preocr* (PaddleOCR) | для recheck «Cursor» по фото; общий буст качества | Docker profile `preocr` | `PREOCR_URL=http://tgzh-preocr:8088`, `PREOCR_*` |
 | *TEI sentiment / emotion* | украшает `/begemot` (тон отзывов) | внешние сервисы | `TEI_SENTIMENT_URL`, `TEI_EMOTION_URL` |
 | **`tgzh-stt`** (Whisper) | для голосовых в `/chat`; без него фича выключена и бот вежливо сообщает | Docker `tgzh-stt` (`hwdsl2/whisper-server`); либо внешний OpenAI-совместимый `/v1/audio/transcriptions` | `STT_BASE_URL`, `WHISPER_*` (для локального) или `STT_API_KEY` (для облачного) |

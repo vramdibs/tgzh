@@ -4,6 +4,8 @@
 
 ### Added
 
+- **Публичный репозиторий cursor-bridge**: [discourse-cursor-bridge](https://github.com/vramdibs/discourse-cursor-bridge) - установка и env bridge; ссылки в **README**, **docs/integration.md**, **docs/README.md**
+
 - **Лицензия Apache-2.0**: файл **`LICENSE`** в корне репозитория, ссылка в **README**
 
 - **Документация интеграции**: каталог **`docs/`** - [integration.md](docs/integration.md) (база знаний: API, cursor-bridge, env, сеть, чек-лист), [error-registry.md](docs/error-registry.md) (реестр инцидентов 27.09: webhook timeout, bridge auth, KeenDNS vs VPS egress). Ссылки в **README**, **AGENTS.md**, **CLAUDE.md**
