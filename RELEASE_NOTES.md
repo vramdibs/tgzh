@@ -4,6 +4,8 @@
 
 ### Added
 
+- **Документация интеграции**: каталог **`docs/`** - [integration.md](docs/integration.md) (база знаний: API, cursor-bridge, env, сеть, чек-лист), [error-registry.md](docs/error-registry.md) (реестр инцидентов 27.09: webhook timeout, bridge auth, KeenDNS vs VPS egress). Ссылки в **README**, **AGENTS.md**, **CLAUDE.md**
+
 - **Режим long-polling для Telegram (`TG_MODE=polling`)**: переключатель `TG_MODE` в `.env` (`webhook` по умолчанию, `polling` - обход при недоступном inbound HTTPS-вебхуке). В polling-режиме бот снимает webhook при старте и получает апдейты через исходящий `getUpdates`
 
 - **`/chat` — выбор модели Cursor через bridge**: в меню чата кнопка «Модель» (только варианты без Fast, reasoning Low по slug). Дефолт — `composer-2.5`; при недоступности на bridge автоматический retry на `cursor-grok-4.6-low`. Выбор хранится в `chat_memory_pref.chat_model_slug` (миграция Alembic `014_chat_model_slug`). Поле `model` в `POST /chat/stream` и `/chat/once`; `ai_checker.stream_chat_via_cursor` / `chat_once_via_cursor` пробрасывают slug в OpenAI `model`. Bridge allowlist дополнен `composer-2.5` и `cursor-grok-4.6-low`. Env: `CHAT_CURSOR_MODELS`, `CHAT_CURSOR_MODEL_DEFAULT`, `CHAT_CURSOR_MODEL_FALLBACK`. Доступ по-прежнему через `CHAT_PASSWORD` / `ADMIN_PASSWORD`. Тесты — `tests/test_chat_streaming.py`, `tests/test_chat_model_pref.py`.

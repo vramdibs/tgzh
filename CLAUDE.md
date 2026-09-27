@@ -6,6 +6,8 @@ Telegram-бот для проверки домашних заданий по м�
 
 - **[AGENTS.md](AGENTS.md)** - основной контекст репозитория, "память" сессий, Learned Workspace Facts
 - **[README.md](README.md)** - установка, запуск, переменные окружения, деплой
+- **[docs/integration.md](docs/integration.md)** - интеграция внешних проектов, API, bridge, сеть
+- **[docs/error-registry.md](docs/error-registry.md)** - реестр инцидентов и известных ошибок
 - **[RELEASE_NOTES.md](RELEASE_NOTES.md)** - журнал изменений
 
 ## Быстрые команды
