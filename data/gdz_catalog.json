@@ -179,41 +179,2145 @@
         "is_premium": true
       }
     ],
-    "8": [],
-    "9": [],
-    "10": [],
-    "11": []
+    "8": [
+      {
+        "grade": 8,
+        "slug": "ek",
+        "url": "https://gdz.ru/class-8/matematika/ek/",
+        "label": "Для обучающихся с интеллектуальными нарушениями Автор: ...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "kozlov",
+        "url": "https://gdz.ru/class-8/matematika/kozlov/",
+        "label": "Авторы: Козлов В.В., Никитин А.А., Белоносов В.С., Маль...",
+        "is_premium": true
+      },
+      {
+        "grade": 8,
+        "slug": "bunimovich-uglublennyj-uroven",
+        "url": "https://gdz.ru/class-8/matematika/bunimovich-uglublennyj-uroven/",
+        "label": "Вероятность и статистика Углубленный уровень Авторы: Бу...",
+        "is_premium": true
+      }
+    ],
+    "9": [
+      {
+        "grade": 9,
+        "slug": "antropov",
+        "url": "https://gdz.ru/class-9/matematika/antropov/",
+        "label": "Для обучающихся с интеллектуальными нарушениями Авторы:...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "kozlov",
+        "url": "https://gdz.ru/class-9/matematika/kozlov/",
+        "label": "Авторы: Козлов В.В., Никитин А.А., Белоносов В.С., Маль...",
+        "is_premium": true
+      },
+      {
+        "grade": 9,
+        "slug": "bunimovich",
+        "url": "https://gdz.ru/class-9/matematika/bunimovich/",
+        "label": "Вероятность и статистика Углубленный уровень Авторы: Бу...",
+        "is_premium": true
+      }
+    ],
+    "10": [
+      {
+        "grade": 10,
+        "slug": "mordkovich-smirnova",
+        "url": "https://gdz.ru/class-10/matematika/mordkovich-smirnova/",
+        "label": "Авторы: Мордкович А.Г., Смирнова И.М., Денищева Л.О., К...",
+        "is_premium": true
+      },
+      {
+        "grade": 10,
+        "slug": "verner",
+        "url": "https://gdz.ru/class-10/matematika/verner/",
+        "label": "Авторы: Вернер А.Л., Карп А.П.",
+        "is_premium": true
+      },
+      {
+        "grade": 10,
+        "slug": "kozlov",
+        "url": "https://gdz.ru/class-10/matematika/kozlov/",
+        "label": "Базовый и углубленный уровень Авторы: Козлов В.В., Ники...",
+        "is_premium": true
+      },
+      {
+        "grade": 10,
+        "slug": "vysockij",
+        "url": "https://gdz.ru/class-10/matematika/vysockij/",
+        "label": "Математика 10-11 класс Вероятность и статистика Базовый...",
+        "is_premium": true
+      },
+      {
+        "grade": 10,
+        "slug": "bunimovich-bazovyj-i-uglublennyj-uroven",
+        "url": "https://gdz.ru/class-10/matematika/bunimovich-bazovyj-i-uglublennyj-uroven/",
+        "label": "Вероятность и статистика Базовый и углубленный уровень ...",
+        "is_premium": false
+      }
+    ],
+    "11": [
+      {
+        "grade": 11,
+        "slug": "mordkovich",
+        "url": "https://gdz.ru/class-11/matematika/mordkovich/",
+        "label": "Авторы: Мордкович А.Г., Смирнова И.М. Издательство: Мне...",
+        "is_premium": true
+      },
+      {
+        "grade": 11,
+        "slug": "verner",
+        "url": "https://gdz.ru/class-11/matematika/verner/",
+        "label": "Авторы: Вернер А.Л., Карп А.П.",
+        "is_premium": true
+      },
+      {
+        "grade": 11,
+        "slug": "kozlov",
+        "url": "https://gdz.ru/class-11/matematika/kozlov/",
+        "label": "Базовый и углубленный уровень Авторы: Козлов В.В., Ники...",
+        "is_premium": true
+      },
+      {
+        "grade": 11,
+        "slug": "bunimovich-bazovyj-i-uglublennyj-uroven",
+        "url": "https://gdz.ru/class-11/matematika/bunimovich-bazovyj-i-uglublennyj-uroven/",
+        "label": "Вероятность и статистика Базовый и углубленный уровень ...",
+        "is_premium": false
+      }
+    ]
   },
   "algebra": {
     "6": [],
-    "7": [],
-    "8": [],
-    "9": [],
-    "10": [],
-    "11": []
+    "7": [
+      {
+        "grade": 7,
+        "slug": "makarichev-18",
+        "url": "https://gdz.ru/class-7/algebra/makarichev-18/",
+        "label": "Авторы: Ю.Н. Макарычев, Н.Г. Миндюк, К.И. Нешков, С.Б. ...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "merzlyak-polonskij",
+        "url": "https://gdz.ru/class-7/algebra/merzlyak-polonskij/",
+        "label": "Авторы: А. Г. Мерзляк, В. Б. Полонский, М. С. Якир Изда...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "dorofeev",
+        "url": "https://gdz.ru/class-7/algebra/dorofeev/",
+        "label": "Авторы: Г.В. Дорофеев, С.Б. Суворова, Е.А. Бунимович",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "kolyagin-tkacheva",
+        "url": "https://gdz.ru/class-7/algebra/kolyagin-tkacheva/",
+        "label": "Авторы: Колягин Ю.М., Ткачева М.В., Федорова Н.Е., Шабу...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "nikolskiy-s-m",
+        "url": "https://gdz.ru/class-7/algebra/nikolskiy-s-m/",
+        "label": "Авторы: С.М. Никольский, М.К. Потапов, Н.Н. Решетников,...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "makarychev-uglublennoe-izuchenie",
+        "url": "https://gdz.ru/class-7/algebra/makarychev-uglublennoe-izuchenie/",
+        "label": "Углубленный уровень Авторы: Ю.Н. Макарычев, Н.Г. Миндюк...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "merzljak-uglublennyj-uroven",
+        "url": "https://gdz.ru/class-7/algebra/merzljak-uglublennyj-uroven/",
+        "label": "Углубленный уровень Авторы: Мерзляк А.Г., Поляков В.М. ...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "abilkasimova",
+        "url": "https://gdz.ru/class-7/algebra/abilkasimova/",
+        "label": "Авторы: Абылкасымова А.Е., Кучер Т.П., Жумагулова З.А.,...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "shynybekov",
+        "url": "https://gdz.ru/class-7/algebra/shynybekov/",
+        "label": "Авторы: Шыныбеков А.Н., Шыныбеков Д.А. Издательство: Ат...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "mordkovich-mardahaeva",
+        "url": "https://gdz.ru/class-7/algebra/mordkovich-mardahaeva/",
+        "label": "Авторы: Мордкович А.Г., Семенов П.В., Александрова Л.А....",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "alimov-7",
+        "url": "https://gdz.ru/class-7/algebra/alimov-7/",
+        "label": "Авторы: Ш.А. Алимов, Ю.М. Колягин, Ю.В. Сидоров",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "bunimovich",
+        "url": "https://gdz.ru/class-7/algebra/bunimovich/",
+        "label": "Авторы: Бунимович Е.А., Кузнецова Л.В., Минаева С.С. Се...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "muravin-g-k",
+        "url": "https://gdz.ru/class-7/algebra/muravin-g-k/",
+        "label": "Авторы: Г. К. Муравин, К. С. Муравин, О. В. Муравина Из...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "cejtlin",
+        "url": "https://gdz.ru/class-7/algebra/cejtlin/",
+        "label": "Автор: Цейтлiн О.I. Издательство: Ранок",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "ister",
+        "url": "https://gdz.ru/class-7/algebra/ister/",
+        "label": "Автор: Истер О.С. Издательство: Генеза",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "rubin",
+        "url": "https://gdz.ru/class-7/algebra/rubin/",
+        "label": "Авторы: А. Г. Рубин, П. В. Чулков Издательство: Баласс",
+        "is_premium": true
+      },
+      {
+        "grade": 7,
+        "slug": "tarasenkova",
+        "url": "https://gdz.ru/class-7/algebra/tarasenkova/",
+        "label": "Авторы: Тарасенкова Н.А., Богатырева И.М., Коломиец О.М...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "semenov-uglublennyj-uroven",
+        "url": "https://gdz.ru/class-7/algebra/semenov-uglublennyj-uroven/",
+        "label": "Углубленный уровень Авторы: Семенов А.В., Трепалин А.С....",
+        "is_premium": true
+      }
+    ],
+    "8": [
+      {
+        "grade": 8,
+        "slug": "makarychev-8",
+        "url": "https://gdz.ru/class-8/algebra/makarychev-8/",
+        "label": "Авторы: Ю.Н. Макарычев, Н.Г. Миндюк, К.И. Нешков, С.Б. ...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "merzlyak",
+        "url": "https://gdz.ru/class-8/algebra/merzlyak/",
+        "label": "Авторы: А.Г. Мерзляк, В.Б. Полонский, М.С. Якир Издател...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "dorofeev",
+        "url": "https://gdz.ru/class-8/algebra/dorofeev/",
+        "label": "Авторы: Г.В. Дорофеев, С.Б. Суворова, Е.А. Бунимович, Л...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "kolyagin-tkacheva",
+        "url": "https://gdz.ru/class-8/algebra/kolyagin-tkacheva/",
+        "label": "Авторы: Колягин Ю.М., Ткачева М.В., Федорова Н.Е.",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "reshebnik-nikolskiy-s-m",
+        "url": "https://gdz.ru/class-8/algebra/reshebnik-nikolskiy-s-m/",
+        "label": "Авторы: С.М. Никольский, М.К. Потапов, Н.Н. Решетников,...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "makarychev-uglublennoe-izuchenie",
+        "url": "https://gdz.ru/class-8/algebra/makarychev-uglublennoe-izuchenie/",
+        "label": "Углубленный уровень Авторы: Ю.Н. Макарычев, Н.Г. Миндюк...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "merzlyak-polyakov",
+        "url": "https://gdz.ru/class-8/algebra/merzlyak-polyakov/",
+        "label": "Углубленный уровень Авторы: Мерзляк А.Г., Поляков В.М. ...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "shinibekov",
+        "url": "https://gdz.ru/class-8/algebra/shinibekov/",
+        "label": "Авторы: Шыныбеков А.Н., Шыныбеков Д.А., Жумабаев Р.Н. И...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "abilkasimova",
+        "url": "https://gdz.ru/class-8/algebra/abilkasimova/",
+        "label": "Авторы: Абылкасымова А.Е., Кучер Т.П., Корчевский В.Е.,...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "soltan",
+        "url": "https://gdz.ru/class-8/algebra/soltan/",
+        "label": "Авторы: Солтан Г.Н., Солтан А.Е., Жумадилова А.Ж. Издат...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "alimov-sh-a",
+        "url": "https://gdz.ru/class-8/algebra/alimov-sh-a/",
+        "label": "Авторы: Ш.А. Алимов, Ю.М. Колягин, Ю.В. Сидоров",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "mordkovich-mardahaeva",
+        "url": "https://gdz.ru/class-8/algebra/mordkovich-mardahaeva/",
+        "label": "Авторы: Мордкович А.Г., Семенов П.В., Александрова Л.А....",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "bunimovich",
+        "url": "https://gdz.ru/class-8/algebra/bunimovich/",
+        "label": "Авторы: Бунимович Е.А., Кузнецова Л.В., Минаева С.С., Р...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "muravin",
+        "url": "https://gdz.ru/class-8/algebra/muravin/",
+        "label": "Авторы: Г.К. Муравин, К.С. Муравин, О.В. Муравина Издат...",
+        "is_premium": true
+      },
+      {
+        "grade": 8,
+        "slug": "peterson",
+        "url": "https://gdz.ru/class-8/algebra/peterson/",
+        "label": "Авторы: Петерсон Л.Г., Агаханов Н.Х., Петрович А.Ю., По...",
+        "is_premium": true
+      },
+      {
+        "grade": 8,
+        "slug": "kravchuk",
+        "url": "https://gdz.ru/class-8/algebra/kravchuk/",
+        "label": "Авторы: Кравчук В.Р., Пидручна М.В., Янченко Г. М. Изда...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "ister",
+        "url": "https://gdz.ru/class-8/algebra/ister/",
+        "label": "Автор: Истер О.С. Издательство: Генеза",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "bevz",
+        "url": "https://gdz.ru/class-8/algebra/bevz/",
+        "label": "Авторы: Бевз Г.П., Бевз В.Г. Издательство: ТОВ ФОЛIО",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "tarasenkova",
+        "url": "https://gdz.ru/class-8/algebra/tarasenkova/",
+        "label": "Авторы: Тарасенкова Н.А., Богатырева И.М., Коломиец О.М...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "semenov-trepalin-uglublennyj-uroven",
+        "url": "https://gdz.ru/class-8/algebra/semenov-trepalin-uglublennyj-uroven/",
+        "label": "Углубленный уровень Авторы: Семенов А.В., Трепалин А.С....",
+        "is_premium": true
+      }
+    ],
+    "9": [
+      {
+        "grade": 9,
+        "slug": "makarichev-14",
+        "url": "https://gdz.ru/class-9/algebra/makarichev-14/",
+        "label": "Авторы: Макарычев Ю.Н., Миндюк Н.Г., Нешков К.И., Сувор...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "merzlyak",
+        "url": "https://gdz.ru/class-9/algebra/merzlyak/",
+        "label": "Авторы: А.Г. Мерзляк, В.Б. Полонский, М.С. Якир Издател...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "dorofeev",
+        "url": "https://gdz.ru/class-9/algebra/dorofeev/",
+        "label": "Авторы: Г.В. Дорофеев, С.Б. Суворова, Е.А. Бунимович",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "kolyagin",
+        "url": "https://gdz.ru/class-9/algebra/kolyagin/",
+        "label": "Авторы: Ю.М. Колягин, М.В. Ткачева, Н.Е. Федорова, М.И....",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "nikolskiy",
+        "url": "https://gdz.ru/class-9/algebra/nikolskiy/",
+        "label": "Авторы: С.М. Никольский, М.К. Потапов, Н.Н. Решетников,...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "makarichev-uglublennoe-izuchenie",
+        "url": "https://gdz.ru/class-9/algebra/makarichev-uglublennoe-izuchenie/",
+        "label": "Углубленный уровень Авторы: Макарычев Ю.Н., Миндюк Н.Г....",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "merzlyak-polyakov",
+        "url": "https://gdz.ru/class-9/algebra/merzlyak-polyakov/",
+        "label": "Углубленный уровень Авторы: Мерзляк А.Г., Поляков В.М. ...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "soltan",
+        "url": "https://gdz.ru/class-9/algebra/soltan/",
+        "label": "Авторы: Солтан Г.Н., Солтан А.Е., Жумадилова А.Ж. Издат...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "abilkasimova",
+        "url": "https://gdz.ru/class-9/algebra/abilkasimova/",
+        "label": "Авторы: Абылкасымова А.Е., Кучер Т.П., Корчевский В.Е.,...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "shinibekov",
+        "url": "https://gdz.ru/class-9/algebra/shinibekov/",
+        "label": "Авторы: Шыныбеков А.Н., Шыныбеков Д.А., Жумабаев Р.Н. И...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "alimov-9",
+        "url": "https://gdz.ru/class-9/algebra/alimov-9/",
+        "label": "Авторы: Ш.А. Алимов, Ю.М. Колягин, Ю.В. Сидоров",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "bunimovich",
+        "url": "https://gdz.ru/class-9/algebra/bunimovich/",
+        "label": "Авторы: Бунимович Е.А., Кузнецова Л.В., Минаева С.С., Р...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "mordkovich-mardahaeva",
+        "url": "https://gdz.ru/class-9/algebra/mordkovich-mardahaeva/",
+        "label": "Авторы: Мордкович А.Г., Семенов П.В., Александрова Л.А....",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "muravin-muravina",
+        "url": "https://gdz.ru/class-9/algebra/muravin-muravina/",
+        "label": "Авторы: Муравин Г.К., Муравин К.С., Муравина О.В. Издат...",
+        "is_premium": true
+      },
+      {
+        "grade": 9,
+        "slug": "peterson",
+        "url": "https://gdz.ru/class-9/algebra/peterson/",
+        "label": "Авторы: Петерсон Л.Г., Агаханов Н.Х., Петрович А.Ю. Изд...",
+        "is_premium": true
+      },
+      {
+        "grade": 9,
+        "slug": "kontrolnih-testovih-rabot-saitkulova",
+        "url": "https://gdz.ru/class-9/algebra/kontrolnih-testovih-rabot-saitkulova/",
+        "label": "тетрадь контрольных тестовых работ Автор: Сайткулова О....",
+        "is_premium": true
+      }
+    ],
+    "10": [
+      {
+        "grade": 10,
+        "slug": "alimov-15",
+        "url": "https://gdz.ru/class-10/algebra/alimov-15/",
+        "label": "Алгебра 10-11 класс Базовый и углубленный уровень Автор...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "kolyagin-fedorova",
+        "url": "https://gdz.ru/class-10/algebra/kolyagin-fedorova/",
+        "label": "Базовый и углубленный уровень Авторы: Колягин Ю.М., Тка...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "nikolskij-potapov",
+        "url": "https://gdz.ru/class-10/algebra/nikolskij-potapov/",
+        "label": "Авторы: Никольский С.М., Потапов М.К., Решетников Н.Н. ...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "merzlyak-nomirovskij-uglublennij",
+        "url": "https://gdz.ru/class-10/algebra/merzlyak-nomirovskij-uglublennij/",
+        "label": "Углубленный уровень Авторы: Мерзляк А.Г., Номировский Д...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "merzlyak",
+        "url": "https://gdz.ru/class-10/algebra/merzlyak/",
+        "label": "Авторы: Мерзляк А.Г., Номировский Д.А., Полонский В.Б.,...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "abilkasimova",
+        "url": "https://gdz.ru/class-10/algebra/abilkasimova/",
+        "label": "Авторы: Абылкасымова А.Е., Жумагулова З.А. Издательство...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "muravin-muravina",
+        "url": "https://gdz.ru/class-10/algebra/muravin-muravina/",
+        "label": "Авторы: Муравин Г.К., Муравина О.В. Издательство: Дрофа...",
+        "is_premium": true
+      },
+      {
+        "grade": 10,
+        "slug": "shinibekov",
+        "url": "https://gdz.ru/class-10/algebra/shinibekov/",
+        "label": "Авторы: Шыныбеков А.Н., Шыныбеков Д.А., Жумабаев Р.Н. И...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "bazovij-uroven-mordkovich-mardahaeva",
+        "url": "https://gdz.ru/class-10/algebra/bazovij-uroven-mordkovich-mardahaeva/",
+        "label": "Авторы: Мордкович А.Г., Семенов П.В., Александрова Л.А....",
+        "is_premium": true
+      },
+      {
+        "grade": 10,
+        "slug": "muravin-uglublennij-uroven",
+        "url": "https://gdz.ru/class-10/algebra/muravin-uglublennij-uroven/",
+        "label": "Углубленный уровень Авторы: Муравин Г.К., Муравина О.В....",
+        "is_premium": true
+      },
+      {
+        "grade": 10,
+        "slug": "pratusevich",
+        "url": "https://gdz.ru/class-10/algebra/pratusevich/",
+        "label": "Углубленный уровень Авторы: Пратусевич М.Я., Столбов К....",
+        "is_premium": true
+      }
+    ],
+    "11": [
+      {
+        "grade": 11,
+        "slug": "kolmogorov",
+        "url": "https://gdz.ru/class-11/algebra/kolmogorov/",
+        "label": "Алгебра 10-11 класс Авторы: А.Н. Колмогоров, А.М. Абрам...",
+        "is_premium": false
+      },
+      {
+        "grade": 11,
+        "slug": "nikolskij-potapov",
+        "url": "https://gdz.ru/class-11/algebra/nikolskij-potapov/",
+        "label": "Базовый и углубленный уровень Авторы: Никольский С. М.,...",
+        "is_premium": false
+      },
+      {
+        "grade": 11,
+        "slug": "bazovij-uroven-merzlyak",
+        "url": "https://gdz.ru/class-11/algebra/bazovij-uroven-merzlyak/",
+        "label": "Авторы: Мерзляк А.Г., Номировский Д.А., Полонский В.Б. ...",
+        "is_premium": false
+      },
+      {
+        "grade": 11,
+        "slug": "kolyagin",
+        "url": "https://gdz.ru/class-11/algebra/kolyagin/",
+        "label": "Базовый и углубленный уровень Авторы: Колягин Ю.М., Тка...",
+        "is_premium": false
+      },
+      {
+        "grade": 11,
+        "slug": "merzlyak-uglublennij-uroven",
+        "url": "https://gdz.ru/class-11/algebra/merzlyak-uglublennij-uroven/",
+        "label": "Углубленный уровень Авторы: Мерзляк А.Г., Новомировский...",
+        "is_premium": false
+      },
+      {
+        "grade": 11,
+        "slug": "abilkasimova",
+        "url": "https://gdz.ru/class-11/algebra/abilkasimova/",
+        "label": "Авторы: Абылкасымова А.Е., Шойынбеков К.Д., Жумагулова ...",
+        "is_premium": false
+      },
+      {
+        "grade": 11,
+        "slug": "muravin",
+        "url": "https://gdz.ru/class-11/algebra/muravin/",
+        "label": "Авторы: Муравин Г.К., Муравина О.В. Издательство: Дрофа",
+        "is_premium": true
+      },
+      {
+        "grade": 11,
+        "slug": "muravin-uglublennij-uroven",
+        "url": "https://gdz.ru/class-11/algebra/muravin-uglublennij-uroven/",
+        "label": "Углубленный уровень Авторы: Муравин Г.К., Муравина О.В....",
+        "is_premium": true
+      },
+      {
+        "grade": 11,
+        "slug": "mordkovich-mardahaeva",
+        "url": "https://gdz.ru/class-11/algebra/mordkovich-mardahaeva/",
+        "label": "Авторы: Мордкович А.Г., Семенов П.В., Александрова Л.А....",
+        "is_premium": true
+      },
+      {
+        "grade": 11,
+        "slug": "pratusevich",
+        "url": "https://gdz.ru/class-11/algebra/pratusevich/",
+        "label": "Углубленный уровень Авторы: Пратусевич М.Я., Столбов К....",
+        "is_premium": true
+      },
+      {
+        "grade": 11,
+        "slug": "mordkovich-mardahaeva-bazovyj-i-uglublennyj-uroven",
+        "url": "https://gdz.ru/class-11/algebra/mordkovich-mardahaeva-bazovyj-i-uglublennyj-uroven/",
+        "label": "Базовый и углубленный уровень Авторы: Мордкович А.Г., С...",
+        "is_premium": true
+      }
+    ]
   },
   "geometriya": {
     "6": [],
-    "7": [],
-    "8": [],
-    "9": [],
-    "10": [],
-    "11": []
+    "7": [
+      {
+        "grade": 7,
+        "slug": "atanasyan-7-9",
+        "url": "https://gdz.ru/class-7/geometria/atanasyan-7-9/",
+        "label": "Геометрия 7-9 класс Базовый уровень Авторы: Л.С. Атанас...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "merzljak",
+        "url": "https://gdz.ru/class-7/geometria/merzljak/",
+        "label": "Авторы: Мерзляк А.Г., Полонский В.Б., Якир М.С. Издател...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "pogorelov-9",
+        "url": "https://gdz.ru/class-7/geometria/pogorelov-9/",
+        "label": "Геометрия 7-9 класс Автор: А.В. Погорелов",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "merzlyak-polyakov-uglublennij-uroven",
+        "url": "https://gdz.ru/class-7/geometria/merzlyak-polyakov-uglublennij-uroven/",
+        "label": "Углубленный уровень Авторы: Мерзляк А.Г., Поляков В.М. ...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "smirnov-tuyakov",
+        "url": "https://gdz.ru/class-7/geometria/smirnov-tuyakov/",
+        "label": "Авторы: Смирнов В.А., Туяков Е.А. Издательство: Мектеп",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "volchkevich-bazovij-uroven",
+        "url": "https://gdz.ru/class-7/geometria/volchkevich-bazovij-uroven/",
+        "label": "Автор: Волчкевич М.А.",
+        "is_premium": true
+      },
+      {
+        "grade": 7,
+        "slug": "shynybekov",
+        "url": "https://gdz.ru/class-7/geometria/shynybekov/",
+        "label": "Авторы: Шыныбеков А.Н., Шыныбеков Д.А. Издательство: Ат...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "butuzov",
+        "url": "https://gdz.ru/class-7/geometria/butuzov/",
+        "label": "Авторы: Бутузов В.Ф., Кадомцев С.Б., Прасолов В.В. Сери...",
+        "is_premium": true
+      },
+      {
+        "grade": 7,
+        "slug": "sharigin",
+        "url": "https://gdz.ru/class-7/geometria/sharigin/",
+        "label": "Геометрия 7-9 класс Автор: Шарыгин И.Ф. Издательство: Д...",
+        "is_premium": true
+      },
+      {
+        "grade": 7,
+        "slug": "smirnova",
+        "url": "https://gdz.ru/class-7/geometria/smirnova/",
+        "label": "Геометрия 7-9 класс Авторы: И. М. Смирнова, В. А. Смирн...",
+        "is_premium": true
+      },
+      {
+        "grade": 7,
+        "slug": "bersenev",
+        "url": "https://gdz.ru/class-7/geometria/bersenev/",
+        "label": "Авторы: Берсенев А.А., Сафонова Н.В. Серия: Сферы",
+        "is_premium": true
+      },
+      {
+        "grade": 7,
+        "slug": "smirnov-smirnova",
+        "url": "https://gdz.ru/class-7/geometria/smirnov-smirnova/",
+        "label": "Авторы: В.А. Смирнов, И.М. Смирнова",
+        "is_premium": true
+      },
+      {
+        "grade": 7,
+        "slug": "aleksandrov",
+        "url": "https://gdz.ru/class-7/geometria/aleksandrov/",
+        "label": "Авторы: Александров А.Д., Вернер А.Л., Рыжик В.И., Ходо...",
+        "is_premium": true
+      }
+    ],
+    "8": [
+      {
+        "grade": 8,
+        "slug": "atanasyan-8",
+        "url": "https://gdz.ru/class-8/geometria/atanasyan-8/",
+        "label": "Авторы: Л. С. Атанасян, В. Ф. Бутузов, С. Б. Кадомцев, ...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "merzlyak",
+        "url": "https://gdz.ru/class-8/geometria/merzlyak/",
+        "label": "Авторы: А.Г. Мерзляк, В.Б. Полонский, М.С. Якир Издател...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "pogorelov",
+        "url": "https://gdz.ru/class-8/geometria/pogorelov/",
+        "label": "Автор: Погорелов А.В.",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "merzlyak-polyakov-uglublennij-uroven",
+        "url": "https://gdz.ru/class-8/geometria/merzlyak-polyakov-uglublennij-uroven/",
+        "label": "Углубленный уровень Авторы: Мерзляк А.Г., Поляков В.М. ...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "smirnov-tuyakov",
+        "url": "https://gdz.ru/class-8/geometria/smirnov-tuyakov/",
+        "label": "Авторы: Смирнов В.А., Туяков Е.А. Издательство: Мектеп",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "soltan",
+        "url": "https://gdz.ru/class-8/geometria/soltan/",
+        "label": "Авторы: Солтан Г.Н., Солтан А.Е., Жумадилова А.Ж. Издат...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "shininbekov",
+        "url": "https://gdz.ru/class-8/geometria/shininbekov/",
+        "label": "Авторы: Шыныбеков А.Н., Шыныбеков Д.А., Жумабаев Р.Н. И...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "butuzov",
+        "url": "https://gdz.ru/class-8/geometria/butuzov/",
+        "label": "Авторы: Бутузов В.Ф., Кадомцев С.Б., Прасолов В.В. Сери...",
+        "is_premium": true
+      },
+      {
+        "grade": 8,
+        "slug": "bersenev",
+        "url": "https://gdz.ru/class-8/geometria/bersenev/",
+        "label": "Авторы: Берсенев А.А., Сафонова Н.В. Серия: Сферы",
+        "is_premium": true
+      },
+      {
+        "grade": 8,
+        "slug": "alexandrov",
+        "url": "https://gdz.ru/class-8/geometria/alexandrov/",
+        "label": "Авторы: А.Д. Александров, А.Л. Вернер, В.И. Рыжик",
+        "is_premium": true
+      },
+      {
+        "grade": 8,
+        "slug": "volchkevich-bazovyj",
+        "url": "https://gdz.ru/class-8/geometria/volchkevich-bazovyj/",
+        "label": "Автор: М. А. Волчкевич",
+        "is_premium": true
+      },
+      {
+        "grade": 8,
+        "slug": "volchkevich-uglublennyj-uroven",
+        "url": "https://gdz.ru/class-8/geometria/volchkevich-uglublennyj-uroven/",
+        "label": "Углубленный уровень Автор: Волчкевич М.А.",
+        "is_premium": true
+      },
+      {
+        "grade": 8,
+        "slug": "smirnov-smirnova",
+        "url": "https://gdz.ru/class-8/geometria/smirnov-smirnova/",
+        "label": "Авторы: Смирнов В.А., Смирнова И.М.",
+        "is_premium": true
+      }
+    ],
+    "9": [
+      {
+        "grade": 9,
+        "slug": "merzlyak-polonskij",
+        "url": "https://gdz.ru/class-9/geometria/merzlyak-polonskij/",
+        "label": "Авторы: А.Г. Мерзляк, В.Б. Полонский, М.С. Якир Издател...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "merzlyak-polonskij-uglublennij",
+        "url": "https://gdz.ru/class-9/geometria/merzlyak-polonskij-uglublennij/",
+        "label": "Углубленный уровень Авторы: Мерзляк А.Г., Поляков В.М. ...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "smirnov-tuyakov",
+        "url": "https://gdz.ru/class-9/geometria/smirnov-tuyakov/",
+        "label": "Авторы: Смирнов В.А., Туяков Е.А. Издательство: Мектеп",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "soltan",
+        "url": "https://gdz.ru/class-9/geometria/soltan/",
+        "label": "Авторы: Солтан Г.Н., Солтан А.Е., Жумадилова А.Ж. Издат...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "shinibekov",
+        "url": "https://gdz.ru/class-9/geometria/shinibekov/",
+        "label": "Авторы: Шыныбеков А.Н., Шыныбеков Д.А., Жумабаев Р.Н. И...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "butuzov-kadomcev",
+        "url": "https://gdz.ru/class-9/geometria/butuzov-kadomcev/",
+        "label": "Авторы: Бутузов В.Ф., Кадомцев С.Б., Прасолов В.В. Сери...",
+        "is_premium": true
+      },
+      {
+        "grade": 9,
+        "slug": "volchkevich-bazovij-uroven",
+        "url": "https://gdz.ru/class-9/geometria/volchkevich-bazovij-uroven/",
+        "label": "Автор: Волчкевич М.А.",
+        "is_premium": true
+      },
+      {
+        "grade": 9,
+        "slug": "smirnov-smirnova",
+        "url": "https://gdz.ru/class-9/geometria/smirnov-smirnova/",
+        "label": "Авторы: Смирнов В.А., Смирнова И.М.",
+        "is_premium": true
+      },
+      {
+        "grade": 9,
+        "slug": "aleksandrov",
+        "url": "https://gdz.ru/class-9/geometria/aleksandrov/",
+        "label": "Авторы: Александров А.Д., Вернер А.Л., Рыжик В.И.",
+        "is_premium": true
+      },
+      {
+        "grade": 9,
+        "slug": "ershova",
+        "url": "https://gdz.ru/class-9/geometria/ershova/",
+        "label": "Авторы: Ершова A.П., Голобородько B.В., Крижановский О....",
+        "is_premium": false
+      }
+    ],
+    "10": [
+      {
+        "grade": 10,
+        "slug": "atanasyan-10-11",
+        "url": "https://gdz.ru/class-10/geometria/atanasyan-10-11/",
+        "label": "Геометрия 10-11 класс Базовый и углубленный уровень Авт...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "merzlyak-nomirovskij-bazovij-uroven",
+        "url": "https://gdz.ru/class-10/geometria/merzlyak-nomirovskij-bazovij-uroven/",
+        "label": "Авторы: Мерзляк А.Г., Номировский Д.А., Полонский В.Б.,...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "merzlyak-uglublennij-uroven",
+        "url": "https://gdz.ru/class-10/geometria/merzlyak-uglublennij-uroven/",
+        "label": "Углубленный уровень Авторы: Мерзляк А.Г., Номировский Д...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "pogorelov-10",
+        "url": "https://gdz.ru/class-10/geometria/pogorelov-10/",
+        "label": "Геометрия 10-11 класс Автор: А.В. Погорелов",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "smirnov-tuyakov-estestvenno-matematicheskoe-napravlenie",
+        "url": "https://gdz.ru/class-10/geometria/smirnov-tuyakov-estestvenno-matematicheskoe-napravlenie/",
+        "label": "Естественно-математическое направление Авторы: Смирнов ...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "smirnov-tuyakov",
+        "url": "https://gdz.ru/class-10/geometria/smirnov-tuyakov/",
+        "label": "Общественно-гуманитарное направление Авторы: Смирнов В....",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "shinibekov",
+        "url": "https://gdz.ru/class-10/geometria/shinibekov/",
+        "label": "Авторы: Шыныбеков А.Н., Шыныбеков Д.А., Жумабаев Р.Н. И...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "aleksandrov-verner",
+        "url": "https://gdz.ru/class-10/geometria/aleksandrov-verner/",
+        "label": "Геометрия 10-11 класс Базовый и углубленный уровень Авт...",
+        "is_premium": true
+      },
+      {
+        "grade": 10,
+        "slug": "smirnova-10-11-bazovij-profilnij",
+        "url": "https://gdz.ru/class-10/geometria/smirnova-10-11-bazovij-profilnij/",
+        "label": "Геометрия 10-11 класс Базовый и профильный уровни Автор...",
+        "is_premium": true
+      },
+      {
+        "grade": 10,
+        "slug": "aleksandrov",
+        "url": "https://gdz.ru/class-10/geometria/aleksandrov/",
+        "label": "Углубленный уровень Авторы: Александров А.Д., Вернер А....",
+        "is_premium": true
+      },
+      {
+        "grade": 10,
+        "slug": "smirnova-bazovij-uglublennij-urovni",
+        "url": "https://gdz.ru/class-10/geometria/smirnova-bazovij-uglublennij-urovni/",
+        "label": "Базовый и углубленный уровень Авторы: Смирнова И.М., См...",
+        "is_premium": true
+      },
+      {
+        "grade": 10,
+        "slug": "smirnova",
+        "url": "https://gdz.ru/class-10/geometria/smirnova/",
+        "label": "Геометрия 10-11 класс Базовый уровень Автор: Смирнова И...",
+        "is_premium": true
+      },
+      {
+        "grade": 10,
+        "slug": "butuzov-bazovij-i-uglublennij",
+        "url": "https://gdz.ru/class-10/geometria/butuzov-bazovij-i-uglublennij/",
+        "label": "Геометрия 10-11 класс Базовый и углубленный уровень Авт...",
+        "is_premium": true
+      }
+    ],
+    "11": [
+      {
+        "grade": 11,
+        "slug": "bazovij-uroven-merzlyak",
+        "url": "https://gdz.ru/class-11/geometria/bazovij-uroven-merzlyak/",
+        "label": "Авторы: Мерзляк А.Г., Номировский Д.А., Полонский В.Б.,...",
+        "is_premium": false
+      },
+      {
+        "grade": 11,
+        "slug": "merzlyak-polyakov-uglublennij-uroven",
+        "url": "https://gdz.ru/class-11/geometria/merzlyak-polyakov-uglublennij-uroven/",
+        "label": "Углубленный уровень Авторы: Мерзляк А.Г., Номировский Д...",
+        "is_premium": false
+      },
+      {
+        "grade": 11,
+        "slug": "soltan-zhumadilova",
+        "url": "https://gdz.ru/class-11/geometria/soltan-zhumadilova/",
+        "label": "Естественно-математическое направление Авторы: Солтан Г...",
+        "is_premium": false
+      },
+      {
+        "grade": 11,
+        "slug": "gusev-kajdasov",
+        "url": "https://gdz.ru/class-11/geometria/gusev-kajdasov/",
+        "label": "Авторы: Гусев В., Кайдасов Ж., Кагазбаева А. Издательст...",
+        "is_premium": false
+      },
+      {
+        "grade": 11,
+        "slug": "soltan",
+        "url": "https://gdz.ru/class-11/geometria/soltan/",
+        "label": "Геометрия 10-11 класс Общественно-гуманитарное направле...",
+        "is_premium": false
+      },
+      {
+        "grade": 11,
+        "slug": "uglublennij-uroven-aleksandrov",
+        "url": "https://gdz.ru/class-11/geometria/uglublennij-uroven-aleksandrov/",
+        "label": "Углубленный уровень Авторы: Александров А.Д., Вернер А....",
+        "is_premium": true
+      }
+    ]
   },
   "russkiy-yazyk": {
-    "6": [],
-    "7": [],
-    "8": [],
-    "9": [],
-    "10": [],
-    "11": []
+    "6": [
+      {
+        "grade": 6,
+        "slug": "baranov-2008",
+        "url": "https://gdz.ru/class-6/russkii_yazik/baranov-2008/",
+        "label": "Авторы: Т.А. Ладыженская, М.Т. Баранов, Л.А. Тростенцов...",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "razumovskaya-lvova-6",
+        "url": "https://gdz.ru/class-6/russkii_yazik/razumovskaya-lvova-6/",
+        "label": "Авторы: М.М. Разумовская, С.И. Львова, В.И. Капинос, В....",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "rybchenkova",
+        "url": "https://gdz.ru/class-6/russkii_yazik/rybchenkova/",
+        "label": "Авторы: Рыбченкова Л.М., Александрова О.М., Загоровская...",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "bistrova",
+        "url": "https://gdz.ru/class-6/russkii_yazik/bistrova/",
+        "label": "Авторы: Быстрова Е.А., Кибирева Л.В., Гостева Ю.Н. Изда...",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "shmelev",
+        "url": "https://gdz.ru/class-6/russkii_yazik/shmelev/",
+        "label": "Авторы: Шмелев А.Д., Флоренская Э.А., Савчук О.Л., Шмел...",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "lidman-10",
+        "url": "https://gdz.ru/class-6/russkii_yazik/lidman-10/",
+        "label": "Практика Авторы: Г.К. Лидман-Орлова, С.Н. Пименова, А.П...",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "aleksandrova-o-m",
+        "url": "https://gdz.ru/class-6/russkii_yazik/aleksandrova-o-m/",
+        "label": "Авторы: Александрова О.М., Загоровская О.В., Богданов С.И.",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "yakubovskaya",
+        "url": "https://gdz.ru/class-6/russkii_yazik/yakubovskaya/",
+        "label": "Для обучающихся с интеллектуальными нарушениями Авторы:...",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "reshebnik-lvov-v-v-lvova-s-i-2013",
+        "url": "https://gdz.ru/class-6/russkii_yazik/reshebnik-lvov-v-v-lvova-s-i-2013/",
+        "label": "Авторы: С.И. Львова, В.В. Львов Издательство: Мнемозина",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "sabitova",
+        "url": "https://gdz.ru/class-6/russkii_yazik/sabitova/",
+        "label": "Авторы: Сабитова З.К., Бейсембаев А.Р. Издательство: Ме...",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "nikitina",
+        "url": "https://gdz.ru/class-6/russkii_yazik/nikitina/",
+        "label": "Русская речь Автор: Никитина Е.И. Издательство: Дрофа",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "zhanpejs",
+        "url": "https://gdz.ru/class-6/russkii_yazik/zhanpejs/",
+        "label": "Авторы: Жанпейс У.А., Есетова А.Т., Озекбаева Н.А., Ерб...",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "buneev",
+        "url": "https://gdz.ru/class-6/russkii_yazik/buneev/",
+        "label": "Авторы: Бунеев Р.Н., Бунеева Е.В., Комиссарова Л.Ю. Изд...",
+        "is_premium": false
+      },
+      {
+        "grade": 6,
+        "slug": "sferi-cherdakov",
+        "url": "https://gdz.ru/class-6/russkii_yazik/sferi-cherdakov/",
+        "label": "Авторы: Чердаков Д.Н., Дунев А.И., Пугач В.Е. Серия: Сферы",
+        "is_premium": true
+      },
+      {
+        "grade": 6,
+        "slug": "rodnoi-yazik-voiteleva",
+        "url": "https://gdz.ru/class-6/russkii_yazik/rodnoi-yazik-voiteleva/",
+        "label": "Авторы: Воителева Т.М., Марченко О.Н., Смирнова Л.Г., Ш...",
+        "is_premium": true
+      },
+      {
+        "grade": 6,
+        "slug": "rudyakov-2-chasti",
+        "url": "https://gdz.ru/class-6/russkii_yazik/rudyakov-2-chasti/",
+        "label": "Авторы: А.Н. Рудяков, Т.Я. Фролова, М.Г. Маркина-Гурджи",
+        "is_premium": true
+      },
+      {
+        "grade": 6,
+        "slug": "dejkina-v-2-h-chastyah",
+        "url": "https://gdz.ru/class-6/russkii_yazik/dejkina-v-2-h-chastyah/",
+        "label": "Авторы: А.Д. Дейкина, Т.П. Малявина, О.Н. Левушкина, О....",
+        "is_premium": true
+      }
+    ],
+    "7": [
+      {
+        "grade": 7,
+        "slug": "baranova",
+        "url": "https://gdz.ru/class-7/russkii_yazik/baranova/",
+        "label": "Авторы: М.Т. Баранов, Т.А. Ладыженская, Л.А. Тростенцов...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "razumovskaja-lvova-7",
+        "url": "https://gdz.ru/class-7/russkii_yazik/razumovskaja-lvova-7/",
+        "label": "Авторы: М.М. Разумовская, С.И. Львова, В.И. Капинос, В....",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "rybchenkova",
+        "url": "https://gdz.ru/class-7/russkii_yazik/rybchenkova/",
+        "label": "Авторы: Л. М. Рыбченкова, О. М. Александрова, О. В. Заг...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "bystrova",
+        "url": "https://gdz.ru/class-7/russkii_yazik/bystrova/",
+        "label": "Авторы: Е.А. Быстрова, Л.В. Кибирева, Ю.Н. Гостева, Т.М...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "pimenova-praktika-7",
+        "url": "https://gdz.ru/class-7/russkii_yazik/pimenova-praktika-7/",
+        "label": "Практика Авторы: С.Н. Пименова, А.П. Еремеева, А.Ю. Куп...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "shmelev",
+        "url": "https://gdz.ru/class-7/russkii_yazik/shmelev/",
+        "label": "Авторы: Шмелев А.Д., Флоренская Э.А., Савчук Л.О., Шмел...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "aleksandrova-bogdanov",
+        "url": "https://gdz.ru/class-7/russkii_yazik/aleksandrova-bogdanov/",
+        "label": "Авторы: Александрова О.М., Загоровская О.В., Богданов С.И.",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "yakubovskaya",
+        "url": "https://gdz.ru/class-7/russkii_yazik/yakubovskaya/",
+        "label": "Для обучающихся с интеллектуальными нарушениями Авторы:...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "reshebnik-lvova-s-i-lvov-v-v",
+        "url": "https://gdz.ru/class-7/russkii_yazik/reshebnik-lvova-s-i-lvov-v-v/",
+        "label": "Авторы: С.И. Львова, В.В. Львов Издательство: Мнемозина",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "sabitova",
+        "url": "https://gdz.ru/class-7/russkii_yazik/sabitova/",
+        "label": "Авторы: Сабитова З.К., Скляренко К.С. Издательство: Мектеп",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "zhanpejs",
+        "url": "https://gdz.ru/class-7/russkii_yazik/zhanpejs/",
+        "label": "Авторы: Жанпейс У.А., Озекбаева Н.А. Издательство: Атамұра",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "nikitina",
+        "url": "https://gdz.ru/class-7/russkii_yazik/nikitina/",
+        "label": "Русская речь Автор: Никитина Е.И. Издательство: Дрофа",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "voiteleva",
+        "url": "https://gdz.ru/class-7/russkii_yazik/voiteleva/",
+        "label": "Авторы: Воителева Т.М., Марченко О.Н., Смирнова Л.Г., Ш...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "buneev",
+        "url": "https://gdz.ru/class-7/russkii_yazik/buneev/",
+        "label": "Авторы: Бунеев Р.Н., Бунеева Е.В., Коммисарова Л.Ю., Те...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "dejkina",
+        "url": "https://gdz.ru/class-7/russkii_yazik/dejkina/",
+        "label": "Авторы: Дейкина А.Д., Малявина Т.П., Левушкина О.Н., Ря...",
+        "is_premium": true
+      },
+      {
+        "grade": 7,
+        "slug": "cherdakov",
+        "url": "https://gdz.ru/class-7/russkii_yazik/cherdakov/",
+        "label": "Авторы: Чердаков Д.Н., Дунев А.И., Пугач В.Е., Вербицка...",
+        "is_premium": true
+      },
+      {
+        "grade": 7,
+        "slug": "konovalova",
+        "url": "https://gdz.ru/class-7/russkii_yazik/konovalova/",
+        "label": "Автор: Коновалова М.В. Издательство: Основа",
+        "is_premium": false
+      }
+    ],
+    "8": [
+      {
+        "grade": 8,
+        "slug": "barhudarov-8",
+        "url": "https://gdz.ru/class-8/russkii_yazik/barhudarov-8/",
+        "label": "Авторы: С.Г. Бархударов, С.Е. Крючков, Л.Ю. Максимов",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "trostencova-8",
+        "url": "https://gdz.ru/class-8/russkii_yazik/trostencova-8/",
+        "label": "Авторы: Т.А. Ладыженская, Л.А. Тростенцова, А.Д. Дейкин...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "razumovskaya-11",
+        "url": "https://gdz.ru/class-8/russkii_yazik/razumovskaya-11/",
+        "label": "Авторы: М.М. Разумовская, С.И. Львова, В.И. Капинос, В....",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "rybchenkova",
+        "url": "https://gdz.ru/class-8/russkii_yazik/rybchenkova/",
+        "label": "Авторы: Рыбченкова Л.М., Александрова О.М., Загоровская...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "pichugov-praktika-8",
+        "url": "https://gdz.ru/class-8/russkii_yazik/pichugov-praktika-8/",
+        "label": "практика Авторы: Ю.С. Пичугов, А.И. Еремеева, А.Ю. Купа...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "bistrova-voiteleva",
+        "url": "https://gdz.ru/class-8/russkii_yazik/bistrova-voiteleva/",
+        "label": "Авторы: Быстрова Е.А., Кибирева Л.В., Воителева Т.М. Из...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "shmelev",
+        "url": "https://gdz.ru/class-8/russkii_yazik/shmelev/",
+        "label": "Авторы: Шмелев А.Д., Флоренская Э.А., Кустова Г.И., Сав...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "aleksandrova",
+        "url": "https://gdz.ru/class-8/russkii_yazik/aleksandrova/",
+        "label": "Авторы: Александрова О.М., Загоровская О.В., Боганов С.И.",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "zhanpejs",
+        "url": "https://gdz.ru/class-8/russkii_yazik/zhanpejs/",
+        "label": "Авторы: Жанпейс У.А., Озекбаева Н.А., Даркембаева Р.Д.,...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "yakubovskaya",
+        "url": "https://gdz.ru/class-8/russkii_yazik/yakubovskaya/",
+        "label": "Для обучающихся с интеллектуальными нарушениями Авторы:...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "reshebnik-lvova-s-i-lvov-v-v-2014",
+        "url": "https://gdz.ru/class-8/russkii_yazik/reshebnik-lvova-s-i-lvov-v-v-2014/",
+        "label": "Авторы: С.И. Львова, В.В. Львов Издательство: Мнемозина",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "sabitova",
+        "url": "https://gdz.ru/class-8/russkii_yazik/sabitova/",
+        "label": "Авторы: Сабитова З.К., Скляренко К.С. Издательство: Мектеп",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "nikitina",
+        "url": "https://gdz.ru/class-8/russkii_yazik/nikitina/",
+        "label": "Русская речь Автор: Е.И. Никитина Издательство: Дрофа",
+        "is_premium": true
+      },
+      {
+        "grade": 8,
+        "slug": "voiteleva-innovacionnaya-shkola",
+        "url": "https://gdz.ru/class-8/russkii_yazik/voiteleva-innovacionnaya-shkola/",
+        "label": "Авторы: Т.М. Воителева, О.Н. Марченко, Л.Г. Смирнова, И...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "buneev",
+        "url": "https://gdz.ru/class-8/russkii_yazik/buneev/",
+        "label": "Авторы: Бунеев Р.Н., Бунеева Е.В., Комиссарова Л.Ю., Те...",
+        "is_premium": true
+      },
+      {
+        "grade": 8,
+        "slug": "bystrova",
+        "url": "https://gdz.ru/class-8/russkii_yazik/bystrova/",
+        "label": "с родным (нерусским) и русским (неродным) Авторы: Быстр...",
+        "is_premium": true
+      },
+      {
+        "grade": 8,
+        "slug": "dejkina-v-2-h-chastyah",
+        "url": "https://gdz.ru/class-8/russkii_yazik/dejkina-v-2-h-chastyah/",
+        "label": "Авторы: А.Д. Дейкина, Т.П. Малявина, О.Н. Левушкина, О....",
+        "is_premium": true
+      }
+    ],
+    "9": [
+      {
+        "grade": 9,
+        "slug": "barhudarov-kruchkov-9",
+        "url": "https://gdz.ru/class-9/russkii_yazik/barhudarov-kruchkov-9/",
+        "label": "Авторы: С.Г. Бархударов, С.Е. Крючков, Л.Ю. Максимов, Л...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "trostnecova-9",
+        "url": "https://gdz.ru/class-9/russkii_yazik/trostnecova-9/",
+        "label": "Авторы: Тростенцова Л.А., Ладыженская Т.А., Дайнекина А...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "razumovskaja",
+        "url": "https://gdz.ru/class-9/russkii_yazik/razumovskaja/",
+        "label": "Авторы: М.М. Разумовская, С.И. Львова, В.И. Капинос, В....",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "ribchenkova-9",
+        "url": "https://gdz.ru/class-9/russkii_yazik/ribchenkova-9/",
+        "label": "Авторы: Рыбченкова Л.М., Александрова О.М., Загоровская...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "bystrova",
+        "url": "https://gdz.ru/class-9/russkii_yazik/bystrova/",
+        "label": "Авторы: Е.А. Быстрова, Л.В. Кибирева, Т.М. Воителева, Н...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "shmelev",
+        "url": "https://gdz.ru/class-9/russkii_yazik/shmelev/",
+        "label": "Авторы: Шмелев А.Д., Флоренская С.Н., Митюрев С.Н. Изда...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "pichugov-praktika-9",
+        "url": "https://gdz.ru/class-9/russkii_yazik/pichugov-praktika-9/",
+        "label": "Практика Авторы: Ю.С. Пичугов, А.П. Еремеева, А.Ю. Купа...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "aleksandrova",
+        "url": "https://gdz.ru/class-9/russkii_yazik/aleksandrova/",
+        "label": "Авторы: Александрова О.М., Загоровская О.В., Богданов С.И.",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "yakubovskaya",
+        "url": "https://gdz.ru/class-9/russkii_yazik/yakubovskaya/",
+        "label": "Для обучающихся с интеллектуальными нарушениями Авторы:...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "lvov-lvova-9",
+        "url": "https://gdz.ru/class-9/russkii_yazik/lvov-lvova-9/",
+        "label": "Авторы: С.И. Львова, В.В. Львов Издательство: Мнемозина",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "zhanpejs",
+        "url": "https://gdz.ru/class-9/russkii_yazik/zhanpejs/",
+        "label": "Авторы: Жанпейс У.А., Майбалаева А.А., Атембаева Г.А. И...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "sabitova",
+        "url": "https://gdz.ru/class-9/russkii_yazik/sabitova/",
+        "label": "Авторы: Сабитова З.К., Бейсембаев А.Р. Издательство: Ме...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "kulgildinova",
+        "url": "https://gdz.ru/class-9/russkii_yazik/kulgildinova/",
+        "label": "Авторы: Кульгильдинова Т.А., Кажигалиева Г.А., Багдашки...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "voiteleva-innovacionnaya-shkola",
+        "url": "https://gdz.ru/class-9/russkii_yazik/voiteleva-innovacionnaya-shkola/",
+        "label": "Авторы: Т.М. Воителева, О.Н. Марченко, Л.Г. Смирнова, И...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "buneev",
+        "url": "https://gdz.ru/class-9/russkii_yazik/buneev/",
+        "label": "Авторы: Бунеев Р.Н., Бунеева Е.В., Барова Е.С. Издатель...",
+        "is_premium": true
+      },
+      {
+        "grade": 9,
+        "slug": "dejkina-malyavina",
+        "url": "https://gdz.ru/class-9/russkii_yazik/dejkina-malyavina/",
+        "label": "Авторы: А.Д. Дейкина, Т.П. Малявина, О.Н. Левушкина, О....",
+        "is_premium": true
+      },
+      {
+        "grade": 9,
+        "slug": "nikitina",
+        "url": "https://gdz.ru/class-9/russkii_yazik/nikitina/",
+        "label": "русская речь Автор: Никитина Е.И. Издательство: Дрофа",
+        "is_premium": true
+      }
+    ],
+    "10": [
+      {
+        "grade": 10,
+        "slug": "reshebnik-golcova-n-g-shamshin-i-v",
+        "url": "https://gdz.ru/class-10/russkii_yazik/reshebnik-golcova-n-g-shamshin-i-v/",
+        "label": "Русский язык 10-11 класс Базовый уровень Авторы: Н.Г. Г...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "rybchenkova-bazovyj",
+        "url": "https://gdz.ru/class-10/russkii_yazik/rybchenkova-bazovyj/",
+        "label": "Русский язык 10-11 класс Базовый уровень Авторы: Рыбчен...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "grekov-10-11",
+        "url": "https://gdz.ru/class-10/russkii_yazik/grekov-10-11/",
+        "label": "Русский язык 10-11 класс Авторы: В.Ф. Греков, С.Е. Крюч...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "gusarova",
+        "url": "https://gdz.ru/class-10/russkii_yazik/gusarova/",
+        "label": "Базовый и углубленный уровень Автор: Гусарова И.В. Изда...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "vlasenkov-i-rybchenkova-10-11",
+        "url": "https://gdz.ru/class-10/russkii_yazik/vlasenkov-i-rybchenkova-10-11/",
+        "label": "Русский язык 10-11 класс Авторы: Власенков А.И., Рыбчен...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "lvova",
+        "url": "https://gdz.ru/class-10/russkii_yazik/lvova/",
+        "label": "Базовый и углубленный уровень Авторы: Львова С.И., Льво...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "voiteleva",
+        "url": "https://gdz.ru/class-10/russkii_yazik/voiteleva/",
+        "label": "Автор: Воителева Т.М. Издательство: Академия",
+        "is_premium": true
+      },
+      {
+        "grade": 10,
+        "slug": "uglublennij-uroven-babajceva",
+        "url": "https://gdz.ru/class-10/russkii_yazik/uglublennij-uroven-babajceva/",
+        "label": "Русский язык 10-11 класс Углубленный уровень Автор: Баб...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "cherdakov",
+        "url": "https://gdz.ru/class-10/russkii_yazik/cherdakov/",
+        "label": "Авторы: Чердаков Д.Н., Дунев А.И., Вербицкая Л.А. Серия...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "lvova-bazovyj-uroven",
+        "url": "https://gdz.ru/class-10/russkii_yazik/lvova-bazovyj-uroven/",
+        "label": "Авторы: Львова С.И., Львов В.В. Издательство: Мнемозина",
+        "is_premium": true
+      },
+      {
+        "grade": 10,
+        "slug": "bazovij-uroven-pahnova",
+        "url": "https://gdz.ru/class-10/russkii_yazik/bazovij-uroven-pahnova/",
+        "label": "Автор: Пахнова Т.М. Издательство: Дрофа",
+        "is_premium": true
+      },
+      {
+        "grade": 10,
+        "slug": "bogdanova",
+        "url": "https://gdz.ru/class-10/russkii_yazik/bogdanova/",
+        "label": "Авторы: Богданова Г.А., Виноградова Е.М. Издательство: ...",
+        "is_premium": true
+      },
+      {
+        "grade": 10,
+        "slug": "rudyakov-bazovij-uroven",
+        "url": "https://gdz.ru/class-10/russkii_yazik/rudyakov-bazovij-uroven/",
+        "label": "Русский язык 10-11 класс Базовый уровень Авторы: Рудяко...",
+        "is_premium": true
+      },
+      {
+        "grade": 10,
+        "slug": "aleksandrova-bazovij-uroven",
+        "url": "https://gdz.ru/class-10/russkii_yazik/aleksandrova-bazovij-uroven/",
+        "label": "Русский язык 10-11 класс Базовый уровень Авторы: Алекса...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "buneev",
+        "url": "https://gdz.ru/class-10/russkii_yazik/buneev/",
+        "label": "Базовый и углубленный уровень Авторы: Бунеев Р. Н., Бун...",
+        "is_premium": true
+      }
+    ],
+    "11": [
+      {
+        "grade": 11,
+        "slug": "lvova",
+        "url": "https://gdz.ru/class-11/russkii_yazik/lvova/",
+        "label": "Базовый и углубленный уровень Авторы: Львова С.И., Льво...",
+        "is_premium": false
+      },
+      {
+        "grade": 11,
+        "slug": "gusarova",
+        "url": "https://gdz.ru/class-11/russkii_yazik/gusarova/",
+        "label": "Базовый и углубленный уровень Автор: Гусарова И.В. Изда...",
+        "is_premium": false
+      },
+      {
+        "grade": 11,
+        "slug": "voiteleva",
+        "url": "https://gdz.ru/class-11/russkii_yazik/voiteleva/",
+        "label": "Автор: Воителева Т.М. Издательство: Академия",
+        "is_premium": true
+      },
+      {
+        "grade": 11,
+        "slug": "cherdakov",
+        "url": "https://gdz.ru/class-11/russkii_yazik/cherdakov/",
+        "label": "Авторы: Чердаков Д.Н., Дунев А.И., Вербицкая Л.А. Серия...",
+        "is_premium": true
+      },
+      {
+        "grade": 11,
+        "slug": "lvova-bazovyj-uroven",
+        "url": "https://gdz.ru/class-11/russkii_yazik/lvova-bazovyj-uroven/",
+        "label": "Авторы: Львова С.И., Львов В.В. Издательство: Мнемозина",
+        "is_premium": false
+      },
+      {
+        "grade": 11,
+        "slug": "pahnova",
+        "url": "https://gdz.ru/class-11/russkii_yazik/pahnova/",
+        "label": "Автор: Пахнова Т.М. Издательство: Дрофа",
+        "is_premium": true
+      },
+      {
+        "grade": 11,
+        "slug": "zhanalina",
+        "url": "https://gdz.ru/class-11/russkii_yazik/zhanalina/",
+        "label": "Автор: Жаналина Л.К. Издательство: Мектеп",
+        "is_premium": false
+      },
+      {
+        "grade": 11,
+        "slug": "bogdanova",
+        "url": "https://gdz.ru/class-11/russkii_yazik/bogdanova/",
+        "label": "Авторы: Богданова Г.А., Виноградова Е.М. Издательство: ...",
+        "is_premium": true
+      },
+      {
+        "grade": 11,
+        "slug": "buneev",
+        "url": "https://gdz.ru/class-11/russkii_yazik/buneev/",
+        "label": "Базовый и углубленный уровень Авторы: Бунеев Р.Н., Буне...",
+        "is_premium": true
+      },
+      {
+        "grade": 11,
+        "slug": "bruleva",
+        "url": "https://gdz.ru/class-11/russkii_yazik/bruleva/",
+        "label": "Авторы: Брулева Ф.Г., Павленко В.К. Издательство: Мектеп",
+        "is_premium": false
+      }
+    ]
   },
   "fizika": {
     "6": [],
-    "7": [],
-    "8": [],
-    "9": [],
-    "10": [],
-    "11": []
+    "7": [
+      {
+        "grade": 7,
+        "slug": "peryshkin-7",
+        "url": "https://gdz.ru/class-7/fizika/peryshkin-7/",
+        "label": "Авторы: А.В. Перышкин, А.И. Иванов Издательства: Дрофа,...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "gendenshteijn-bulatova",
+        "url": "https://gdz.ru/class-7/fizika/gendenshteijn-bulatova/",
+        "label": "Авторы: Генденштейн Л.Э., Булатова А.А., Корнильев И.Н....",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "purysheva",
+        "url": "https://gdz.ru/class-7/fizika/purysheva/",
+        "label": "Авторы: Пурышева Н.С., Важеевская Н.Е. Издательство: Дрофа",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "gromov-rodina",
+        "url": "https://gdz.ru/class-7/fizika/gromov-rodina/",
+        "label": "Авторы: С.В. Громов, Н.А. Родина Серия: Классический курс",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "kabardin",
+        "url": "https://gdz.ru/class-7/fizika/kabardin/",
+        "label": "Автор: Кабардин О.Ф. Серия: Архимед",
+        "is_premium": true
+      },
+      {
+        "grade": 7,
+        "slug": "basharuli",
+        "url": "https://gdz.ru/class-7/fizika/basharuli/",
+        "label": "Автор: Башарулы Р. Издательство: Атамұра",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "belaga",
+        "url": "https://gdz.ru/class-7/fizika/belaga/",
+        "label": "Авторы: Белага В.В., Ломаченков И.А., Панебратцев Ю.А. ...",
+        "is_premium": true
+      },
+      {
+        "grade": 7,
+        "slug": "grachev",
+        "url": "https://gdz.ru/class-7/fizika/grachev/",
+        "label": "Авторы: Грачев А.В., Погожев В.А., Селиверстов А.В. Изд...",
+        "is_premium": true
+      },
+      {
+        "grade": 7,
+        "slug": "barjyahtar",
+        "url": "https://gdz.ru/class-7/fizika/barjyahtar/",
+        "label": "Авторы: Барьяхтар В.Г., Божинова Ф.Я., Довгий С.О., Кир...",
+        "is_premium": false
+      },
+      {
+        "grade": 7,
+        "slug": "izergin",
+        "url": "https://gdz.ru/class-7/fizika/izergin/",
+        "label": "Автор: Э. Т. Изергин Издательство: Русское слово",
+        "is_premium": true
+      },
+      {
+        "grade": 7,
+        "slug": "hizhnyakova",
+        "url": "https://gdz.ru/class-7/fizika/hizhnyakova/",
+        "label": "Авторы: Хижнякова Л.С., Синявина А.А. Издательство: Вен...",
+        "is_premium": true
+      }
+    ],
+    "8": [
+      {
+        "grade": 8,
+        "slug": "peryshkin-2002",
+        "url": "https://gdz.ru/class-8/fizika/peryshkin-2002/",
+        "label": "Авторы: А.В. Перышкин, А.И. Иванов Издательства: Дрофа,...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "gendenshtejn-bulatova",
+        "url": "https://gdz.ru/class-8/fizika/gendenshtejn-bulatova/",
+        "label": "Авторы: Генденштейн Л.Э., Булатова А.А., Корнильев И.Н....",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "purisheva",
+        "url": "https://gdz.ru/class-8/fizika/purisheva/",
+        "label": "Авторы: Пурышева Н.С., Важеевская Н.Е. Издательство: Дрофа",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "gromov",
+        "url": "https://gdz.ru/class-8/fizika/gromov/",
+        "label": "Авторы: Громов С.В., Родина Н.А. Серия: Классический курс",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "kabardin",
+        "url": "https://gdz.ru/class-8/fizika/kabardin/",
+        "label": "Автор: Кабардин О.Ф. Серия: Архимед",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "grachev",
+        "url": "https://gdz.ru/class-8/fizika/grachev/",
+        "label": "Авторы: Грачев А.В., Погожев В.А., Вишнякова Е.А. Издат...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "belaga",
+        "url": "https://gdz.ru/class-8/fizika/belaga/",
+        "label": "Авторы: Белага В.В., Ломанченков И.А., Панебратцев Ю.А....",
+        "is_premium": true
+      },
+      {
+        "grade": 8,
+        "slug": "hizhnyakova",
+        "url": "https://gdz.ru/class-8/fizika/hizhnyakova/",
+        "label": "Авторы: Хижнякова Л.С., Синявина А.А. Издательство: Вен...",
+        "is_premium": true
+      },
+      {
+        "grade": 8,
+        "slug": "barjyahtar",
+        "url": "https://gdz.ru/class-8/fizika/barjyahtar/",
+        "label": "Авторы: Барьяхтар В.Г., Божинова Ф.Я., Довгий С.О., Кир...",
+        "is_premium": false
+      },
+      {
+        "grade": 8,
+        "slug": "izergin",
+        "url": "https://gdz.ru/class-8/fizika/izergin/",
+        "label": "Автор: Изергин Э.Т. Издательство: Русское слово Серия: ...",
+        "is_premium": true
+      }
+    ],
+    "9": [
+      {
+        "grade": 9,
+        "slug": "peryshkin-gutnik",
+        "url": "https://gdz.ru/class-9/fizika/peryshkin-gutnik/",
+        "label": "Авторы: Перышкин А.В., Гутник Е.М., Иванов А.И., Петров...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "purisheva",
+        "url": "https://gdz.ru/class-9/fizika/purisheva/",
+        "label": "Авторы: Пурышева Н.С., Важеевская Н.Е., Чаругин В.М. Из...",
+        "is_premium": false
+      },
+      {
+        "grade": 9,
+        "slug": "gendenshtejn-bulatova",
+        "url": "https://gdz.ru/class-9/fizika/gendenshtejn-bulatova/",
+        "label": "Авторы: Генденштейн Л.Э., Булатова А.А., Корнильев И.Н....",
+        "is_premium": true
+      },
+      {
+        "grade": 9,
+        "slug": "kabardin",
+        "url": "https://gdz.ru/class-9/fizika/kabardin/",
+        "label": "Автор: Кабардин О.Ф. Серия: Архимед",
+        "is_premium": true
+      },
+      {
+        "grade": 9,
+        "slug": "gromov",
+        "url": "https://gdz.ru/class-9/fizika/gromov/",
+        "label": "Авторы: Громов С.В., Родина Н.А. Серия: Классический курс",
+        "is_premium": true
+      },
+      {
+        "grade": 9,
+        "slug": "grachev",
+        "url": "https://gdz.ru/class-9/fizika/grachev/",
+        "label": "Авторы: Грачев А.В., Погожев В.А., Боков П.Ю. Издательс...",
+        "is_premium": true
+      },
+      {
+        "grade": 9,
+        "slug": "belaga",
+        "url": "https://gdz.ru/class-9/fizika/belaga/",
+        "label": "Авторы: Белага В.В., Ломаченков И.А., Панебратцев Ю.А. ...",
+        "is_premium": true
+      },
+      {
+        "grade": 9,
+        "slug": "hizhnyakova",
+        "url": "https://gdz.ru/class-9/fizika/hizhnyakova/",
+        "label": "Авторы: Хижнякова Л.С., Синявина А.А. Издательство: Вен...",
+        "is_premium": true
+      },
+      {
+        "grade": 9,
+        "slug": "izergin",
+        "url": "https://gdz.ru/class-9/fizika/izergin/",
+        "label": "Автор: Изергин Э.Т. Издательство: Русское слово Серия: ...",
+        "is_premium": true
+      }
+    ],
+    "10": [
+      {
+        "grade": 10,
+        "slug": "myakishev-10-izdanie",
+        "url": "https://gdz.ru/class-10/fizika/myakishev-10-izdanie/",
+        "label": "Базовый и углубленный уровень Авторы: Г.Я. Мякишев, Б.Б...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "kasyanov-10",
+        "url": "https://gdz.ru/class-10/fizika/kasyanov-10/",
+        "label": "Автор: Касьянов В.А. Издательство: Дрофа",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "myakishev-petrova",
+        "url": "https://gdz.ru/class-10/fizika/myakishev-petrova/",
+        "label": "Авторы: Мякишев Г.Я., Петрова М.А., Степанов С.В.",
+        "is_premium": true
+      },
+      {
+        "grade": 10,
+        "slug": "gendenshtejn-bulatova-bazovij-uglublennij-urovni",
+        "url": "https://gdz.ru/class-10/fizika/gendenshtejn-bulatova-bazovij-uglublennij-urovni/",
+        "label": "Базовый и углубленный уровень Авторы: Генденштейн Л.Э.,...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "gendenshtein-dik",
+        "url": "https://gdz.ru/class-10/fizika/gendenshtein-dik/",
+        "label": "Авторы: Генденштейн Л.Э., Дик Ю.И. Издательство: Мнемозина",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "mechanika-uglublennij-uroven-myakishev",
+        "url": "https://gdz.ru/class-10/fizika/mechanika-uglublennij-uroven-myakishev/",
+        "label": "механика Углубленный уровень Авторы: Мякишев Г.Я., Синя...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "bazovyj-uroven-purysheva",
+        "url": "https://gdz.ru/class-10/fizika/bazovyj-uroven-purysheva/",
+        "label": "Авторы: Пурышева Н.С., Важеевская Н.Е., Исаев Д.А. Изда...",
+        "is_premium": true
+      },
+      {
+        "grade": 10,
+        "slug": "grachev",
+        "url": "https://gdz.ru/class-10/fizika/grachev/",
+        "label": "Базовый и углубленный уровень Авторы: Грачев А.В., Пого...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "gendenshtejn-bulatova-bazovij-uroven",
+        "url": "https://gdz.ru/class-10/fizika/gendenshtejn-bulatova-bazovij-uroven/",
+        "label": "Авторы: Генденштейн Л.Э., Булатова А.А., Корнильев И.Н....",
+        "is_premium": true
+      },
+      {
+        "grade": 10,
+        "slug": "tihomirova-bazovij-i-uglublennij-urovni",
+        "url": "https://gdz.ru/class-10/fizika/tihomirova-bazovij-i-uglublennij-urovni/",
+        "label": "Базовый и углубленный уровень Авторы: Тихомирова С.А., ...",
+        "is_premium": true
+      },
+      {
+        "grade": 10,
+        "slug": "kabardin",
+        "url": "https://gdz.ru/class-10/fizika/kabardin/",
+        "label": "Углубленный уровень Авторы: Кабардин О.Ф., Орлов В.А., ...",
+        "is_premium": true
+      },
+      {
+        "grade": 10,
+        "slug": "termodinamika-uglublennij-uroven-myakishev",
+        "url": "https://gdz.ru/class-10/fizika/termodinamika-uglublennij-uroven-myakishev/",
+        "label": "молекулярная физика. термодинамика Углубленный уровень ...",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "electrodinamika-uglublennij-uroven-myakishev",
+        "url": "https://gdz.ru/class-10/fizika/electrodinamika-uglublennij-uroven-myakishev/",
+        "label": "Физика 10-11 класс Электродинамика Углубленный уровень ...",
+        "is_premium": true
+      },
+      {
+        "grade": 10,
+        "slug": "gromov",
+        "url": "https://gdz.ru/class-10/fizika/gromov/",
+        "label": "Автор: Громов С.В.",
+        "is_premium": false
+      },
+      {
+        "grade": 10,
+        "slug": "hizhnyakova",
+        "url": "https://gdz.ru/class-10/fizika/hizhnyakova/",
+        "label": "Базовый и углубленный уровень Авторы: Хижнякова Л.С., С...",
+        "is_premium": false
+      }
+    ],
+    "11": [
+      {
+        "grade": 11,
+        "slug": "myakishev-buhovcev-chagurin",
+        "url": "https://gdz.ru/class-11/fizika/myakishev-buhovcev-chagurin/",
+        "label": "Базовый и углубленный уровень Авторы: Г.Я. Мякишев, Б.Б...",
+        "is_premium": false
+      },
+      {
+        "grade": 11,
+        "slug": "kasyanov-2-izdanie",
+        "url": "https://gdz.ru/class-11/fizika/kasyanov-2-izdanie/",
+        "label": "Автор: Касьянов В.А. Издательство: Дрофа",
+        "is_premium": false
+      },
+      {
+        "grade": 11,
+        "slug": "myakishev-bazovyj-uroven",
+        "url": "https://gdz.ru/class-11/fizika/myakishev-bazovyj-uroven/",
+        "label": "Авторы: Г.Я. Мякишев, М.А. Петрова, О.С. Угольников Изд...",
+        "is_premium": true
+      },
+      {
+        "grade": 11,
+        "slug": "gendenshtejn-bulatova-bazovij-uglublennij-uroven",
+        "url": "https://gdz.ru/class-11/fizika/gendenshtejn-bulatova-bazovij-uglublennij-uroven/",
+        "label": "Базовый и углубленный уровень Авторы: Генденштейн Л.Э.,...",
+        "is_premium": true
+      },
+      {
+        "grade": 11,
+        "slug": "bazovij-uroven-purisheva",
+        "url": "https://gdz.ru/class-11/fizika/bazovij-uroven-purisheva/",
+        "label": "Авторы: Пурышева Н.С., Важеевская Н.Е., Исаев Д.А. Изда...",
+        "is_premium": true
+      },
+      {
+        "grade": 11,
+        "slug": "kabardin",
+        "url": "https://gdz.ru/class-11/fizika/kabardin/",
+        "label": "Углубленный уровень Авторы: Кабардин О.Ф., Глазунов А.Т...",
+        "is_premium": true
+      },
+      {
+        "grade": 11,
+        "slug": "tihomirova-bazovij-i-uglublennij-urovni",
+        "url": "https://gdz.ru/class-11/fizika/tihomirova-bazovij-i-uglublennij-urovni/",
+        "label": "Базовый и углубленный уровень Авторы: Тихомирова С.А., ...",
+        "is_premium": true
+      },
+      {
+        "grade": 11,
+        "slug": "kasjyanov-uglublennij-uroven",
+        "url": "https://gdz.ru/class-11/fizika/kasjyanov-uglublennij-uroven/",
+        "label": "Углубленный уровень Автор: Касьянов В.А. Издательство: ...",
+        "is_premium": true
+      },
+      {
+        "grade": 11,
+        "slug": "grachev",
+        "url": "https://gdz.ru/class-11/fizika/grachev/",
+        "label": "Базовый и углубленный уровень Авторы: Грачев А.В., Пого...",
+        "is_premium": false
+      },
+      {
+        "grade": 11,
+        "slug": "gendenshtejn-bulatova-bazovij-uroven",
+        "url": "https://gdz.ru/class-11/fizika/gendenshtejn-bulatova-bazovij-uroven/",
+        "label": "Авторы: Генденштейн Л.Э., Булатова А.А., Корнильев И.Н....",
+        "is_premium": true
+      },
+      {
+        "grade": 11,
+        "slug": "kolebaniya-i-volni-uglublennij-uroven-myakishev",
+        "url": "https://gdz.ru/class-11/fizika/kolebaniya-i-volni-uglublennij-uroven-myakishev/",
+        "label": "колебания и волны Углубленный уровень Авторы: Мякишев Г...",
+        "is_premium": true
+      },
+      {
+        "grade": 11,
+        "slug": "myakishev-sinyakov",
+        "url": "https://gdz.ru/class-11/fizika/myakishev-sinyakov/",
+        "label": "Оптика. Квантовая физика Углубленный уровень Авторы: Мя...",
+        "is_premium": true
+      },
+      {
+        "grade": 11,
+        "slug": "hizhnyakova",
+        "url": "https://gdz.ru/class-11/fizika/hizhnyakova/",
+        "label": "Базовый и углубленный уровень Авторы: Хижнякова Л.С., С...",
+        "is_premium": true
+      }
+    ]
   }
 }

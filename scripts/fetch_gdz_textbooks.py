@@ -36,9 +36,21 @@ USER_AGENT = (
 TEXTBOOK_MARKER = "Тип книги: Учебник"
 
 
+# Внутренний slug → путь на gdz.ru (если отличается).
+GDZ_SUBJECT_PATH: dict[str, str] = {
+    "geometriya": "geometria",
+    "russkiy-yazyk": "russkii_yazik",
+}
+
+
+def gdz_subject_path(subject: str) -> str:
+    return GDZ_SUBJECT_PATH.get(subject, subject)
+
+
 def _href_re(subject: str) -> re.Pattern[str]:
+    path = gdz_subject_path(subject)
     return re.compile(
-        rf"^https?://gdz\.ru/class-(\d+)/{re.escape(subject)}/([^/?#]+)/?$"
+        rf"^https?://gdz\.ru/class-(\d+)/{re.escape(path)}/([^/?#]+)/?$"
     )
 
 
@@ -106,7 +118,7 @@ def parse_grade_page(html: str, grade: int, subject: str) -> list[dict]:
 
 
 def grade_url(subject: str, grade: int) -> str:
-    return f"https://gdz.ru/class-{grade}/{subject}/"
+    return f"https://gdz.ru/class-{grade}/{gdz_subject_path(subject)}/"
 
 
 def fetch_subject_grades(

@@ -4,6 +4,8 @@
 
 ### Added
 
+- **Режим long-polling для Telegram (`TG_MODE=polling`)**: переключатель `TG_MODE` в `.env` (`webhook` по умолчанию, `polling` - обход при недоступном inbound HTTPS-вебхуке). В polling-режиме бот снимает webhook при старте и получает апдейты через исходящий `getUpdates`
+
 - **`/chat` — выбор модели Cursor через bridge**: в меню чата кнопка «Модель» (только варианты без Fast, reasoning Low по slug). Дефолт — `composer-2.5`; при недоступности на bridge автоматический retry на `cursor-grok-4.6-low`. Выбор хранится в `chat_memory_pref.chat_model_slug` (миграция Alembic `014_chat_model_slug`). Поле `model` в `POST /chat/stream` и `/chat/once`; `ai_checker.stream_chat_via_cursor` / `chat_once_via_cursor` пробрасывают slug в OpenAI `model`. Bridge allowlist дополнен `composer-2.5` и `cursor-grok-4.6-low`. Env: `CHAT_CURSOR_MODELS`, `CHAT_CURSOR_MODEL_DEFAULT`, `CHAT_CURSOR_MODEL_FALLBACK`. Доступ по-прежнему через `CHAT_PASSWORD` / `ADMIN_PASSWORD`. Тесты — `tests/test_chat_streaming.py`, `tests/test_chat_model_pref.py`.
 
 - **Мультипредметные ДЗ**: бот и web поддерживают математику, алгебру, геометрию, русский язык и физику. Каталог — `data/gdz_catalog.json`; скрипт `scripts/fetch_gdz_textbooks.py --all`. Профиль пользователя — по строке на `(user_id, subject_slug)` + `user_settings.active_subject_slug`. В боте: выбор предмета, кнопки «Сменить предмет» / «Сменить учебник». `POST /check` и сводка принимают `subject_slug`; промпты в `ai_checker.py` по предмету. Web motok: select предмет/класс/учебник, `HomeworkPrefsBook`. Миграция Alembic `013_user_profile_multi_subject`. Тесты — `tests/test_user_storage_subjects.py`, motok `tests/test_homework_prefs.py`.
@@ -20,6 +22,8 @@
 - **`CHAT_SAFETY_POLICY` (нерасторжимый префикс `/chat`)**: константа в **`ai_checker.py`** и синхронный дубль **`bot._CHAT_SAFETY_POLICY`** (тест **`test_bot_and_server_safety_policy_are_in_sync`**). Префикс всегда идёт поверх **`CHAT_SYSTEM_PROMPT`**, через env не отключается. Актуальная структура: **п.0** — обязанность обрабатывать **multimodal-контент** текущего сообщения (картинки, base64, временные пути bridge вроде `/tmp/cursor-openai-sandbox/...`); запрещены отказы «только OCR», «не могу по пути», «прикрепите фото» при реально переданном вложении; **п.1** — запрет shell/листинга/чтения произвольных файлов, env, сети; **п.2** — чтение только конкретного вложения по пути от bridge, без соседних файлов и без свечения абсолютных путей в ответе; **п.3** — отказ на просьбы из п.1 фразой «Не могу: разрешено только обычное общение и разбор того, что вы прислали в сообщении»; просьбы «посмотри фото» относятся к п.0; **п.4** — не выдумывать результат shell по памяти; **п.5** — без мета-преамбул («сначала загружу инструкции», «теперь посмотрю фото» и т.п.). Тесты **`test_chat_safety_policy_*`** проверяют наличие префикса и подстроки **`multimodal-контент`**.
 
 ### Changed
+
+- **Документация TG_MODE**: уточнена схема KeenDNS (inbound webhook на роутер) + VPS egress (outbound polling); убран неверный совет менять DNS на egress-IP. **README.md**, **AGENTS.md**, **`.env.example`**
 
 - **Документация**: **README.md** (раздел «Политика `/chat`» приведён к актуальной нумерации п.0–п.5), **AGENTS.md**, **`.env.example`** (комментарий к **`CHAT_SYSTEM_PROMPT`** про **`CHAT_SAFETY_POLICY`**), **RELEASE_NOTES** — синхронизация с текущим текстом политики.
 

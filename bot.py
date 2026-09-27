@@ -19,7 +19,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Final
+from urllib.parse import urlparse
 
 import httpx
 from dotenv import load_dotenv
@@ -515,6 +515,22 @@ async def _disclaimer_consent_ok(update: Update, context: ContextTypes.DEFAULT_T
 
 
 CATALOG: dict[str, dict[str, list[dict]]] = {}
+_catalog_mtime: float | None = None
+
+
+def _ensure_catalog_loaded() -> dict[str, dict[str, list[dict]]]:
+    """Перечитывает JSON, если файл каталога обновился (fetch без пересборки образа)."""
+    global CATALOG, _catalog_mtime
+    path = Path(GDZ_CATALOG_PATH)
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = None
+    if CATALOG and mtime is not None and mtime == _catalog_mtime:
+        return CATALOG
+    CATALOG = load_catalog(GDZ_CATALOG_PATH)
+    _catalog_mtime = mtime
+    return CATALOG
 
 PAGE_SIZE = 6
 
@@ -879,6 +895,7 @@ def _bot_commands_list() -> list[BotCommand]:
         BotCommand("my_support", "Активные обращения"),
         BotCommand("polling", "Пройти опрос"),
         BotCommand("stats", "Статистика проверок"),
+        BotCommand("chat", "ИИ-ассистент"),
         BotCommand("textbook", "Сменить класс или учебник"),
     ]
 
@@ -940,6 +957,9 @@ async def post_init_commands(application: Application) -> None:
     await bot.set_my_commands(cmds)
     await bot.set_my_commands(cmds, scope=BotCommandScopeAllPrivateChats())
     await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+    if _telegram_mode() == "polling":
+        await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("polling mode: webhook removed")
 
 
 async def _send_stats_message(
@@ -2037,7 +2057,7 @@ async def _send_recheck_reward_sticker(
 
 
 def _catalog_books(subject_slug: str, grade: int) -> list[dict]:
-    return books_for(CATALOG, subject_slug, grade)
+    return books_for(_ensure_catalog_loaded(), subject_slug, grade)
 
 
 def subject_keyboard(back_to_main: bool = False) -> InlineKeyboardMarkup:
@@ -6810,13 +6830,40 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     logger.error("unhandled handler error", exc_info=context.error)
 
 
+def _telegram_mode() -> str:
+    """Режим приема апдейтов: webhook (по умолчанию) или polling."""
+    mode = (os.getenv("TG_MODE") or "webhook").strip().lower()
+    if mode not in ("webhook", "polling"):
+        raise SystemExit(f"TG_MODE должен быть webhook или polling, получено: {mode!r}")
+    return mode
+
+
+def _telegram_webhook_config() -> tuple[str, str, int, str, str | None]:
+    """Параметры webhook (только при TG_MODE=webhook)."""
+    webhook_url = (os.getenv("TELEGRAM_WEBHOOK_URL") or "").strip().rstrip("/")
+    if not webhook_url:
+        raise SystemExit(
+            "Задай TELEGRAM_WEBHOOK_URL (HTTPS, публичный URL до /telegram/webhook на этом боте)"
+        )
+    listen = (os.getenv("TELEGRAM_WEBHOOK_LISTEN") or "0.0.0.0").strip() or "0.0.0.0"
+    try:
+        port = int((os.getenv("TELEGRAM_WEBHOOK_PORT") or "8081").strip())
+    except ValueError:
+        port = 8081
+    path = (os.getenv("TELEGRAM_WEBHOOK_PATH") or "").strip().lstrip("/")
+    if not path:
+        path = urlparse(webhook_url).path.lstrip("/") or "telegram/webhook"
+    secret = (os.getenv("TELEGRAM_WEBHOOK_SECRET") or "").strip() or None
+    return webhook_url, listen, port, path, secret
+
+
 def main() -> None:
     global CATALOG
 
     if not BOT_TOKEN:
         raise SystemExit("Задай переменную окружения BOT_TOKEN")
 
-    CATALOG = load_catalog(GDZ_CATALOG_PATH)
+    _ensure_catalog_loaded()
     user_storage.init_db(USER_DB_PATH)
     bot_stats.init_stats(USER_DB_PATH)
 
@@ -6886,7 +6933,35 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
 
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    tg_mode = _telegram_mode()
+    logger.info("telegram mode=%s", tg_mode)
+
+    if tg_mode == "polling":
+        logger.info("starting polling (long polling)")
+        app.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,
+        )
+        return
+
+    webhook_url, listen, port, url_path, secret_token = _telegram_webhook_config()
+    logger.info(
+        "starting webhook url=%s listen=%s port=%s path=%s secret=%s",
+        webhook_url,
+        listen,
+        port,
+        url_path,
+        "on" if secret_token else "off",
+    )
+    app.run_webhook(
+        listen=listen,
+        port=port,
+        url_path=url_path,
+        webhook_url=webhook_url,
+        secret_token=secret_token,
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,
+    )
 
 
 if __name__ == "__main__":

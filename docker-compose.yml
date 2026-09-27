@@ -120,10 +120,12 @@ services:
       WHISPER_THREADS: ${WHISPER_THREADS:-4}
       WHISPER_BEAM: ${WHISPER_BEAM:-1}
       WHISPER_LOG_LEVEL: ${WHISPER_LOG_LEVEL:-INFO}
+      # API key из тома (manage.sh --getkey); STT_API_KEY в боте должен совпадать.
+      WHISPER_API_KEY: ${STT_API_KEY:-}
     volumes:
       - tgzh-stt-models:/var/lib/whisper
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9000/v1/models', timeout=3).status==200 else 1)\""]
+      test: ["CMD-SHELL", "python3 -c \"import os,urllib.request,sys; k=os.environ.get('WHISPER_API_KEY',''); h={'Authorization':'Bearer '+k} if k else {}; r=urllib.request.Request('http://127.0.0.1:9000/v1/models', headers=h); sys.exit(0 if urllib.request.urlopen(r, timeout=3).status==200 else 1)\""]
       interval: 15s
       timeout: 5s
       retries: 6
@@ -146,7 +148,8 @@ services:
       - .env
     environment:
       # Поверх .env: в рантайме контейнеры в сети compose (имя сервиса tgzh-server), не на host; 127.0.0.1 в боте — это сам контейнер
-      SERVER_URL: ${SERVER_URL:-http://tgzh-server:8000}
+      # Жёстко tgzh-server: .env SERVER_URL не должен перекрывать compose-сеть (см. .env.example).
+      SERVER_URL: http://tgzh-server:8000
       # Хаб motok на хосте mf. Не подставлять MOTOK_HUB_URL=127.0.0.1 из hub.env — в контейнере это loopback.
       MOTOK_HUB_URL: http://host.docker.internal:54326
       MOTOK_INTERNAL_TOKEN: ${MOTOK_INTERNAL_TOKEN:-}
@@ -156,11 +159,17 @@ services:
       # Граница учебного года для статистики (сентябрь — август). Берём из .env (STATS_TIMEZONE);
       # дефолт оставлен Europe/Moscow и совпадает с .env.example / README.
       STATS_TIMEZONE: ${STATS_TIMEZONE:-Europe/Moscow}
+      TELEGRAM_WEBHOOK_LISTEN: 0.0.0.0
+      TELEGRAM_WEBHOOK_PORT: ${TELEGRAM_WEBHOOK_PORT:-8081}
+    ports:
+      - "${TGZH_WEBHOOK_BIND:-0.0.0.0}:8081:8081"
     volumes:
       # Именованный том: SQLite (профили, статистика) и кеш GDZ переживают удаление контейнера.
       # Не используй docker compose down -v, если нужны данные.
       # Альтернатива — каталог на хосте, например: - ./data:/app/data
       - tgzh-data:/app/data
+      # Каталог учебников с хоста — после fetch_gdz_textbooks.py достаточно restart бота.
+      - ./data/gdz_catalog.json:/app/static/gdz_catalog.json:ro
     depends_on:
       postgres:
         condition: service_healthy

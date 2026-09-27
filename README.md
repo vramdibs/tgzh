@@ -83,7 +83,7 @@ flowchart LR
     end
 
     user <-- "сообщения / inline / голос" --> tg
-    tg <-- "polling" --> bot
+    tg <-- "webhook / polling" --> bot
     bot -- "POST /check, /check/summarize,<br/>/chat/stream, /chat/once" --> server
     bot <-- "SQL: профили, сессии, диалоги,<br/>отзывы, статистика" --> pg
     bot -- "HTTPS: каталог, оглавление,<br/>условия и картинки" --> gdz
@@ -289,6 +289,7 @@ GDZ_CACHE_DIR=data/gdz_cache
 ```
 
 - `BOT_TOKEN` — токен от BotFather (обязательно)
+- **`TG_MODE`** — режим приема апдейтов Telegram: **`webhook`** (по умолчанию, нужен публичный inbound HTTPS до бота через KeenDNS/роутер, см. **`TELEGRAM_WEBHOOK_*`**) или **`polling`** (исходящий **`getUpdates`** до **`api.telegram.org`**). При блокировке Telegram провайдером и egress через VPS/прокси рекомендуется **`TG_MODE=polling`**. При **`TG_MODE=polling`** бот снимает webhook при старте; для возврата на вебхук после починки inbound port-forward выставь **`TG_MODE=webhook`** и передеплой **`tgzh-bot`**
 - `LOG_LEVEL` - уровень логов в stderr для бота и `server.py` (`DEBUG`, `INFO`, `WARNING`, `ERROR`)
 - `SERVER_URL` — адрес сервера проверки. При локальном запуске: `http://localhost:8000`
 - `AI_MOCK=1` — тестовая заглушка; **`AI_MOCK=0`** и заданные **`VLLM_*`** — запросы к VLLM
@@ -324,6 +325,19 @@ GDZ_CACHE_DIR=data/gdz_cache
 - При заданных **`TEI_*_URL`** процесс **`bot.py`** должен достигать этих хостов по HTTP (**`POST /predict`**); **`server.py`** к TEI не обращается
 
 Если до Telegram с машины бота нет прямого исходящего **443**, задай **`TELEGRAM_PROXY`** в **`.env`** (см. абзац **«Таймаут при старте бота»** ниже и **`.env.example`**)
+
+#### KeenDNS (inbound webhook) и VPS egress (outbound polling)
+
+Два независимых сетевых пути:
+
+- **Inbound webhook** (`TG_MODE=webhook`): Telegram шлет POST на публичный hostname (например KeenDNS **`tgzh.example.netcraze.pro`**), который указывает на **IP роутера**; далее **`:443`** -> reverse proxy -> **`tgzh-bot:8081`**. Egress-IP VPS **не** подставляется в KeenDNS - это другой путь
+- **Outbound polling** (`TG_MODE=polling`): бот сам ходит в **`api.telegram.org`** через исходящий канал (VPS, **`TELEGRAM_PROXY`** и т.п.) - штатный режим, если провайдер блокирует Telegram
+
+Чек-лист возврата на webhook (если inbound починен):
+
+1. KeenDNS оставить на роутере (не менять на egress-IP VPS)
+2. Снаружи (не из LAN): **`curl -m 15 -o /dev/null -w "%{http_code}\n" -X POST https://<hostname>/telegram/webhook`** - ожидаем **403**
+3. **`TG_MODE=webhook`** в **`.env`**, передеплой **`tgzh-bot`**
 
 ### 3. Запуск
 
