@@ -253,6 +253,17 @@ USER_DB_PATH = os.getenv("USER_DB_PATH", "data/users.sqlite")
 GDZ_CATALOG_PATH = os.getenv("GDZ_CATALOG_PATH", "data/gdz_catalog.json")
 
 
+def _motok_link_page_url() -> str:
+    """URL страницы привязки Telegram в хабе motok (сообщение /link без кода)."""
+    explicit = (os.getenv("MOTOK_LINK_PAGE_URL") or "").strip()
+    if explicit:
+        return explicit
+    hub = (os.getenv("MOTOK_HUB_URL") or "").strip().rstrip("/")
+    if hub:
+        return f"{hub}/link"
+    return ""
+
+
 def _cursor_recheck_available() -> bool:
     """Кнопка «Проверить ещё раз (Cursor)» доступна, только если на сервере
     включён fallback OpenAI-эндпоинт (например, cursor-bridge): иначе нажатие
@@ -2826,9 +2837,16 @@ async def link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     args = context.args or []
     if not args:
-        await update.message.reply_text(
-            "Пришлите /link КОД со страницы привязки на https://hub.example.com/link"
-        )
+        link_page = _motok_link_page_url()
+        if link_page:
+            await update.message.reply_text(
+                f"Пришлите /link КОД со страницы привязки на {link_page}"
+            )
+        else:
+            await update.message.reply_text(
+                "Пришлите /link КОД со страницы привязки хаба "
+                "(задайте MOTOK_LINK_PAGE_URL или MOTOK_HUB_URL в .env)."
+            )
         return
     try:
         await hub_client.consume_link(update.effective_user.id, args[0])
@@ -3981,7 +3999,7 @@ async def _handle_chat_photo(
     на «что это за цветок?» по фото важнее, чем строгая текст-only гарантия.
     Поэтому фото тут конвертируется в `data:image/jpeg;base64,…` и отправляется
     как `image_url`-часть multimodal user-сообщения OpenAI chat.completions
-    (бридж в `discourse-cursor-bridge` принимает такие запросы и пробрасывает
+    (бридж discourse-cursor-bridge принимает такие запросы и пробрасывает
     в `cursor-agent`). В RAM/DB-историю кладём только текстовый плейсхолдер
     `[фото: подпись]`, чтобы не таскать base64 в `chat_dialog.history_json`.
     """

@@ -1,4 +1,5 @@
 .env
+cursor.settings.json
 data/users.sqlite
 data/gdz_cache/
 __pycache__/

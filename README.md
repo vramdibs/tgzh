@@ -533,7 +533,7 @@ VLLM_NO_THINK=1
 ```
 
 - **`VLLM_BASE_URL`** — можно указать полный URL до `.../v1/chat/completions` или базу `http://HOST:PORT/v1`
-- Временный backend: LM Studio на хосте, например `http://host.docker.internal:1234/v1`. Позже тот же контракт на vLLM +
+- Временный backend: LM Studio на хосте, например `http://host.docker.internal:1234/v1`. Позже тот же контракт на vLLM
 - **`VLLM_VISION`**: `1`/`0` явно. Пусто — по имени модели (`vl` / `vision`). Текстовые Qwen 3 8b / 3.5 9b: фото только через pre-OCR
 - Модель с **VL (vision)** — для фото ДЗ передается `image_url` с `data:image/...;base64,...`
 - Если на tgzh-server задан **`MOTOK_HUB_TOKEN_SECRET`**, `POST /check` требует `Authorization: Bearer` (JWT хаба motok)
