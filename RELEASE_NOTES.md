@@ -4,6 +4,8 @@
 
 ### Added
 
+- **Лицензия Apache-2.0**: файл **`LICENSE`** в корне репозитория, ссылка в **README**
+
 - **Документация интеграции**: каталог **`docs/`** - [integration.md](docs/integration.md) (база знаний: API, cursor-bridge, env, сеть, чек-лист), [error-registry.md](docs/error-registry.md) (реестр инцидентов 27.09: webhook timeout, bridge auth, KeenDNS vs VPS egress). Ссылки в **README**, **AGENTS.md**, **CLAUDE.md**
 
 - **Режим long-polling для Telegram (`TG_MODE=polling`)**: переключатель `TG_MODE` в `.env` (`webhook` по умолчанию, `polling` - обход при недоступном inbound HTTPS-вебхуке). В polling-режиме бот снимает webhook при старте и получает апдейты через исходящий `getUpdates`
