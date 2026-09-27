@@ -1,0 +1,32 @@
+---
+description: Автор git-коммитов, которые создает агент
+alwaysApply: true
+---
+
+# Автор коммитов агента
+
+Когда пользователь просит создать **git commit**, агент всегда указывает автора:
+
+```bash
+--author="Gitgraphity <gitgraphity@users.noreply.github.com>"
+```
+
+## Правила
+
+1. **Не менять** `git config user.name` / `user.email` (ни локально, ни глобально)
+2. Флаг `--author` - на **каждый** коммит, который создает агент
+3. Формат subject/body - по **`commit-message-suggestion.mdc`**
+4. **Не** использовать `git commit --amend` для подмены автора уже созданных коммитов, если пользователь явно не попросил переписать историю
+
+## Пример
+
+```bash
+git commit --author="Gitgraphity <gitgraphity@users.noreply.github.com>" -m "$(cat <<'EOF'
+docs: example subject
+EOF
+)"
+```
+
+## Проверка
+
+После коммита: `git log -1 --format='%an <%ae>'` - ожидается `Gitgraphity <gitgraphity@users.noreply.github.com>`

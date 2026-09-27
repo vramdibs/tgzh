@@ -45,5 +45,6 @@ Telegram-бот для проверки домашних заданий по м�
 
 ## Learned User Preferences
 
+- Коммиты агента - автор **Gitgraphity**, email `gitgraphity@users.noreply.github.com`, через `--author`, без правки `git config` (правило **`.cursor/rules/commit-author.mdc`**)
 - Просил зафиксировать контекст при закрытии сессии; перед этим - передеплой через Docker Compose (**`--profile preocr`**, если в **`.env`** задан **`PREOCR_URL`** на **`tgzh-preocr`**)
 - Новые настройки из env: не только **`.env.example`**, но и актуализация рабочего **`.env`** без перезаписи уже заданных значений — правило **`.cursor/rules/env-example-and-local.mdc`**
