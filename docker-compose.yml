@@ -150,8 +150,9 @@ services:
       # Поверх .env: в рантайме контейнеры в сети compose (имя сервиса tgzh-server), не на host; 127.0.0.1 в боте — это сам контейнер
       # Жёстко tgzh-server: .env SERVER_URL не должен перекрывать compose-сеть (см. .env.example).
       SERVER_URL: http://tgzh-server:8000
-      # Хаб motok на хосте Docker. Не подставлять MOTOK_HUB_URL=127.0.0.1 из hub.env — в контейнере это loopback.
-      MOTOK_HUB_URL: http://host.docker.internal:54326
+      # motok hub: только если задан в .env (пустой MOTOK_HUB_URL — проверка ДЗ без JWT/person_id).
+      # Для хаба на хосте Docker: MOTOK_HUB_URL=http://host.docker.internal:54326 (не 127.0.0.1 — в контейнере это loopback).
+      MOTOK_HUB_URL: ${MOTOK_HUB_URL:-}
       MOTOK_INTERNAL_TOKEN: ${MOTOK_INTERNAL_TOKEN:-}
       MOTOK_HUB_TOKEN_SECRET: ${MOTOK_HUB_TOKEN_SECRET:-}
       GDZ_CATALOG_PATH: /app/static/gdz_catalog.json

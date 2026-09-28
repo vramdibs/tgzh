@@ -297,8 +297,6 @@ def _check_request_timeout_s(engine: str) -> float:
 
 
 _FEEDBACK_STAFF_WAIT = "feedback_staff_wait"
-_POLL_AWAIT_CAREER = "poll_await_career"
-_POLL_LIKES_MATH = "poll_likes_math"
 _BEGEMOT_PW_WAIT = "begemot_pw_wait"
 _BEGEMOT_OK = "begemot_ok"
 _ADMIN_BAN_WAIT = "admin_ban_wait"
@@ -900,7 +898,6 @@ def flow_note(context: ContextTypes.DEFAULT_TYPE, message: object | None) -> Non
 def _bot_commands_list() -> list[BotCommand]:
     return [
         BotCommand("start", "Новое упражнение"),
-        BotCommand("polling", "Пройти опрос"),
         BotCommand("stats", "Статистика проверок"),
         BotCommand("chat", "ИИ-ассистент"),
         BotCommand("textbook", "Сменить класс или учебник"),
@@ -932,8 +929,6 @@ async def flow_purge_except(
     """Удаляет вспомогательные сообщения (промпты, решение GDZ); снимает reply-клавиатуру."""
     _clear_feedback_and_begemot_wait(context)
     context.user_data.pop(_DISCLAIMER_WAIT_ACCEPT, None)
-    context.user_data.pop(_POLL_AWAIT_CAREER, None)
-    context.user_data.pop(_POLL_LIKES_MATH, None)
     context.user_data.pop(_FEEDBACK_STAFF_WAIT, None)
     _photo_batch_clear_all(context)
     ids = context.user_data.pop(_FLOW_MSG_IDS, None)
@@ -1198,29 +1193,6 @@ async def _send_long_html(bot, chat_id: int, text: str, *, chunk: int = 3500) ->
             break
         await bot.send_message(chat_id, buf[:chunk], parse_mode=ParseMode.HTML)
         buf = buf[chunk:]
-
-
-async def polling_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.message or not update.effective_user:
-        return
-    logger.info("cmd /polling user_id=%s", update.effective_user.id)
-    if await _reply_if_blocked_cmd(update, context):
-        return
-    if not await _disclaimer_consent_ok(update, context):
-        return
-    _clear_feedback_and_begemot_wait(context)
-    context.user_data.pop(_POLL_AWAIT_CAREER, None)
-    context.user_data.pop(_POLL_LIKES_MATH, None)
-    await update.message.reply_text(
-        "<b>Опрос</b>\n\nНравится математика?",
-        reply_markup=InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("Да", callback_data="poll:m:1")],
-                [InlineKeyboardButton("Нет", callback_data="poll:m:0")],
-            ],
-        ),
-        parse_mode=ParseMode.HTML,
-    )
 
 
 async def _send_begemot_dashboard(
@@ -2969,44 +2941,6 @@ async def handle_homework_text(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
 
-    if context.user_data.get(_POLL_AWAIT_CAREER):
-        likes = context.user_data.get(_POLL_LIKES_MATH)
-        if likes not in (0, 1):
-            context.user_data.pop(_POLL_AWAIT_CAREER, None)
-            context.user_data.pop(_POLL_LIKES_MATH, None)
-            await update.message.reply_text(
-                "Сначала нажми «Да» или «Нет» под вопросом про математику или начни заново: /polling",
-            )
-            return
-        if not text:
-            flow_note(
-                context,
-                await update.message.reply_text(
-                    "Текст пустой. Напиши, кем хочешь стать, одним сообщением или отмени: /start.",
-                ),
-            )
-            return
-        try:
-            await asyncio.to_thread(
-                user_storage.upsert_user_poll,
-                USER_DB_PATH,
-                user_id,
-                likes,
-                text,
-            )
-        except ValueError as e:
-            flow_note(context, await update.message.reply_text(str(e)))
-            return
-        context.user_data.pop(_POLL_AWAIT_CAREER, None)
-        context.user_data.pop(_POLL_LIKES_MATH, None)
-        logger.info("poll saved user_id=%s likes_math=%s", user_id, likes)
-        tgzh_metrics.record_poll_completed()
-        flow_note(
-            context,
-            await update.message.reply_text("Спасибо, ответы сохранены. Пройти опрос еще раз: /polling."),
-        )
-        return
-
     staff_spec = context.user_data.get(_FEEDBACK_STAFF_WAIT)
     if staff_spec:
         if not context.user_data.get(_BEGEMOT_OK):
@@ -3486,40 +3420,6 @@ async def _handle_disclaimer_callback(
         with suppress(BadRequest):
             await query.edit_message_reply_markup(reply_markup=None)
         await _continue_start_after_consent(context.bot, chat_id, context, user_id)
-        return
-    await _answer_query_once(query)
-
-
-async def _handle_poll_callback(
-    query,
-    context: ContextTypes.DEFAULT_TYPE,
-    data: str,
-) -> None:
-    user_id = query.from_user.id if query.from_user else 0
-    chat_id = query.message.chat_id
-    parts = data.split(":")
-    if len(parts) == 3 and parts[1] == "m":
-        try:
-            likes = int(parts[2])
-        except ValueError:
-            await _answer_query_once(query)
-            return
-        if likes not in (0, 1):
-            await _answer_query_once(query)
-            return
-        context.user_data[_POLL_LIKES_MATH] = likes
-        context.user_data[_POLL_AWAIT_CAREER] = True
-        await _answer_query_once(query, "Записано")
-        try:
-            await query.edit_message_text(
-                "<b>Опрос</b>\n\nКем хочешь стать? Напиши одним следующим сообщением (до ~2000 символов).",
-                parse_mode=ParseMode.HTML,
-            )
-        except BadRequest:
-            await context.bot.send_message(
-                chat_id,
-                "Кем хочешь стать? Напиши одним следующим сообщением.",
-            )
         return
     await _answer_query_once(query)
 
@@ -5073,10 +4973,6 @@ async def _button_callback_dispatch(
 
     if data.startswith("dc:"):
         await _handle_disclaimer_callback(query, context, data)
-        return
-
-    if data.startswith("poll:"):
-        await _handle_poll_callback(query, context, data)
         return
 
     if data.startswith("fb:"):
@@ -6902,7 +6798,6 @@ def main() -> None:
     app.add_handler(CommandHandler("link", link_cmd))
     app.add_handler(CommandHandler("textbook", textbook_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
-    app.add_handler(CommandHandler("polling", polling_cmd))
     app.add_handler(CommandHandler("begemot", begemot_cmd))
     app.add_handler(CommandHandler("begemot_logout", begemot_logout_cmd))
     app.add_handler(CommandHandler("chat", chat_cmd))
