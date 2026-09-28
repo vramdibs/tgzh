@@ -74,6 +74,10 @@
 
 - **PostgreSQL, Telegram `user_id`**: колонки **`user_id`** переведены в **`BIGINT`** (ревизия **`008_user_id_bigint`**): идентификаторы вроде **`5241098336`** больше не дают **`integer out of range`** при записи в **`user_consent`** и остальные таблицы; обновлены **`scripts/postgres_schema.sql`** и **`init_db`** (**`user_storage`**, **`bot_stats`**)
 
+### Removed
+
+- **Команды `/support` и `/my_support`**: убраны из меню Telegram и обработчиков; обратная связь по-прежнему через 👎 под результатом проверки, админка — **`/begemot`**
+
 - **Дисклеймер-викторина**: кнопки несут **`DISCLAIMER_VERSION`** в **`callback_data`** (`dc:quiz:{version}:{idx}`); при несовпадении версии - подсказка отправить **`/start`**. Старый формат **`dc:q:{idx}`** по-прежнему обрабатывается. При ошибке записи в БД - понятный алерт; при неверном ответе - запись в лог (**`picked`**, **`correct`**, **`data`**)
 
 - **Docker `tgzh-server`**: в образ не попадал **`homework_check_status.py`**, после импорта в **`ai_checker`** контейнер API падал с **`ModuleNotFoundError`** — проверка фото не работала

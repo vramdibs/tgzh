@@ -296,7 +296,6 @@ def _check_request_timeout_s(engine: str) -> float:
     return v if v > 0 else default_s
 
 
-_FEEDBACK_WAITING = "feedback_waiting"
 _FEEDBACK_STAFF_WAIT = "feedback_staff_wait"
 _POLL_AWAIT_CAREER = "poll_await_career"
 _POLL_LIKES_MATH = "poll_likes_math"
@@ -341,7 +340,6 @@ def _chat_password_configured() -> bool:
 
 
 def _clear_feedback_and_begemot_wait(context: ContextTypes.DEFAULT_TYPE) -> None:
-    context.user_data.pop(_FEEDBACK_WAITING, None)
     context.user_data.pop(_BEGEMOT_PW_WAIT, None)
     context.user_data.pop(_FEEDBACK_STAFF_WAIT, None)
     context.user_data.pop(_ADMIN_BAN_WAIT, None)
@@ -902,8 +900,6 @@ def flow_note(context: ContextTypes.DEFAULT_TYPE, message: object | None) -> Non
 def _bot_commands_list() -> list[BotCommand]:
     return [
         BotCommand("start", "Новое упражнение"),
-        BotCommand("support", "Оставить отзыв"),
-        BotCommand("my_support", "Активные обращения"),
         BotCommand("polling", "Пройти опрос"),
         BotCommand("stats", "Статистика проверок"),
         BotCommand("chat", "ИИ-ассистент"),
@@ -1225,66 +1221,6 @@ async def polling_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         ),
         parse_mode=ParseMode.HTML,
     )
-
-
-async def support_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.message or not update.effective_user:
-        return
-    logger.info("cmd /support user_id=%s", update.effective_user.id)
-    if await _reply_if_blocked_cmd(update, context):
-        return
-    if not await _disclaimer_consent_ok(update, context):
-        return
-    _clear_feedback_and_begemot_wait(context)
-    context.user_data[_FEEDBACK_WAITING] = True
-    await update.message.reply_text(
-        "Напиши отзыв или пожелание <b>одним следующим сообщением</b> (до ~8000 символов). "
-        "Можно без форматирования.\n\n"
-        "Обращения на рассмотрении: /my_support\n\n"
-        "Чтобы отменить ожидание - команда /start или /textbook.",
-        parse_mode=ParseMode.HTML,
-    )
-
-
-def _format_my_support_ticket_block(t: user_storage.FeedbackTicketRow) -> str:
-    dt = _h(t.created_at[:19]) if t.created_at else "?"
-    head = f"<b>Обращение #{t.id}</b> ({dt})\n"
-    body_preview = t.body if len(t.body) <= 600 else t.body[:600] + "…"
-    body_block = f"Текст: {_h(body_preview)}\n"
-    st = (t.status or "").strip().lower()
-    if st == user_storage.FEEDBACK_TICKET_STATUS_PENDING:
-        return head + "<i>На рассмотрении</i>\n" + body_block
-    if st == user_storage.FEEDBACK_TICKET_STATUS_REVIEWED:
-        note = _h((t.staff_response or "").strip() or "—")
-        return head + "<b>Рассмотрено</b>\nКомментарий разработчика/админа: " + note + "\n" + body_block
-    if st == user_storage.FEEDBACK_TICKET_STATUS_REJECTED:
-        reason = _h((t.staff_response or "").strip() or "—")
-        return head + "<b>Отклонено</b>\nПричина: " + reason + "\n" + body_block
-    return head + f"<i>Статус: {_h(st)}</i>\n" + body_block
-
-
-async def my_support_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.message or not update.effective_user:
-        return
-    logger.info("cmd /my_support user_id=%s", update.effective_user.id)
-    if await _reply_if_blocked_cmd(update, context):
-        return
-    if not await _disclaimer_consent_ok(update, context):
-        return
-    _clear_feedback_and_begemot_wait(context)
-    uid = update.effective_user.id
-    rows = await asyncio.to_thread(user_storage.list_feedback_tickets_for_user, USER_DB_PATH, uid)
-    if not rows:
-        await update.message.reply_text(
-            "Нет активных обращений на рассмотрении. Новое: /support",
-        )
-        return
-    parts = ["<b>Мои обращения</b>\n"]
-    for t in rows:
-        parts.append(_format_my_support_ticket_block(t))
-        parts.append("")
-    text_html = "\n".join(parts).strip()
-    await _send_long_html(context.bot, update.effective_chat.id, text_html)
 
 
 async def _send_begemot_dashboard(
@@ -3028,7 +2964,7 @@ async def handle_homework_text(update: Update, context: ContextTypes.DEFAULT_TYP
         flow_note(
             context,
             await update.message.reply_text(
-                "Сохранили обращение. Статус: /my_support.",
+                "Спасибо, обращение сохранено.",
             ),
         )
         return
@@ -3068,42 +3004,6 @@ async def handle_homework_text(update: Update, context: ContextTypes.DEFAULT_TYP
         flow_note(
             context,
             await update.message.reply_text("Спасибо, ответы сохранены. Пройти опрос еще раз: /polling."),
-        )
-        return
-
-    if context.user_data.get(_FEEDBACK_WAITING):
-        if not text:
-            flow_note(
-                context,
-                await update.message.reply_text(
-                    "Текст пустой. Напиши отзыв текстом или отмени: /start или /textbook.",
-                ),
-            )
-            return
-        uname = update.effective_user.username
-        try:
-            _, ticket_id = await asyncio.to_thread(
-                user_storage.append_user_feedback,
-                USER_DB_PATH,
-                user_id,
-                uname,
-                text,
-            )
-        except ValueError:
-            flow_note(
-                context,
-                await update.message.reply_text("Текст не может быть пустым."),
-            )
-            return
-        _schedule_feedback_tei_analysis(ticket_id, text)
-        context.user_data.pop(_FEEDBACK_WAITING, None)
-        logger.info("feedback appended user_id=%s ticket_id=%s", user_id, ticket_id)
-        flow_note(
-            context,
-            await update.message.reply_text(
-                "Спасибо, сообщение сохранено. Оставить еще одно обращение - команда /support. "
-                "Статусы: /my_support",
-            ),
         )
         return
 
@@ -3664,8 +3564,8 @@ async def _handle_check_feedback_vote(
             try:
                 await context.bot.send_message(
                     chat_id,
-                    "Что не так с проверкой? Напиши <b>одним следующим сообщением</b> - сохраним как обращение "
-                    "(активные обращения смотри в /my_support). Не обязательно: можно просто продолжить или /start.",
+                    "Что не так с проверкой? Напиши <b>одним следующим сообщением</b> - сохраним как обращение. "
+                    "Не обязательно: можно просто продолжить или /start.",
                     parse_mode=ParseMode.HTML,
                 )
             except Exception as e:
@@ -5451,7 +5351,7 @@ async def _button_callback_dispatch(
             if kind == "review":
                 msg = (
                     "Напиши <b>комментарий для пользователя</b> одним сообщением "
-                    "(он придет ему в чат с ботом; в /my_support останутся только активные обращения)."
+                    "(он придет ему в чат с ботом)."
                 )
             else:
                 msg = (
@@ -7002,8 +6902,6 @@ def main() -> None:
     app.add_handler(CommandHandler("link", link_cmd))
     app.add_handler(CommandHandler("textbook", textbook_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
-    app.add_handler(CommandHandler("support", support_cmd))
-    app.add_handler(CommandHandler("my_support", my_support_cmd))
     app.add_handler(CommandHandler("polling", polling_cmd))
     app.add_handler(CommandHandler("begemot", begemot_cmd))
     app.add_handler(CommandHandler("begemot_logout", begemot_logout_cmd))
