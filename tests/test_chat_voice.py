@@ -251,7 +251,8 @@ def test_handle_voice_success_routes_to_chat(
 
     assert captured["audio_len"] == len(b"OGGfake")
     assert captured["mime"] == "audio/ogg"
-    assert captured["chat_kwargs"]["text"] == "Привет, бот"
+    assert captured["chat_kwargs"]["text"] == bot._voice_text_for_chat_cursor("Привет, бот")
+    assert captured["chat_kwargs"]["history_text"] == bot._voice_history_placeholder("Привет, бот")
     assert captured["chat_kwargs"]["user_id"] == active_chat_session
     # Пользователь видит распознанный текст в превью.
     assert any("Распознано" in s for s in msg.statuses)
@@ -398,3 +399,97 @@ def test_handle_voice_lazy_loads_chat_active_from_db(
 
     assert captured.get("called") is True
     assert ctx.user_data.get(bot._CHAT_ACTIVE) is True
+
+
+def test_voice_chat_password_via_stt(
+    db_path: str,
+    stt_enabled: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CHAT_PASSWORD", "secret42")
+    user_id = 88
+    msg = _FakeMessage(voice=_FakeVoice())
+    update = _FakeUpdate(user_id=user_id, chat_id=42, message=msg)
+    ctx = _FakeContext()
+    ctx.user_data[bot._CHAT_PW_WAIT] = True
+
+    menu_mock = AsyncMock()
+
+    async def _fake_transcribe(audio: bytes, **kw: Any) -> str:
+        return "secret42"
+
+    with (
+        patch.object(stt_client, "transcribe", side_effect=_fake_transcribe),
+        patch.object(bot, "_send_chat_menu", menu_mock),
+    ):
+        asyncio.run(bot.handle_voice(update, ctx))
+
+    menu_mock.assert_called_once()
+    assert ctx.user_data.get(bot._CHAT_ACTIVE) is True
+    assert bot._CHAT_PW_WAIT not in ctx.user_data
+
+
+def test_voice_chat_after_password_login_not_stolen_by_await_text_answer(
+    db_path: str,
+    stt_enabled: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """После входа в /chat сбрасывается `_AWAIT_TEXT_ANSWER` — голос идёт в чат, не в ДЗ."""
+    monkeypatch.setenv("CHAT_PASSWORD", "secret42")
+    user_id = 89
+    user_storage.set_textbook(
+        db_path,
+        user_id=user_id,
+        grade=6,
+        slug="merzlyak-6",
+        url="https://gdz.ru/x",
+        label="Мерзляк 6",
+        is_premium=False,
+        subject_slug="matematika",
+    )
+    user_storage.set_homework_meta(
+        db_path,
+        user_id=user_id,
+        paragraph="1",
+        exercise="1",
+        page=None,
+    )
+
+    msg = _FakeMessage(voice=_FakeVoice())
+    update = _FakeUpdate(user_id=user_id, chat_id=42, message=msg)
+    ctx = _FakeContext()
+    ctx.user_data[bot._CHAT_PW_WAIT] = True
+    ctx.user_data[bot._AWAIT_TEXT_ANSWER] = True
+
+    async def _fake_transcribe(audio: bytes, **kw: Any) -> str:
+        return "secret42"
+
+    with (
+        patch.object(stt_client, "transcribe", side_effect=_fake_transcribe),
+        patch.object(bot, "_send_chat_menu", AsyncMock()),
+    ):
+        asyncio.run(bot.handle_voice(update, ctx))
+
+    assert bot._AWAIT_TEXT_ANSWER not in ctx.user_data
+    assert ctx.user_data.get(bot._CHAT_ACTIVE) is True
+
+    msg2 = _FakeMessage(voice=_FakeVoice())
+    update2 = _FakeUpdate(user_id=user_id, chat_id=42, message=msg2)
+    captured: dict[str, Any] = {}
+    hw_mock = AsyncMock()
+    chat_mock = AsyncMock(side_effect=lambda *a, **kw: captured.update(kw))
+
+    async def _fake_transcribe2(audio: bytes, **kw: Any) -> str:
+        return "Как решить уравнение?"
+
+    with (
+        patch.object(stt_client, "transcribe", side_effect=_fake_transcribe2),
+        patch.object(bot, "_run_homework_text_answer_check", hw_mock),
+        patch.object(bot, "_handle_chat_user_message", chat_mock),
+    ):
+        asyncio.run(bot.handle_voice(update2, ctx))
+
+    hw_mock.assert_not_called()
+    chat_mock.assert_called_once()
+    assert "Как решить уравнение?" in captured["text"]
+    assert captured.get("history_text", "").startswith("[голос:")

@@ -1569,6 +1569,63 @@ async def _send_chat_menu(
     )
 
 
+_CHAT_VOICE_CURSOR_PREFIX: Final[str] = (
+    "[Голосовое сообщение; ниже — автоматическая транскрипция, возможны ошибки распознавания. "
+    "Отвечай по смыслу как на обычный вопрос пользователя. "
+    "Если формулировка неясна — переспроси, а не отказывай по п.3.]\n\n"
+)
+
+
+def _voice_text_for_chat_cursor(transcript: str) -> str:
+    return f"{_CHAT_VOICE_CURSOR_PREFIX}{transcript.strip()}"
+
+
+def _voice_history_placeholder(transcript: str) -> str:
+    t = transcript.strip()
+    if len(t) > 200:
+        t = t[:200] + "…"
+    return f"[голос: {t}]"
+
+
+def _activate_chat_session_ram(context: ContextTypes.DEFAULT_TYPE, *, fresh: bool = False) -> None:
+    """RAM-флаги активной /chat-сессии. `fresh=True` — новый вход (пароль), чистим историю."""
+    context.user_data.pop(_CHAT_PW_WAIT, None)
+    context.user_data.pop(_AWAIT_TEXT_ANSWER, None)
+    context.user_data.pop(_AWAIT_PHOTO_ANSWER, None)
+    context.user_data[_CHAT_ACTIVE] = True
+    if fresh:
+        context.user_data.pop(_CHAT_HISTORY, None)
+        context.user_data.pop(_CHAT_DIALOG_ID, None)
+
+
+async def _try_chat_password_from_text(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    text: str,
+) -> bool:
+    """Проверить пароль /chat. True если вход выполнен."""
+    if update.message is None:
+        return False
+    context.user_data.pop(_CHAT_PW_WAIT, None)
+    expected = _chat_password_expected()
+    if not expected:
+        await update.message.reply_text("Раздел /chat недоступен.")
+        return False
+    if not _admin_password_matches(text, expected):
+        await update.message.reply_text("Неверный пароль.")
+        return False
+    await asyncio.to_thread(user_storage.chat_session_login, USER_DB_PATH, user_id)
+    _activate_chat_session_ram(context, fresh=True)
+    await _send_chat_menu(
+        context.bot,
+        update.effective_chat.id,
+        user_id=user_id,
+        extra_html="<i>Доступ открыт. Можно начинать диалог.</i>",
+    )
+    return True
+
+
 async def chat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.effective_user:
         return
@@ -1596,11 +1653,7 @@ async def chat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "Введи пароль одним сообщением, чтобы открыть чат-ассистент.",
         )
         return
-    context.user_data.pop(_CHAT_PW_WAIT, None)
-    # Открыли /chat — снимаем homework-флаги, иначе фото уйдёт в проверку ДЗ.
-    context.user_data.pop(_AWAIT_TEXT_ANSWER, None)
-    context.user_data.pop(_AWAIT_PHOTO_ANSWER, None)
-    context.user_data[_CHAT_ACTIVE] = True
+    _activate_chat_session_ram(context, fresh=False)
     await _send_chat_menu(context.bot, chat_id, user_id=user_id)
 
 
@@ -3212,24 +3265,7 @@ async def handle_homework_text(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     if context.user_data.get(_CHAT_PW_WAIT):
-        context.user_data.pop(_CHAT_PW_WAIT, None)
-        expected = _chat_password_expected()
-        if not expected:
-            await update.message.reply_text("Раздел /chat недоступен.")
-            return
-        if not _admin_password_matches(text, expected):
-            await update.message.reply_text("Неверный пароль.")
-            return
-        await asyncio.to_thread(user_storage.chat_session_login, USER_DB_PATH, user_id)
-        context.user_data[_CHAT_ACTIVE] = True
-        context.user_data.pop(_CHAT_HISTORY, None)
-        context.user_data.pop(_CHAT_DIALOG_ID, None)
-        await _send_chat_menu(
-            context.bot,
-            update.effective_chat.id,
-            user_id=user_id,
-            extra_html="<i>Доступ открыт. Можно начинать диалог.</i>",
-        )
+        await _try_chat_password_from_text(update, context, user_id, text)
         return
 
     if context.user_data.get(_AWAIT_TEXT_ANSWER):
@@ -4087,7 +4123,11 @@ _CHAT_SAFETY_POLICY: Final[str] = (
     "пришедший вместе с текущим сообщением, по умолчанию считается картинкой пользователя — "
     "запреты пунктов 2-3 на него не распространяются.\n"
     "Аналогично разрешено и обязательно: работа с присланным текстом и с STT-транскриптом голоса "
-    "из текущего сообщения.\n"
+    "из текущего сообщения. Текст, помеченный как голосовая транскрипция (STT), трактуй как обычную "
+    "реплику пользователя и отвечай по смыслу. НЕ отказывай на STT под предлогом «проверки сети», "
+    "«слухов» или «компромата», если пользователь явно не просил shell/веб из п.1. Слова «проверь», "
+    "«разберись», «посмотри» в учебном или разговорном контексте — НЕ триггер п.3. Если формулировка "
+    "из-за ошибок STT неясна — переспроси кратко, а не отказывай шаблоном из п.3.\n"
     "\n"
     "ЗАПРЕЩЁННЫЕ ФОРМУЛИРОВКИ (если в сообщении реально есть вложение-картинка): «не могу открыть "
     "файл по такому пути», «не могу подгрузить картинку через инструменты», «работаю только по OCR-"
@@ -6675,16 +6715,13 @@ async def _stt_transcribe_voice_message(
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Голосовое сообщение → STT → дальнейший маршрут.
 
-    Два сценария (по приоритету):
-    1. **`_AWAIT_TEXT_ANSWER`** (этап «Напиши решение или ход задачи одним сообщением»
-       в проверке ДЗ) — распознанный текст идёт в `_run_homework_text_answer_check`
-       тем же путём, что и обычный текстовый ответ. Никакого подтверждения от
-       пользователя не ждём — это и есть его ответ на задание.
-    2. **`_CHAT_ACTIVE`** (открытая `/chat`-сессия) — текст идёт в `_handle_chat_user_message`
-       как обычный пользовательский промпт.
+    Сценарии (по приоритету):
+    1. **`_CHAT_PW_WAIT`** — STT → пароль `/chat` (как текстовый ввод).
+    2. **`_AWAIT_TEXT_ANSWER`** (этап «Напиши решение…» в проверке ДЗ) — STT →
+       `_run_homework_text_answer_check` (приоритет над ленивым `_CHAT_ACTIVE`).
+    3. **`_CHAT_ACTIVE`** — STT → `_handle_chat_user_message` с обёрткой для Cursor.
 
-    Вне этих режимов голосовые **тихо игнорируются** — мы не хотим шумно
-    реагировать на каждое случайное голосовое от ученика.
+    Вне этих режимов голосовые **тихо игнорируются**.
     """
     if not update.effective_user or not update.message:
         return
@@ -6712,6 +6749,26 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             return
 
     chat_id = update.effective_chat.id
+
+    # === Маршрут 0: голос как пароль /chat ===================================
+    if context.user_data.get(_CHAT_PW_WAIT):
+        text_pw = await _stt_transcribe_voice_message(
+            update,
+            context,
+            user_id=user_id,
+            chat_id=chat_id,
+            log_label="chat_pw",
+        )
+        if not text_pw:
+            return
+        text_pw = text_pw.strip()
+        if not text_pw:
+            await update.message.reply_text(
+                "Распознанный пароль пустой. Попробуй ещё раз или введи текстом.",
+            )
+            return
+        await _try_chat_password_from_text(update, context, user_id, text_pw)
+        return
 
     # === Маршрут 1: голос как ответ на ДЗ ====================================
     # Имеет приоритет над /chat: если ученик в этом конкретном шаге проверки,
@@ -6827,10 +6884,17 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not text:
         return
 
-    # Дальше — обычный путь чата: тот же лимит длины, тот же поток.
-    if len(text) > 8000:
+    text = text.strip()
+    if not text:
         await update.message.reply_text(
-            "Распознанный текст слишком длинный для чата (лимит 8000 символов).",
+            "Распознанный текст пустой. Попробуй ещё раз.",
+        )
+        return
+
+    max_raw = 8000 - len(_CHAT_VOICE_CURSOR_PREFIX)
+    if len(text) > max_raw:
+        await update.message.reply_text(
+            f"Распознанный текст слишком длинный для чата (лимит ~{max_raw} символов).",
         )
         return
 
@@ -6839,7 +6903,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         context,
         user_id=user_id,
         chat_id=chat_id,
-        text=text,
+        text=_voice_text_for_chat_cursor(text),
+        history_text=_voice_history_placeholder(text),
     )
 
 
