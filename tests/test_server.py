@@ -161,3 +161,33 @@ def test_check_accepts_jpeg_mock(monkeypatch: pytest.MonkeyPatch, client: TestCl
     assert "Модель:" in body["result"]
 
 
+def test_photo_check_requires_images(client: TestClient) -> None:
+    r = client.post("/photo/check", data={"mode": "single_album"})
+    assert r.status_code == 422
+
+
+def test_photo_check_disabled(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
+    monkeypatch.setenv("PHOTO_CHECK_ENABLE", "0")
+    jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+    r = client.post(
+        "/photo/check",
+        files=[("images", ("a.jpg", io.BytesIO(jpeg), "image/jpeg"))],
+        data={"mode": "single_album", "image_roles": "mixed"},
+    )
+    assert r.status_code == 503
+
+
+def test_photo_check_mock(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
+    monkeypatch.setenv("AI_MOCK", "1")
+    monkeypatch.setenv("PHOTO_CHECK_ENABLE", "1")
+    jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+    r = client.post(
+        "/photo/check",
+        files=[("images", ("a.jpg", io.BytesIO(jpeg), "image/jpeg"))],
+        data={"mode": "single_album", "image_roles": "mixed"},
+    )
+    assert r.status_code == 200
+    assert "result" in r.json()
+    assert "/photo" in r.json()["result"] or "mock" in r.json()["result"].lower()
+
+

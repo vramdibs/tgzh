@@ -4,6 +4,8 @@
 
 ### Added
 
+- **`/shot` — проверка по снимкам без OCR и ГДЗ** (в меню под `/start`; API `POST /photo/check`): модуль **`photo_check.py`**. Multimodal Composer → Grok (bridge) или Qwen VL. Env **`PHOTO_CHECK_*`**, **`BOT_PHOTO_CHECK_TIMEOUT_SEC`**. Тесты — **`tests/test_photo_check.py`**, **`tests/test_photo_bot.py`**, **`tests/test_server.py`**
+
 - **Публичный репозиторий cursor-bridge**: [discourse-cursor-bridge](https://github.com/vramdibs/discourse-cursor-bridge) - установка и env bridge; ссылки в **README**, **docs/integration.md**, **docs/README.md**
 
 - **Лицензия Apache-2.0**: файл **`LICENSE`** в корне репозитория, ссылка в **README**
@@ -34,6 +36,8 @@
 - **Проверка ДЗ без motok hub**: в `docker-compose.yml` у `tgzh-bot` больше не подставляется жёсткий `MOTOK_HUB_URL` — берётся из `.env` (пустой URL = режим без hub, как в `.env.example`). Раньше при пустых `MOTOK_INTERNAL_TOKEN`/`MOTOK_HUB_TOKEN_SECRET` бот всё равно считал hub включённым и отвечал «Вход хаба недоступен. Проверка без person_id не выполняется.»
 
 ### Changed
+
+- **Меню команд Telegram**: **`/stats`** убран из списка (команда по-прежнему доступна вручную); проверка по снимкам - **`/shot`** сразу под **`/start`** (вместо **`/photo`** в меню)
 
 - **Документация TG_MODE**: уточнена схема KeenDNS (inbound webhook на роутер) + VPS egress (outbound polling); убран неверный совет менять DNS на egress-IP. **README.md**, **AGENTS.md**, **`.env.example`**
 

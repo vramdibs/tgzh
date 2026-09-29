@@ -8,7 +8,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY server.py ai_checker.py preocr_client.py logging_config.py tgzh_metrics.py homework_check_status.py tgzh_httpx.py motok_jwt.py ./
+COPY server.py ai_checker.py photo_check.py photo_prepare.py preocr_client.py logging_config.py tgzh_metrics.py homework_check_status.py tgzh_httpx.py motok_jwt.py ./
 
 EXPOSE 8000
 

@@ -29,6 +29,13 @@ from ai_checker import (
     stream_chat_via_cursor,
     summarize_check_parts,
 )
+from photo_check import (
+    ImageRole,
+    PhotoCheckMode,
+    photo_check_enabled,
+    photo_check_max_images,
+    run_photo_check,
+)
 
 logger = setup_logging("tgzh.server")
 
@@ -277,6 +284,89 @@ async def check_photo(
         page_val,
         engine_norm,
         clip_check_log_body(result),
+    )
+    return CheckResponse(result=result)
+
+
+_VALID_PHOTO_ROLES: frozenset[str] = frozenset(
+    {"condition", "solution", "mixed", "unspecified"}
+)
+
+
+def _normalize_photo_check_mode(raw: str) -> PhotoCheckMode:
+    m = (raw or "").strip().lower()
+    if m == "two_step":
+        return "two_step"
+    return "single_album"
+
+
+def _normalize_image_roles(count: int, raw_roles: list[str]) -> list[ImageRole]:
+    out: list[ImageRole] = []
+    for i in range(count):
+        if i < len(raw_roles):
+            r = (raw_roles[i] or "").strip().lower()
+            if r in _VALID_PHOTO_ROLES:
+                out.append(r)  # type: ignore[arg-type]
+                continue
+        out.append("unspecified")
+    return out
+
+
+@app.post("/photo/check", response_model=CheckResponse)
+async def photo_check_multipart(
+    request: Request,
+    mode: str = Form("single_album"),
+    images: list[UploadFile] = File(...),
+    image_roles: list[str] = Form(default=[]),
+) -> CheckResponse:
+    """Multimodal проверка по нескольким фото без OCR и ГДЗ (/photo)."""
+    if not photo_check_enabled():
+        raise HTTPException(503, "photo check disabled")
+    if not images:
+        raise HTTPException(400, "expected at least one image")
+    cap_n = photo_check_max_images()
+    if len(images) > cap_n:
+        raise HTTPException(413, f"too many images (max {cap_n})")
+
+    cap_bytes = _max_check_upload_bytes()
+    blobs: list[bytes] = []
+    for idx, up in enumerate(images):
+        if not allowed_check_mime(up.content_type):
+            raise HTTPException(
+                400,
+                f"images[{idx}]: expected jpeg, png, webp or gif",
+            )
+        data = await up.read(cap_bytes + 1)
+        if len(data) > cap_bytes:
+            raise HTTPException(413, f"images[{idx}] larger than {cap_bytes} bytes")
+        blobs.append(data)
+
+    mode_norm = _normalize_photo_check_mode(mode)
+    roles = _normalize_image_roles(len(blobs), image_roles)
+    person_id = _hub_person_id(request)
+    logger.info(
+        "photo/check start images=%s mode=%s person_id=%s roles=%s",
+        len(blobs),
+        mode_norm,
+        person_id or "-",
+        roles,
+    )
+    tgzh_metrics.record_server_check_start()
+    t0 = time.perf_counter()
+    failed = False
+    try:
+        result = await run_photo_check(images=blobs, roles=roles, mode=mode_norm)
+    except Exception:
+        failed = True
+        logger.exception("photo/check failed")
+        raise
+    finally:
+        elapsed = time.perf_counter() - t0
+        tgzh_metrics.observe_server_check(elapsed_seconds=elapsed, failed=failed)
+    logger.info(
+        "photo/check done elapsed_s=%.2f result_len=%s",
+        elapsed,
+        len(result),
     )
     return CheckResponse(result=result)
 

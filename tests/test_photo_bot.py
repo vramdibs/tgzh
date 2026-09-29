@@ -1,0 +1,104 @@
+"""`/photo`: приоритет `_PHOTO_CHECK_ACTIVE` над `/chat` и ДЗ."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import tempfile
+from typing import Any
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+import bot
+import user_storage
+
+
+@pytest.fixture
+def db_path(monkeypatch: pytest.MonkeyPatch) -> str:
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+        path = f.name
+    user_storage.init_db(path)
+    monkeypatch.setattr(bot, "USER_DB_PATH", path)
+    yield path
+    os.unlink(path)
+
+
+class _FakeUserData(dict):
+    pass
+
+
+class _FakeBot:
+    async def send_message(self, *_a: Any, **_kw: Any) -> None:
+        return None
+
+
+class _FakeContext:
+    def __init__(self) -> None:
+        self.user_data = _FakeUserData()
+        self.bot = _FakeBot()
+
+
+class _FakePhoto:
+    file_id = "fid:photo"
+
+
+class _FakeMessage:
+    def __init__(self, chat_id: int = 1) -> None:
+        self.chat_id = chat_id
+        self.message_id = 100
+        self.media_group_id = None
+        self.photo = [_FakePhoto()]
+
+
+class _FakeUpdate:
+    effective_user = type("U", (), {"id": 555})()
+    effective_chat = type("C", (), {"id": 1})()
+    message = _FakeMessage()
+
+
+@pytest.mark.asyncio
+async def test_photo_check_active_routes_before_chat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = _FakeContext()
+    ctx.user_data[bot._PHOTO_CHECK_ACTIVE] = True
+    ctx.user_data[bot._PHOTO_CHECK_MODE] = "single_album"
+    ctx.user_data[bot._CHAT_ACTIVE] = True
+
+    dispatch = AsyncMock()
+    chat_photo = AsyncMock()
+    monkeypatch.setattr(bot, "_dispatch_photo_check_upload", dispatch)
+    monkeypatch.setattr(bot, "_handle_chat_photo", chat_photo)
+    monkeypatch.setattr(bot, "_safe_blocked_state", AsyncMock(return_value=(None, True)))
+
+    upd = _FakeUpdate()
+    await bot.handle_photo(upd, ctx)
+
+    dispatch.assert_awaited_once()
+    chat_photo.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_photo_check_stores_mixed_role(monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _FakeContext()
+    ctx.user_data[bot._PHOTO_CHECK_ACTIVE] = True
+    ctx.user_data[bot._PHOTO_CHECK_MODE] = "single_album"
+    ctx.user_data[bot._PHOTO_CHECK_MIXED_SINGLE] = True
+
+    send_status = AsyncMock()
+    monkeypatch.setattr(bot, "_send_photo_check_status", send_status)
+
+    upd = _FakeUpdate()
+    await bot._dispatch_photo_check_upload(
+        upd,
+        ctx,
+        user_id=555,
+        photo_file_id="fid1",
+        message_id=10,
+        media_group_id=None,
+    )
+
+    entries = ctx.user_data.get(bot._PHOTO_CHK_ENTRIES)
+    assert entries
+    assert entries[0][2] == "mixed"

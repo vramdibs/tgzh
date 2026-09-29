@@ -571,6 +571,455 @@ _PHOTO_BATCH_ENTRIES = "photo_batch_entries"
 _PHOTO_BATCH_TASK = "photo_batch_task"
 _PHOTO_DEBOUNCE_ALBUM_SEC = 0.5
 
+# --- /shot: проверка по нескольким снимкам без привязки к параграфу/ГДЗ ---
+_PHOTO_CHECK_ACTIVE = "photo_check_active"
+_PHOTO_CHECK_MODE = "photo_check_mode"
+_PHOTO_CHECK_PHASE = "photo_check_phase"
+_PHOTO_CHECK_MIXED_SINGLE = "photo_check_mixed_single"
+_PHOTO_CHK_ENTRIES = "photo_chk_entries"
+_PHOTO_CHK_BATCH_GID = "photo_chk_batch_gid"
+_PHOTO_CHK_BATCH_ENTRIES = "photo_chk_batch_entries"
+_PHOTO_CHK_BATCH_TASK = "photo_chk_batch_task"
+
+
+def _photo_check_clear(context: ContextTypes.DEFAULT_TYPE) -> None:
+    t = context.user_data.pop(_PHOTO_CHK_BATCH_TASK, None)
+    if t is not None and not t.done():
+        t.cancel()
+    context.user_data.pop(_PHOTO_CHK_BATCH_GID, None)
+    context.user_data.pop(_PHOTO_CHK_BATCH_ENTRIES, None)
+    context.user_data.pop(_PHOTO_CHK_ENTRIES, None)
+    context.user_data.pop(_PHOTO_CHECK_ACTIVE, None)
+    context.user_data.pop(_PHOTO_CHECK_MODE, None)
+    context.user_data.pop(_PHOTO_CHECK_PHASE, None)
+    context.user_data.pop(_PHOTO_CHECK_MIXED_SINGLE, None)
+
+
+def _photo_check_entries(context: ContextTypes.DEFAULT_TYPE) -> list[tuple[int, str, str]]:
+    raw = context.user_data.get(_PHOTO_CHK_ENTRIES)
+    if not raw:
+        return []
+    return list(raw)
+
+
+def _photo_check_status_keyboard(context: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
+    entries = _photo_check_entries(context)
+    can_run = bool(entries)
+    phase = context.user_data.get(_PHOTO_CHECK_PHASE)
+    mode = context.user_data.get(_PHOTO_CHECK_MODE)
+    rows: list[list[InlineKeyboardButton]] = []
+    if can_run:
+        rows.append([InlineKeyboardButton("Проверить", callback_data="photo:run")])
+    if mode == "two_step" and phase == "condition" and entries:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "Готово - добавить решение",
+                    callback_data="photo:phase:solution",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton("Отмена", callback_data="photo:cancel"),
+            InlineKeyboardButton("К проверке ДЗ", callback_data="photo:back"),
+        ]
+    )
+    return InlineKeyboardMarkup(rows)
+
+
+async def _send_photo_check_status(
+    bot,
+    chat_id: int,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    reply_to: int | None = None,
+) -> None:
+    entries = _photo_check_entries(context)
+    mode = context.user_data.get(_PHOTO_CHECK_MODE) or "single_album"
+    phase = context.user_data.get(_PHOTO_CHECK_PHASE) or ""
+    n = len(entries)
+    lines = [
+        "<b>Режим /shot</b>",
+        f"Снимков: <b>{n}</b>.",
+    ]
+    if mode == "two_step":
+        lines.append(
+            f"Шаг: <b>{'условие' if phase == 'condition' else 'решение'}</b>."
+        )
+    elif context.user_data.get(_PHOTO_CHECK_MIXED_SINGLE):
+        lines.append("Ожидается один кадр с условием и решением.")
+    else:
+        lines.append("Можно прислать несколько фото в любом порядке.")
+    lines.append("Нажми <b>Проверить</b>, когда все снимки отправлены.")
+    kb = _photo_check_status_keyboard(context)
+    kw: dict = {"parse_mode": ParseMode.HTML, "reply_markup": kb}
+    if reply_to is not None:
+        kw["reply_to_message_id"] = reply_to
+    await bot.send_message(chat_id, "\n".join(lines), **kw)
+
+
+def _bot_photo_check_timeout_s() -> float:
+    raw = (os.getenv("BOT_PHOTO_CHECK_TIMEOUT_SEC") or "").strip()
+    if raw:
+        try:
+            return max(60.0, min(600.0, float(raw)))
+        except ValueError:
+            pass
+    return _check_request_timeout_s("cursor")
+
+
+async def _photo_chk_batch_flush_delayed(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    user_id: int,
+    delay: float,
+) -> None:
+    try:
+        await asyncio.sleep(delay)
+    except asyncio.CancelledError:
+        return
+    context.user_data.pop(_PHOTO_CHK_BATCH_TASK, None)
+    batch = context.user_data.pop(_PHOTO_CHK_BATCH_ENTRIES, None)
+    context.user_data.pop(_PHOTO_CHK_BATCH_GID, None)
+    if not batch:
+        return
+    sorted_ent = sorted(batch, key=lambda x: x[0])
+    mode = context.user_data.get(_PHOTO_CHECK_MODE) or "single_album"
+    phase = context.user_data.get(_PHOTO_CHECK_PHASE) or "condition"
+    mixed = bool(context.user_data.get(_PHOTO_CHECK_MIXED_SINGLE))
+    if mixed:
+        role = "mixed"
+    elif mode == "two_step":
+        role = "condition" if phase == "condition" else "solution"
+    else:
+        role = "unspecified"
+    store: list[tuple[int, str, str]] = context.user_data.setdefault(
+        _PHOTO_CHK_ENTRIES,
+        [],
+    )
+    last_mid = sorted_ent[-1][0]
+    for _, fid in sorted_ent:
+        store.append((last_mid, fid, role))
+    await _send_photo_check_status(
+        context.bot,
+        chat_id,
+        context,
+        reply_to=last_mid,
+    )
+
+
+async def _run_photo_check_request(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user_id: int,
+    chat_id: int,
+    status_msg_id: int | None,
+    edit_message,
+) -> None:
+    entries = _photo_check_entries(context)
+    if not entries:
+        await edit_message("Нет фото для проверки. Пришли снимки и нажми «Проверить».")
+        return
+    mode = context.user_data.get(_PHOTO_CHECK_MODE) or "single_album"
+    file_ids = [e[1] for e in entries]
+    roles = [e[2] for e in entries]
+    await edit_message(
+        "<b>Проверяю по фото…</b>\n"
+        f"Снимков: <b>{len(file_ids)}</b>.\n"
+        "<i>Отправляю на сервер (без OCR и ГДЗ).</i>",
+        parse_mode=ParseMode.HTML,
+    )
+    blobs: list[bytes] = []
+    try:
+        for idx, fid in enumerate(file_ids):
+            tg_file = await context.bot.get_file(fid)
+            raw = await tg_file.download_as_bytearray()
+            blobs.append(bytes(raw))
+    except Exception as e:
+        logger.exception("photo/check download user_id=%s", user_id)
+        await asyncio.to_thread(bot_stats.record_check_technical_failed, USER_DB_PATH)
+        await edit_message(f"Не удалось скачать фото: {_h(str(e))}", parse_mode=ParseMode.HTML)
+        return
+
+    url = f"{SERVER_URL.rstrip('/')}/photo/check"
+    try:
+        hub_headers = await _hub_check_headers(user_id)
+    except hub_client.HubUnavailable:
+        await edit_message(
+            "Вход хаба недоступен. Проверка без person_id не выполняется.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    multipart_files = []
+    for i, blob in enumerate(blobs):
+        multipart_files.append(
+            ("images", (f"photo_{i + 1}.jpg", blob, "image/jpeg"))
+        )
+    form: list[tuple[str, str]] = [("mode", mode)]
+    for r in roles:
+        form.append(("image_roles", r))
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=_bot_photo_check_timeout_s(),
+            transport=async_http_transport_ipv4_lookup(),
+        ) as client:
+            t0 = time.perf_counter()
+            response = await client.post(
+                url,
+                files=multipart_files,
+                data=form,
+                headers=hub_headers,
+            )
+            elapsed = time.perf_counter() - t0
+            logger.info(
+                "photo/check user_id=%s status=%s elapsed_s=%.2f n=%s",
+                user_id,
+                response.status_code,
+                elapsed,
+                len(blobs),
+            )
+            response.raise_for_status()
+            body_raw = (response.json().get("result") or "").strip()
+    except httpx.RequestError as e:
+        logger.warning("photo/check request error user_id=%s err=%s", user_id, e)
+        await asyncio.to_thread(bot_stats.record_check_technical_failed, USER_DB_PATH)
+        await edit_message(
+            f"Ошибка связи с сервером: {_h(str(e))}",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    except Exception as e:
+        logger.exception("photo/check unexpected user_id=%s", user_id)
+        await asyncio.to_thread(bot_stats.record_check_technical_failed, USER_DB_PATH)
+        await edit_message(f"Ошибка: {_h(str(e))}", parse_mode=ParseMode.HTML)
+        return
+
+    final_text = homework_check_status.dedupe_homework_check_lines(body_raw)
+    await asyncio.to_thread(bot_stats.record_check_completed, USER_DB_PATH, final_text)
+    prefix = homework_check_status.format_check_result_prefix(final_text)
+    suffix = homework_check_status.format_check_result_suffix_html()
+    html_body = telegram_format.markdown_to_telegram_html(
+        homework_check_status.strip_homework_check_machine_tags(body_raw),
+    )
+    profile = await asyncio.to_thread(user_storage.get_profile, USER_DB_PATH, user_id)
+    _photo_check_clear(context)
+    if profile is not None:
+        kb = get_check_result_keyboard(profile, user_id, cursor_recheck=False)
+    else:
+        kb = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("👍", callback_data="cfv:1"),
+                    InlineKeyboardButton("👎", callback_data="cfv:-1"),
+                ],
+            ]
+        )
+    await edit_message(
+        prefix + html_body + suffix,
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb,
+    )
+
+
+async def shot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or not update.effective_user:
+        return
+    if await _reply_if_blocked_cmd(update, context):
+        return
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    logger.info("cmd /shot user_id=%s", user_id)
+    if not (os.getenv("PHOTO_CHECK_ENABLE") or "1").strip() == "1":
+        await update.message.reply_text("Режим /shot сейчас выключен на сервере.")
+        return
+    _photo_check_clear(context)
+    context.user_data[_PHOTO_CHECK_ACTIVE] = True
+    await update.message.reply_text(
+        "Проверка по фото без учебника и ГДЗ: пришли снимки условия и решения "
+        "(можно на одном кадре). Выбери, как удобнее загружать:",
+        reply_markup=_photo_check_mode_keyboard(),
+    )
+
+
+def _photo_check_mode_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "Одно фото - все в кадре",
+                    callback_data="photo:mode:mixed_one",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "Условие и решение отдельно",
+                    callback_data="photo:mode:two_step",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "Несколько фото одним альбомом",
+                    callback_data="photo:mode:single_album",
+                )
+            ],
+            [InlineKeyboardButton("Отмена", callback_data="photo:cancel")],
+        ]
+    )
+
+
+async def _handle_photo_check_callback(
+    query: CallbackQuery,
+    context: ContextTypes.DEFAULT_TYPE,
+    data: str,
+) -> None:
+    user_id = query.from_user.id if query.from_user else 0
+    chat_id = query.message.chat_id
+
+    if data == "photo:cancel":
+        _photo_check_clear(context)
+        await query.edit_message_text("Режим /shot отменен.")
+        return
+
+    if data == "photo:back":
+        _photo_check_clear(context)
+        profile = await asyncio.to_thread(user_storage.get_profile, USER_DB_PATH, user_id)
+        await query.edit_message_text(
+            "Вернулся к обычной проверке ДЗ. Команда /start или «Указать задание».",
+            reply_markup=get_main_keyboard(
+                uploaded=_user_has_uploaded_photo(user_id),
+                profile=profile,
+                user_id=user_id,
+            )
+            if profile
+            else None,
+        )
+        return
+
+    if data == "photo:mode:mixed_one":
+        _photo_check_clear(context)
+        context.user_data[_PHOTO_CHECK_ACTIVE] = True
+        context.user_data[_PHOTO_CHECK_MODE] = "single_album"
+        context.user_data[_PHOTO_CHECK_MIXED_SINGLE] = True
+        context.user_data[_PHOTO_CHECK_PHASE] = "condition"
+        await query.edit_message_text(
+            "Пришли <b>один</b> снимок, где видны и условие, и решение. "
+            "Затем нажми «Проверить».",
+            parse_mode=ParseMode.HTML,
+        )
+        await _send_photo_check_status(context.bot, chat_id, context)
+        return
+
+    if data == "photo:mode:two_step":
+        _photo_check_clear(context)
+        context.user_data[_PHOTO_CHECK_ACTIVE] = True
+        context.user_data[_PHOTO_CHECK_MODE] = "two_step"
+        context.user_data[_PHOTO_CHECK_PHASE] = "condition"
+        await query.edit_message_text(
+            "Сначала пришли фото <b>условия</b> (учебник, доска). "
+            "Потом «Готово - добавить решение» и фото решения.",
+            parse_mode=ParseMode.HTML,
+        )
+        await _send_photo_check_status(context.bot, chat_id, context)
+        return
+
+    if data == "photo:mode:single_album":
+        _photo_check_clear(context)
+        context.user_data[_PHOTO_CHECK_ACTIVE] = True
+        context.user_data[_PHOTO_CHECK_MODE] = "single_album"
+        await query.edit_message_text(
+            "Пришли все нужные фото (альбомом или по одному), затем «Проверить».",
+            parse_mode=ParseMode.HTML,
+        )
+        await _send_photo_check_status(context.bot, chat_id, context)
+        return
+
+    if data == "photo:phase:solution":
+        if context.user_data.get(_PHOTO_CHECK_MODE) != "two_step":
+            await _answer_query_once(query, "Сейчас не режим двух шагов.", show_alert=True)
+            return
+        context.user_data[_PHOTO_CHECK_PHASE] = "solution"
+        await query.edit_message_text(
+            "Теперь пришли фото <b>решения</b> в тетради или на листе.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=_photo_check_status_keyboard(context),
+        )
+        return
+
+    if data == "photo:run":
+        if not context.user_data.get(_PHOTO_CHECK_ACTIVE):
+            await _answer_query_once(query, "Сначала /shot", show_alert=True)
+            return
+
+        async def _edit(text: str, **kw) -> None:
+            await query.edit_message_text(text, **kw)
+
+        await _run_photo_check_request(
+            update,
+            context,
+            user_id=user_id,
+            chat_id=chat_id,
+            status_msg_id=query.message.message_id,
+            edit_message=_edit,
+        )
+        return
+
+
+async def _dispatch_photo_check_upload(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user_id: int,
+    photo_file_id: str,
+    message_id: int,
+    media_group_id: str | None,
+) -> None:
+    chat_id = update.effective_chat.id
+    if media_group_id is not None:
+        gid_key = str(media_group_id)
+        if context.user_data.get(_PHOTO_CHK_BATCH_GID) != gid_key:
+            context.user_data.pop(_PHOTO_CHK_BATCH_TASK, None)
+            context.user_data[_PHOTO_CHK_BATCH_GID] = gid_key
+            context.user_data[_PHOTO_CHK_BATCH_ENTRIES] = []
+        batch: list[tuple[int, str]] = context.user_data[_PHOTO_CHK_BATCH_ENTRIES]
+        batch.append((message_id, photo_file_id))
+        t = context.user_data.pop(_PHOTO_CHK_BATCH_TASK, None)
+        if t is not None and not t.done():
+            t.cancel()
+        context.user_data[_PHOTO_CHK_BATCH_TASK] = asyncio.create_task(
+            _photo_chk_batch_flush_delayed(
+                context,
+                chat_id,
+                user_id,
+                _PHOTO_DEBOUNCE_ALBUM_SEC,
+            )
+        )
+        return
+
+    mode = context.user_data.get(_PHOTO_CHECK_MODE) or "single_album"
+    phase = context.user_data.get(_PHOTO_CHECK_PHASE) or "condition"
+    mixed = bool(context.user_data.get(_PHOTO_CHECK_MIXED_SINGLE))
+    if mixed:
+        role = "mixed"
+    elif mode == "two_step":
+        role = "condition" if phase == "condition" else "solution"
+    else:
+        role = "unspecified"
+    store: list[tuple[int, str, str]] = context.user_data.setdefault(
+        _PHOTO_CHK_ENTRIES,
+        [],
+    )
+    store.append((message_id, photo_file_id, role))
+    await _send_photo_check_status(
+        context.bot,
+        chat_id,
+        context,
+        reply_to=message_id,
+    )
+
 
 def _user_photo_file_ids(user_id: int) -> list[str]:
     v = user_photos.get(user_id)
@@ -897,7 +1346,7 @@ def flow_note(context: ContextTypes.DEFAULT_TYPE, message: object | None) -> Non
 def _bot_commands_list() -> list[BotCommand]:
     return [
         BotCommand("start", "Новое упражнение"),
-        BotCommand("stats", "Статистика проверок"),
+        BotCommand("shot", "Проверка по снимкам"),
         BotCommand("chat", "ИИ-ассистент"),
         BotCommand("textbook", "Сменить класс или учебник"),
     ]
@@ -1475,6 +1924,7 @@ def _voice_history_placeholder(transcript: str) -> str:
 
 def _activate_chat_session_ram(context: ContextTypes.DEFAULT_TYPE, *, fresh: bool = False) -> None:
     """RAM-флаги активной /chat-сессии. `fresh=True` — новый вход (пароль), чистим историю."""
+    _photo_check_clear(context)
     context.user_data.pop(_CHAT_PW_WAIT, None)
     context.user_data.pop(_AWAIT_TEXT_ANSWER, None)
     context.user_data.pop(_AWAIT_PHOTO_ANSWER, None)
@@ -2618,6 +3068,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop(_HW_PAR_BTN_MAX, None)
     context.user_data.pop(_AWAIT_TEXT_ANSWER, None)
     context.user_data.pop(_AWAIT_PHOTO_ANSWER, None)
+    _photo_check_clear(context)
     _pop_step2_gdz_meta(context)
     _clear_begemot_session(context)
     profile = await asyncio.to_thread(user_storage.get_profile, USER_DB_PATH, user_id)
@@ -4410,6 +4861,12 @@ async def _button_callback_dispatch(
         await _handle_chat_callback(query, context, data)
         return
 
+    if data.startswith("photo:"):
+        if await _reply_if_blocked_callback(query, context):
+            return
+        await _handle_photo_check_callback(query, context, data)
+        return
+
     if await _reply_if_blocked_callback(query, context):
         return
 
@@ -5646,6 +6103,18 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 ),
             )
             return
+    if context.user_data.get(_PHOTO_CHECK_ACTIVE):
+        photo_pc = update.message.photo[-1]
+        msg_pc = update.message
+        await _dispatch_photo_check_upload(
+            update,
+            context,
+            user_id=user_id,
+            photo_file_id=photo_pc.file_id,
+            message_id=msg_pc.message_id,
+            media_group_id=msg_pc.media_group_id,
+        )
+        return
     # Приоритет: если пользователь только что нажал «Отправить фото» в режиме
     # проверки ДЗ — фото идёт в проверку, а НЕ в /chat. Иначе фото-ответ к ДЗ
     # уходило бы в чат-бот (см. ниже про ленивое «оживание» chat-сессии из БД)
@@ -6248,6 +6717,7 @@ def main() -> None:
     app.add_handler(CommandHandler("begemot_logout", begemot_logout_cmd))
     app.add_handler(CommandHandler("chat", chat_cmd))
     app.add_handler(CommandHandler("chat_logout", chat_logout_cmd))
+    app.add_handler(CommandHandler("shot", shot_cmd))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_homework_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
