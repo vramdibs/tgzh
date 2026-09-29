@@ -59,3 +59,20 @@ async def test_run_photo_check_ai_mock(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_photo_check_model_slugs_default() -> None:
     slugs = photo_check.photo_check_model_slugs()
     assert "composer-2.5" in slugs
+
+
+def _system_prompt(stage: str) -> str:
+    msgs = photo_check.build_photo_check_messages(
+        images=[_tiny_jpeg()],
+        roles=["unspecified"],
+        mode="single_album",
+        stage=stage,
+    )
+    system = next(m for m in msgs if m["role"] == "system")
+    return str(system["content"])
+
+
+def test_photo_check_prompts_match_solution_to_condition() -> None:
+    needle = "Якорь - рукопись ученика"
+    for stage in ("structure", "verify", "consolidated"):
+        assert needle in _system_prompt(stage), stage
