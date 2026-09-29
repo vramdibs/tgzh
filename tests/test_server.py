@@ -106,9 +106,15 @@ def test_summarize_engine_cursor_propagates_force_fallback(
 ) -> None:
     captured: dict[str, object] = {}
 
-    async def _fake_summarize(parts: list[str], *, force_fallback: bool = False) -> str:
+    async def _fake_summarize(
+        parts: list[str],
+        *,
+        force_fallback: bool = False,
+        subject_slug: str = "matematika",
+    ) -> str:
         captured["parts_n"] = len(parts)
         captured["force_fallback"] = force_fallback
+        captured["subject_slug"] = subject_slug
         return "summary-from-fake"
 
     import server
@@ -121,7 +127,11 @@ def test_summarize_engine_cursor_propagates_force_fallback(
     )
     assert r.status_code == 200, r.text
     assert r.json()["result"] == "summary-from-fake"
-    assert captured == {"parts_n": 2, "force_fallback": True}
+    assert captured == {
+        "parts_n": 2,
+        "force_fallback": True,
+        "subject_slug": "matematika",
+    }
 
 
 def test_check_accepts_jpeg_mock(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
