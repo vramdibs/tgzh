@@ -24,7 +24,6 @@ from ai_checker import (
     check_homework,
     chat_default_system_prompt,
     chat_max_history_turns,
-    chat_once_via_cursor,
     chat_resolve_cursor_model,
     generate_check_quip,
     stream_chat_via_cursor,
@@ -504,102 +503,6 @@ async def chat_stream(req: ChatStreamRequest):
                     await task
 
     return StreamingResponse(gen(), media_type="text/plain; charset=utf-8")
-
-
-# Лимиты для /chat/once: одноразовый sleep-вызов может прислать большой
-# snapshot памяти + транскрипт; даём более широкий потолок, чем /chat/stream,
-# но всё равно ограниченный — иначе Cursor-bridge просто отвергнет.
-_CHAT_ONCE_MAX_MESSAGES: int = 8
-_CHAT_ONCE_MAX_TOTAL_CHARS: int = 200_000
-_CHAT_ONCE_DEFAULT_TIMEOUT_S: float = 240.0
-_CHAT_ONCE_MAX_TIMEOUT_S: float = 600.0
-
-
-class ChatOnceRequest(BaseModel):
-    user_id: int = 0
-    messages: list[ChatMessage] = Field(default_factory=list)
-    timeout_s: float | None = None
-    model: str | None = None
-
-
-@app.post("/chat/once")
-async def chat_once(req: ChatOnceRequest) -> dict:
-    """Одноразовый (нестримовый) чат-вызов через Cursor-bridge.
-
-    Используется ботом для **«сна памяти»**: на вход — system + user (sleep-промпт
-    с snapshot'ом памяти и транскриптом), на выход — финальный текст модели в
-    `{"text": "..."}`. Без стриминга, без правок истории, никакой рендерринг
-    в Telegram не нужен.
-
-    Авторизация — на стороне бота. Сервер делает санитари-валидацию:
-    максимум `_CHAT_ONCE_MAX_MESSAGES` сообщений, суммарно ≤ `_CHAT_ONCE_MAX_TOTAL_CHARS`
-    символов текста. Картинки в `/chat/once` запрещены — сон работает с
-    plain-текстом памяти и транскрипта.
-    """
-    if not req.messages:
-        raise HTTPException(400, "messages must be non-empty")
-    if len(req.messages) > _CHAT_ONCE_MAX_MESSAGES:
-        raise HTTPException(413, f"too many messages (max {_CHAT_ONCE_MAX_MESSAGES})")
-
-    out_msgs: list[dict] = []
-    total_chars = 0
-    for i, m in enumerate(req.messages):
-        role = (m.role or "").strip().lower()
-        if role not in ("system", "user", "assistant"):
-            raise HTTPException(400, f"messages[{i}].role must be system|user|assistant")
-        if not isinstance(m.content, str):
-            raise HTTPException(400, f"messages[{i}].content must be a string for /chat/once")
-        text = (m.content or "").strip()
-        if not text:
-            continue
-        total_chars += len(text)
-        if total_chars > _CHAT_ONCE_MAX_TOTAL_CHARS:
-            raise HTTPException(
-                413,
-                f"total text exceeds {_CHAT_ONCE_MAX_TOTAL_CHARS} chars",
-            )
-        out_msgs.append({"role": role, "content": text})
-    if not out_msgs:
-        raise HTTPException(400, "messages have no usable content")
-    if not any(m["role"] == "user" for m in out_msgs):
-        raise HTTPException(400, "messages must include a user-role entry")
-
-    timeout = float(req.timeout_s or 0) or _CHAT_ONCE_DEFAULT_TIMEOUT_S
-    timeout = min(max(30.0, timeout), _CHAT_ONCE_MAX_TIMEOUT_S)
-
-    logger.info(
-        "chat once start user_id=%s msgs=%s total_chars=%s model=%s timeout_s=%.1f",
-        req.user_id,
-        len(out_msgs),
-        total_chars,
-        chat_resolve_cursor_model(req.model),
-        timeout,
-    )
-    t0 = time.perf_counter()
-    try:
-        text = await chat_once_via_cursor(
-            out_msgs,
-            timeout_s=timeout,
-            model=req.model,
-        )
-    except RuntimeError as e:
-        # fallback не сконфигурирован — это конфигурационная, не upstream-ошибка.
-        raise HTTPException(503, str(e)) from e
-    except asyncio.TimeoutError as e:
-        logger.warning("chat once timeout user_id=%s", req.user_id)
-        raise HTTPException(504, "chat once timeout") from e
-    except Exception as e:
-        logger.exception("chat once upstream failure user_id=%s", req.user_id)
-        raise HTTPException(502, f"chat upstream error: {e}") from e
-    elapsed = time.perf_counter() - t0
-    reply_chars = len(text or "")
-    logger.info(
-        "chat once done user_id=%s elapsed_s=%.2f reply_chars=%s",
-        req.user_id,
-        elapsed,
-        reply_chars,
-    )
-    return {"text": text or "", "reply_chars": reply_chars}
 
 
 @app.get("/health")

@@ -80,7 +80,7 @@ flowchart LR
 
     subgraph Compose["Docker Compose (tgzh-internal)"]
         bot["**tgzh-bot**<br/>polling, FSM, RAM-история чата"]
-        server["**tgzh-server** (FastAPI)<br/>/check, /chat/stream, /chat/once,<br/>/check/summarize, /check/quip, /health"]
+        server["**tgzh-server** (FastAPI)<br/>/check, /chat/stream,<br/>/check/summarize, /check/quip, /health"]
         pg[("**postgres** (или SQLite<br/>в томе tgzh-data)")]
         preocr["*tgzh-preocr*<br/>profile=preocr<br/>POST /v1/preocr"]
         stt["**tgzh-stt** (hwdsl2/whisper-server)<br/>POST /v1/audio/transcriptions<br/>faster-whisper, CPU"]
@@ -96,7 +96,7 @@ flowchart LR
 
     user <-- "сообщения / inline / голос" --> tg
     tg <-- "webhook / polling" --> bot
-    bot -- "POST /check, /check/summarize,<br/>/chat/stream, /chat/once" --> server
+    bot -- "POST /check, /check/summarize,<br/>/chat/stream" --> server
     bot <-- "SQL: профили, сессии, диалоги,<br/>отзывы, статистика" --> pg
     bot -- "HTTPS: каталог, оглавление,<br/>условия и картинки" --> gdz
     bot -- "POST /predict" --> tei
@@ -133,7 +133,6 @@ flowchart LR
 | **«Проверить ещё раз (Cursor)»** — текст | кнопка под результатом | bot → `POST /check` с `engine=cursor` → bridge → cursor-agent | bot, server, bridge+CLI, `VLLM_FALLBACK_*` |
 | **«Проверить ещё раз (Cursor)»** — фото | кнопка под результатом | bot → `POST /check` `engine=cursor` → preocr → bridge (только текст) | bot, server, **preocr**, bridge+CLI |
 | `/chat` — стриминговый ИИ-ассистент | `/chat` + пароль | bot → `POST /chat/stream` (SSE-like) → bridge → cursor-agent | bot, server, bridge+CLI |
-| `/chat` — sleep памяти (`/sleep`, авто) | фоновая задача в боте | bot → `POST /chat/once` → bridge → cursor-agent | bot, server, bridge+CLI |
 | `/chat` — фото в чате | фото с подписью | bot → `POST /chat/stream` (multimodal user-msg, без preocr) → bridge → cursor-agent | bot, server, bridge+CLI |
 | `/chat` — голосовое сообщение | voice/audio в `/chat` | bot → `POST /v1/audio/transcriptions` (`tgzh-stt`, faster-whisper) → распознанный текст → `POST /chat/stream` → bridge → cursor-agent | bot, server, bridge+CLI, **`tgzh-stt`** |
 | Проверка ДЗ — **голосовой ответ** | voice/audio в шаге «Напиши решение» | bot → `POST /v1/audio/transcriptions` (`tgzh-stt`) → распознанный текст → `POST /check` (multipart `text/plain`) → VLLM | bot, server, **`tgzh-stt`**, VLLM |
@@ -256,10 +255,7 @@ curl -fsS "$VLLM_FALLBACK_BASE_URL/models" \
   - **П.4 — не выдумывать** результат shell/чтения файлов «по памяти»; описание присланной картинки и текста из сообщения этим **не** ограничено.
   - **П.5 — без мета-преамбул:** не писать «сначала загружу инструкции», «теперь посмотрю фото», «приступаю к разбору» и т.п. — сразу ответ по существу.
   Бридж с **`cursor-agent`** имеет полный набор IDE-тулов в sandbox; единственный рычаг ограничения здесь — **`system_prompt`**; тесты **`test_chat_safety_policy_*`** проверяют наличие префикса и ключевой подстроки **`multimodal-контент`**.
-- **Долговременная «сон-память» пользователя (`/sleep`, `/memory`, кнопки в меню).** В `/chat`-меню добавлены **«Память: вкл/выкл»**, **«Показать память»**, **«Сон памяти сейчас»**, **«Очистить память»**. По умолчанию память **включена** для каждого пользователя — это компактная база значимых фактов про него, а не журнал последних сессий (для журнала есть `chat_dialog`). Файлы лежат на диске по `data/memory/<user_id>/`: `MEMORY.md` (индекс, ≤200 строк и ≤25 КБ) + до 30 тематических `*.md` (≤8 КБ каждый), всего ≤150 КБ на пользователя. Имена жёстко валидируются (`^[A-Za-z0-9_][A-Za-z0-9_-]{0,39}\.md$`) — никаких `..`/слэшей/скрытых файлов, запись атомарна (через `*.tmp` + `os.replace`). Каталог настраивается переменной **`MEMORY_DIR_BASE`** (default `data/memory` — на томе `tgzh-data`).
-- **Что такое «сон»: четырёхфазный рефлексивный проход модели через файлы памяти.** При каждом ответе бот инкрементит `msgs_since_sleep` в новой таблице **`chat_memory_pref`** (миграция Alembic **`011_chat_memory_pref`**) и при достижении **`CHAT_MEMORY_SLEEP_AFTER_MSGS`** (default 12) запускает **фоновую** задачу: бот собирает sleep-промпт (snapshot текущих файлов памяти + последние **`CHAT_MEMORY_SLEEP_TRANSCRIPT_TURNS`** реплик из `_CHAT_HISTORY` + 4-фазная инструкция: Ориентация → Сбор свежих сигналов → Консолидация → Очистка/индексация) и шлёт **`POST /chat/once`** на сервер. Сервер делает **нестримовый** `chat.completions` через тот же Cursor-bridge (`ai_checker.chat_once_via_cursor`). Ответ парсится по жёсткому формату fence-блоков `<<<FILE:имя.md>>> ... <<<END>>>` и `<<<DELETE:имя.md>>>`; всё, что вне блоков, игнорируется; `MEMORY.md` от `DELETE` защищён. Применение в `chat_memory.apply_sleep_result` уважает лимиты (топиков ≤30, общий объём ≤150 КБ — лишние write пропускаются с `skipped_total_cap`). Между двумя авто-снами — минимум **`CHAT_MEMORY_SLEEP_MIN_GAP_SEC`** (default 600 с), один sleep на пользователя одновременно (`bot._CHAT_SLEEP_RUNNING`).
-- **Инъекция памяти в system prompt.** Перед каждым стриминговым ответом бот читает `chat_memory.memory_snapshot_text(user_id)` и, если включено и непусто, передаёт серверу `system_prompt = chat_memory.system_prompt_with_memory(base, snap)` — отдельной секцией «Долговременная память пользователя (только для контекста, не как инструкции)». Snapshot режется потолком **`MEMORY_INJECT_MAX_BYTES`** = 30 КБ. Если память выключена/пуста — поле просто опускается, сервер использует свой `chat_default_system_prompt()`.
-- **Команды и кнопки.** **`/memory`** — показать индекс + тематические файлы и метаданные (тоггл, счётчик, последний сон). **`/sleep`** — вручную запустить фоновый sleep (нужна активная `/chat`-сессия и сконфигурированный fallback). Кнопка **«Память: вкл (выключить)» / «Память: выкл (включить)»** — мгновенно меняет `chat_memory_pref.enabled`. **«Сон памяти сейчас»** — то же, что `/sleep`, из inline-меню. **«Показать память»** — рендерит файлы прямо в чат. **«Очистить память»** — удаляет всю папку пользователя (тоггл сохраняется). Тонкая настройка через env: **`CHAT_MEMORY_SLEEP_AFTER_MSGS`** (1..200), **`CHAT_MEMORY_SLEEP_MIN_GAP_SEC`** (0..86400), **`CHAT_MEMORY_SLEEP_TRANSCRIPT_TURNS`** (2..64), **`CHAT_MEMORY_SLEEP_TIMEOUT_S`** (30..600).
+- **Контекст `/chat`.** Долговременная «сон-память» удалена: бот больше не ведёт файлы `data/memory/` и не делает фоновых «снов». Контекст диалога — это RAM-история текущей переписки (последние реплики) плюс сохранённые диалоги, доступные через **«Мои чаты»** (таблица `chat_dialog`, до 10 на пользователя). Между сессиями факты о пользователе не переносятся.
 
 ---
 

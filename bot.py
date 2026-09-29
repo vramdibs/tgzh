@@ -165,7 +165,6 @@ from telegram.request import HTTPXRequest
 
 import bot_stats
 import ai_checker
-import chat_memory
 import feedback_tei
 import gdz_solution
 import homework_check_status
@@ -1309,17 +1308,14 @@ def _chat_session_status_html(session_until) -> str:
 
 
 def _chat_menu_keyboard_for_user(active: bool, user_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура меню чата, подтянув текущий тоггл памяти из БД (sync, дёшево)."""
-    mem_enabled = True
+    """Клавиатура меню чата, подтянув текущую модель из БД (sync, дёшево)."""
     model_slug = ai_checker.chat_cursor_model_default()
     try:
-        mem_enabled = user_storage.chat_memory_get_pref(USER_DB_PATH, user_id).enabled
         model_slug = user_storage.chat_model_get(USER_DB_PATH, user_id)
     except Exception:
         pass
     return _chat_menu_keyboard(
         active,
-        memory_enabled=mem_enabled,
         model_slug=model_slug,
     )
 
@@ -1343,7 +1339,6 @@ def _chat_model_keyboard(current_slug: str) -> InlineKeyboardMarkup:
 def _chat_menu_keyboard(
     active: bool,
     *,
-    memory_enabled: bool = True,
     model_slug: str | None = None,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
@@ -1367,20 +1362,6 @@ def _chat_menu_keyboard(
         )
         rows.append(
             [InlineKeyboardButton(f"Модель: {model_label}", callback_data="chat:model")],
-        )
-        # Долговременная память + «сон». Подпись кнопки тоггла зависит от текущего состояния.
-        mem_label = (
-            "Память: вкл (выключить)" if memory_enabled else "Память: выкл (включить)"
-        )
-        rows.append([InlineKeyboardButton(mem_label, callback_data="chat:mem_toggle")])
-        rows.append(
-            [
-                InlineKeyboardButton("Показать память", callback_data="chat:mem_show"),
-                InlineKeyboardButton("Сон памяти сейчас", callback_data="chat:mem_sleep"),
-            ],
-        )
-        rows.append(
-            [InlineKeyboardButton("Очистить память", callback_data="chat:mem_purge")],
         )
         rows.append(
             [InlineKeyboardButton("Выйти из чата", callback_data="chat:logout")],
@@ -1444,8 +1425,9 @@ async def _send_chat_menu(
     if active:
         body = (
             "<b>ИИ-ассистент Cursor.</b> Можно задавать вопросы прямо здесь — "
-            "ответ приходит потоково. История диалога живёт в памяти бота "
-            "(перезапуск её сбрасывает).\n\n"
+            "ответ приходит потоково. История текущего диалога живёт в памяти бота; "
+            "прошлые диалоги (до "
+            f"{user_storage.CHAT_DIALOG_HISTORY_LIMIT}) доступны через «Мои чаты».\n\n"
             f"{_chat_session_status_html(until)}"
         )
     else:
@@ -1456,9 +1438,6 @@ async def _send_chat_menu(
         )
     if extra_html:
         body = body + "\n\n" + extra_html
-    mem_pref = await asyncio.to_thread(
-        user_storage.chat_memory_get_pref, USER_DB_PATH, user_id,
-    )
     model_slug = await asyncio.to_thread(
         user_storage.chat_model_get, USER_DB_PATH, user_id,
     )
@@ -1470,7 +1449,6 @@ async def _send_chat_menu(
         body,
         reply_markup=_chat_menu_keyboard(
             active,
-            memory_enabled=mem_pref.enabled,
             model_slug=model_slug,
         ),
         parse_mode=ParseMode.HTML,
@@ -1734,137 +1712,6 @@ async def _handle_chat_callback(
                     f"Выбрано: <b>{_h(ai_checker.chat_cursor_model_label(saved))}</b>"
                 ),
                 reply_markup=_chat_model_keyboard(saved),
-                parse_mode=ParseMode.HTML,
-            )
-        return
-    if action == "mem_toggle":
-        cur = await asyncio.to_thread(
-            user_storage.chat_memory_get_pref, USER_DB_PATH, user_id,
-        )
-        new_val = not cur.enabled
-        await asyncio.to_thread(
-            user_storage.chat_memory_set_enabled, USER_DB_PATH, user_id, new_val,
-        )
-        await _answer_query_once(
-            query, "Память включена." if new_val else "Память выключена.",
-        )
-        files_n = len(chat_memory.list_memory_files(user_id))
-        body = (
-            f"<i>Долговременная память: {'включена' if new_val else 'выключена'}. "
-            f"Файлов памяти: {files_n}. "
-            f"{'Сон будет запускаться автоматически.' if new_val else 'Сон отключён, файлы памяти не трогаются.'}</i>"
-        )
-        with suppress(BadRequest, Exception):
-            await query.edit_message_text(
-                body,
-                reply_markup=_chat_menu_keyboard_for_user(True, user_id),
-                parse_mode=ParseMode.HTML,
-            )
-        return
-    if action == "mem_show":
-        await _answer_query_once(query)
-        files = chat_memory.list_memory_files(user_id)
-        pref = await asyncio.to_thread(
-            user_storage.chat_memory_get_pref, USER_DB_PATH, user_id,
-        )
-        if not files:
-            text = (
-                "<i>Память пока пуста.</i> Когда наберётся достаточно реплик, "
-                f"бот сам синтезирует первые заметки (порог: "
-                f"{_chat_memory_sleep_after_msgs()} реплик)."
-            )
-        else:
-            lines = [f"<b>Память</b> ({len(files)} файл(ов))."]
-            if pref.last_sleep_at:
-                lines.append(
-                    f"Последний сон: <code>{_h(pref.last_sleep_at)}</code> — "
-                    f"{_h(pref.last_sleep_status or '?')}",
-                )
-            lines.append("")
-            for fn in files:
-                body_text = chat_memory.read_memory_file(user_id, fn)
-                size = len(body_text.encode("utf-8"))
-                lines.append(f"<b>{_h(fn)}</b> ({size} байт):")
-                snippet = body_text.strip()
-                if len(snippet) > 1000:
-                    snippet = snippet[:1000].rstrip() + "…"
-                lines.append(f"<pre>{_h(snippet)}</pre>")
-            text = "\n".join(lines)[:4000]
-        with suppress(BadRequest, Exception):
-            await context.bot.send_message(
-                chat_id,
-                text,
-                reply_markup=_chat_menu_keyboard_for_user(True, user_id),
-                parse_mode=ParseMode.HTML,
-                disable_web_page_preview=True,
-            )
-        return
-    if action == "mem_sleep":
-        if not _cursor_recheck_available():
-            await _answer_query_once(query, "Cursor сейчас недоступен.")
-            return
-        # Берём активную RAM-историю; если пусто — пробуем поднять последний серверный диалог.
-        history: list[dict[str, str]] = list(context.user_data.get(_CHAT_HISTORY) or [])
-        if not history:
-            try:
-                dlgs = await asyncio.to_thread(
-                    user_storage.chat_dialog_list, USER_DB_PATH, user_id,
-                )
-                if dlgs:
-                    history = (
-                        await asyncio.to_thread(
-                            user_storage.chat_dialog_load,
-                            USER_DB_PATH,
-                            user_id,
-                            dlgs[0].dialog_id,
-                        )
-                        or []
-                    )
-            except Exception:
-                logger.warning("mem_sleep: failed to load history user_id=%s", user_id, exc_info=True)
-        transcript = _chat_history_for_sleep(history)
-        if not transcript:
-            await _answer_query_once(query, "Нечего синтезировать — нет диалогов.")
-            return
-        # Лочим повторный запуск, пока авто-сон бежит.
-        if (existing := _CHAT_SLEEP_RUNNING.get(user_id)) and not existing.done():
-            await _answer_query_once(query, "Сон уже идёт, подожди немного.")
-            return
-        await _answer_query_once(query, "Запускаю сон…")
-        with suppress(BadRequest, Exception):
-            await query.edit_message_text(
-                "<i>Сон памяти запущен. Это занимает до пары минут — "
-                "пиши дальше, бот применит результат фоном.</i>",
-                reply_markup=_chat_menu_keyboard_for_user(True, user_id),
-                parse_mode=ParseMode.HTML,
-            )
-
-        async def _runner() -> None:
-            try:
-                ok, status = await _run_chat_sleep(
-                    user_id=user_id,
-                    transcript=transcript,
-                    trigger="manual",
-                )
-                short = ("OK" if ok else "не удалось") + ": " + status
-                with suppress(Exception):
-                    await context.bot.send_message(
-                        chat_id,
-                        f"Сон памяти завершён ({_h(short[:300])}).",
-                        parse_mode=ParseMode.HTML,
-                    )
-            finally:
-                _CHAT_SLEEP_RUNNING.pop(user_id, None)
-
-        _CHAT_SLEEP_RUNNING[user_id] = asyncio.create_task(_runner())
-        return
-    if action == "mem_purge":
-        n = await asyncio.to_thread(chat_memory.purge_memory, user_id)
-        await _answer_query_once(query, f"Удалено файлов: {n}.")
-        with suppress(BadRequest, Exception):
-            await query.edit_message_text(
-                f"<i>Память очищена ({n} файлов удалено).</i>",
-                reply_markup=_chat_menu_keyboard_for_user(True, user_id),
                 parse_mode=ParseMode.HTML,
             )
         return
@@ -3585,17 +3432,6 @@ async def _stream_chat_response(
         payload["model"] = model_slug
     except Exception:
         logger.warning("chat model load failed user_id=%s", user_id, exc_info=True)
-    # Долговременная память пользователя (если включено и непусто) — отдельной
-    # секцией в system_prompt; иначе сервер использует свой default.
-    try:
-        sp = await asyncio.to_thread(
-            _build_chat_system_prompt_with_memory, user_id,
-        )
-    except Exception:
-        logger.warning("chat memory inject failed user_id=%s", user_id, exc_info=True)
-        sp = None
-    if sp:
-        payload["system_prompt"] = sp
 
     timeout_s = _check_request_timeout_s("cursor")
     final_text = ""
@@ -3751,18 +3587,6 @@ async def _handle_chat_user_message(
         context.user_data.get(_CHAT_DIALOG_ID),
     )
 
-    # Сон памяти: счётчик +1, при достижении порога — фоновая задача (не блокирует чат).
-    try:
-        await asyncio.to_thread(
-            user_storage.chat_memory_increment_msgs,
-            USER_DB_PATH,
-            user_id,
-        )
-        _maybe_schedule_auto_sleep(user_id, history)
-    except Exception:
-        logger.warning("chat memory bookkeeping failed user_id=%s", user_id, exc_info=True)
-
-
 # Лимит OCR-фрагмента в чате: сервер ограничивает любое сообщение в /chat/stream
 # в `_CHAT_MSG_CONTENT_MAX_LEN = 8000` символов; нужно оставить место и под подпись
 # пользователя, и под обёртку-инструкцию модели.
@@ -3897,15 +3721,8 @@ async def _handle_chat_photo(
     )
 
 
-# ====================== /chat: память + сон ======================
+# ====================== /chat: system prompt ======================
 #
-# Долговременная память пользователя живёт на диске (см. `chat_memory.py`),
-# индекс/тематические файлы. При каждом ответе бот:
-#   1) подмешивает snapshot памяти в system_prompt (если включено);
-#   2) инкрементит `msgs_since_sleep`;
-#   3) если порог достигнут — стартует **фоновую** задачу сна.
-# Пользователь видит результат не сразу — sleep идёт асинхронно, не блокирует чат.
-
 # Дублируем серверные `CHAT_SAFETY_POLICY` и `CHAT_DEFAULT_SYSTEM_PROMPT` —
 # bot не импортирует серверный код (разные образы Docker, общий .env). Любое
 # изменение тут синхронизируется с `ai_checker.py`.
@@ -3979,55 +3796,6 @@ _BOT_CHAT_DEFAULT_SYSTEM_PROMPT: Final[str] = (
     "таблицы и заголовки `#`."
 )
 
-# Авто-сон: после скольких пользовательских сообщений запускать.
-# Дефолт 12 (~средний диалог). Переопределяется `CHAT_MEMORY_SLEEP_AFTER_MSGS`.
-_CHAT_MEMORY_SLEEP_AFTER_MSGS_DEFAULT: Final[int] = 12
-# Минимальный интервал между двумя автоматическими снами одного пользователя
-# (защита от шторма: даже если порог по сообщениям достигнут несколько раз
-# подряд при очень коротких репликах, чаще не начинаем).
-_CHAT_MEMORY_SLEEP_MIN_GAP_SEC_DEFAULT: Final[int] = 600
-# Сколько последних реплик из RAM-истории отдаём sleep-промпту.
-_CHAT_MEMORY_SLEEP_TRANSCRIPT_TURNS_DEFAULT: Final[int] = 24
-# Таймаут одного sleep-вызова Cursor (сек, передаётся серверу).
-_CHAT_MEMORY_SLEEP_TIMEOUT_S_DEFAULT: Final[float] = 240.0
-
-
-def _chat_memory_sleep_after_msgs() -> int:
-    raw = (os.getenv("CHAT_MEMORY_SLEEP_AFTER_MSGS") or "").strip()
-    try:
-        v = int(raw)
-    except (TypeError, ValueError):
-        return _CHAT_MEMORY_SLEEP_AFTER_MSGS_DEFAULT
-    return max(1, min(200, v))
-
-
-def _chat_memory_sleep_min_gap_sec() -> int:
-    raw = (os.getenv("CHAT_MEMORY_SLEEP_MIN_GAP_SEC") or "").strip()
-    try:
-        v = int(raw)
-    except (TypeError, ValueError):
-        return _CHAT_MEMORY_SLEEP_MIN_GAP_SEC_DEFAULT
-    return max(0, min(86_400, v))
-
-
-def _chat_memory_sleep_transcript_turns() -> int:
-    raw = (os.getenv("CHAT_MEMORY_SLEEP_TRANSCRIPT_TURNS") or "").strip()
-    try:
-        v = int(raw)
-    except (TypeError, ValueError):
-        return _CHAT_MEMORY_SLEEP_TRANSCRIPT_TURNS_DEFAULT
-    return max(2, min(64, v))
-
-
-def _chat_memory_sleep_timeout_s() -> float:
-    raw = (os.getenv("CHAT_MEMORY_SLEEP_TIMEOUT_S") or "").strip()
-    try:
-        v = float(raw)
-    except (TypeError, ValueError):
-        return _CHAT_MEMORY_SLEEP_TIMEOUT_S_DEFAULT
-    return max(30.0, min(600.0, v))
-
-
 def _bot_chat_user_system_prompt() -> str:
     raw = (os.getenv("CHAT_SYSTEM_PROMPT") or "").strip()
     return raw or _BOT_CHAT_DEFAULT_SYSTEM_PROMPT
@@ -4037,331 +3805,9 @@ def _bot_chat_default_system_prompt() -> str:
     """Системный промпт чата = политика безопасности + основной промпт.
 
     `_CHAT_SAFETY_POLICY` навешивается всегда, поверх любого `CHAT_SYSTEM_PROMPT`,
-    чтобы оператор случайно не отключил защиту через env. Дальше может
-    добавляться блок памяти через `chat_memory.system_prompt_with_memory`.
+    чтобы оператор случайно не отключил защиту через env.
     """
     return f"{_CHAT_SAFETY_POLICY}\n\n{_bot_chat_user_system_prompt()}"
-
-
-def _build_chat_system_prompt_with_memory(user_id: int) -> str | None:
-    """Вернуть system_prompt с подмешанной памятью (или None, если памяти нет / выключено).
-
-    Возврат `None` означает «не указывать `system_prompt` в payload» — сервер тогда
-    использует свой `chat_default_system_prompt()`.
-    """
-    pref = user_storage.chat_memory_get_pref(USER_DB_PATH, user_id)
-    if not pref.enabled:
-        return None
-    snap = chat_memory.memory_snapshot_text(user_id)
-    if not snap:
-        return None
-    base = _bot_chat_default_system_prompt()
-    return chat_memory.system_prompt_with_memory(base, snap)
-
-
-def _chat_sleep_in_progress_key(user_id: int) -> str:
-    return f"chat_sleep_in_progress:{user_id}"
-
-
-# Фоновые задачи сна (в RAM): по одной на пользователя одновременно.
-_CHAT_SLEEP_RUNNING: dict[int, asyncio.Task] = {}
-
-
-async def _request_chat_once_from_server(
-    *,
-    user_id: int,
-    messages: list[dict[str, str]],
-    timeout_s: float,
-    model: str | None = None,
-) -> str:
-    """POST `/chat/once` -> `text` (полный ответ модели). RuntimeError при не-200."""
-    url = f"{SERVER_URL.rstrip('/')}/chat/once"
-    # Клиентский таймаут — с запасом над серверным (сервер сам кэппит на 600 c).
-    client_timeout = max(60.0, float(timeout_s) + 30.0)
-    payload = {
-        "user_id": user_id,
-        "messages": messages,
-        "timeout_s": float(timeout_s),
-    }
-    if model:
-        payload["model"] = model
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(client_timeout),
-        transport=async_http_transport_ipv4_lookup(),
-    ) as client:
-        r = await client.post(url, json=payload)
-        if r.status_code != 200:
-            body = r.text or ""
-            raise RuntimeError(f"server {r.status_code}: {body[:300]}")
-        try:
-            data = r.json()
-        except Exception as e:
-            raise RuntimeError(f"server returned non-json: {e}") from e
-    return str(data.get("text") or "")
-
-
-def _chat_history_for_sleep(history: list[dict[str, str]] | None) -> list[dict[str, str]]:
-    """Срез последних реплик (system отбрасываем — для sleep важна текстовая часть)."""
-    out: list[dict[str, str]] = []
-    if not history:
-        return out
-    keep = _chat_memory_sleep_transcript_turns()
-    tail = history[-keep:]
-    for m in tail:
-        role = (m.get("role") or "").strip().lower()
-        if role not in ("user", "assistant"):
-            continue
-        content = m.get("content") or ""
-        if not isinstance(content, str):
-            content = str(content)
-        if not content.strip():
-            continue
-        out.append({"role": role, "content": content})
-    return out
-
-
-async def _run_chat_sleep(
-    *,
-    user_id: int,
-    transcript: list[dict[str, str]],
-    trigger: str,
-) -> tuple[bool, str]:
-    """Один проход «сна»: собрать промпт, дёрнуть `/chat/once`, применить ops.
-
-    Возвращает `(ok, status_message)`. `status_message` пишется и в логи, и в БД.
-    Безопасен к повторному вызову — внутри только I/O в памяти пользователя.
-    """
-    sleep_msgs = chat_memory.build_sleep_messages(user_id, transcript=transcript)
-    timeout_s = _chat_memory_sleep_timeout_s()
-    model_slug = await asyncio.to_thread(
-        user_storage.chat_model_get, USER_DB_PATH, user_id,
-    )
-    logger.info(
-        "chat sleep start user_id=%s trigger=%s transcript_msgs=%s model=%s",
-        user_id,
-        trigger,
-        len(transcript),
-        model_slug,
-    )
-    try:
-        text = await _request_chat_once_from_server(
-            user_id=user_id,
-            messages=sleep_msgs,
-            timeout_s=timeout_s,
-            model=model_slug,
-        )
-    except Exception as e:
-        msg = f"error: {e}"
-        logger.warning("chat sleep failed user_id=%s err=%s", user_id, e)
-        await asyncio.to_thread(
-            user_storage.chat_memory_record_sleep,
-            USER_DB_PATH,
-            user_id,
-            status=msg[:200],
-        )
-        return False, msg
-    parsed = chat_memory.parse_sleep_response(text)
-    if not parsed.ops and not parsed.parse_warnings:
-        # Модель честно сказала «менять нечего» — не считаем ошибкой.
-        await asyncio.to_thread(
-            user_storage.chat_memory_record_sleep,
-            USER_DB_PATH,
-            user_id,
-            status="noop",
-        )
-        logger.info("chat sleep done user_id=%s noop reply_chars=%s", user_id, len(text))
-        return True, "noop"
-    stats = await asyncio.to_thread(chat_memory.apply_sleep_result, user_id, parsed)
-    summary = (
-        f"ok: written={stats.written} deleted={stats.deleted} "
-        f"skipped_cap={stats.skipped_total_cap} write_failed={stats.write_failed} "
-        f"warn={len(parsed.parse_warnings)}"
-    )
-    await asyncio.to_thread(
-        user_storage.chat_memory_record_sleep,
-        USER_DB_PATH,
-        user_id,
-        status=summary[:200],
-    )
-    logger.info(
-        "chat sleep done user_id=%s %s reply_chars=%s warnings=%s",
-        user_id,
-        summary,
-        len(text),
-        parsed.parse_warnings[:5],
-    )
-    return True, summary
-
-
-def _maybe_schedule_auto_sleep(
-    user_id: int,
-    history: list[dict[str, str]] | None,
-) -> None:
-    """Если включён авто-сон и счётчик достиг порога — поставить фоновую задачу.
-
-    Защита от дубля: для каждого `user_id` одновременно идёт максимум один sleep.
-    Защита от шторма: учитываем `last_sleep_at` и `CHAT_MEMORY_SLEEP_MIN_GAP_SEC`.
-    """
-    pref = user_storage.chat_memory_get_pref(USER_DB_PATH, user_id)
-    if not pref.enabled:
-        return
-    threshold = _chat_memory_sleep_after_msgs()
-    if pref.msgs_since_sleep < threshold:
-        return
-    # Не запускаем повторный sleep, если предыдущий был совсем недавно.
-    gap = _chat_memory_sleep_min_gap_sec()
-    if pref.last_sleep_at and gap > 0:
-        try:
-            last = datetime.fromisoformat(pref.last_sleep_at)
-            if last.tzinfo is None:
-                last = last.replace(tzinfo=timezone.utc)
-            if (datetime.now(timezone.utc) - last).total_seconds() < gap:
-                return
-        except ValueError:
-            pass
-    existing = _CHAT_SLEEP_RUNNING.get(user_id)
-    if existing and not existing.done():
-        return
-    transcript = _chat_history_for_sleep(history)
-    if not transcript:
-        return
-
-    async def _runner() -> None:
-        try:
-            await _run_chat_sleep(
-                user_id=user_id,
-                transcript=transcript,
-                trigger="auto",
-            )
-        finally:
-            _CHAT_SLEEP_RUNNING.pop(user_id, None)
-
-    task = asyncio.create_task(_runner())
-    _CHAT_SLEEP_RUNNING[user_id] = task
-
-
-async def sleep_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """`/sleep` — вручную запустить «сон памяти» (только из активного `/chat`).
-
-    Идёт фоном, не блокирует чат. Повторный вызов до завершения — отвергаем.
-    """
-    if not update.message or not update.effective_user or not update.effective_chat:
-        return
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    if not context.user_data.get(_CHAT_ACTIVE):
-        await update.message.reply_text(
-            "Команда /sleep доступна только из активного /chat.",
-        )
-        return
-    until = await asyncio.to_thread(
-        user_storage.chat_session_active_until, USER_DB_PATH, user_id,
-    )
-    if until is None:
-        context.user_data.pop(_CHAT_ACTIVE, None)
-        await update.message.reply_text("Сессия чата истекла. Открой её заново через /chat.")
-        return
-    if not _cursor_recheck_available():
-        await update.message.reply_text("Cursor сейчас недоступен (fallback не сконфигурирован).")
-        return
-    pref = await asyncio.to_thread(
-        user_storage.chat_memory_get_pref, USER_DB_PATH, user_id,
-    )
-    if not pref.enabled:
-        await update.message.reply_text(
-            "Память выключена. Включи в меню (/chat → «Память: выкл»), "
-            "потом запусти /sleep.",
-        )
-        return
-    history: list[dict[str, str]] = list(context.user_data.get(_CHAT_HISTORY) or [])
-    if not history:
-        try:
-            dlgs = await asyncio.to_thread(
-                user_storage.chat_dialog_list, USER_DB_PATH, user_id,
-            )
-            if dlgs:
-                history = (
-                    await asyncio.to_thread(
-                        user_storage.chat_dialog_load,
-                        USER_DB_PATH,
-                        user_id,
-                        dlgs[0].dialog_id,
-                    )
-                    or []
-                )
-        except Exception:
-            logger.warning("/sleep: load history failed user_id=%s", user_id, exc_info=True)
-    transcript = _chat_history_for_sleep(history)
-    if not transcript:
-        await update.message.reply_text("Нечего синтезировать — диалогов пока нет.")
-        return
-    if (existing := _CHAT_SLEEP_RUNNING.get(user_id)) and not existing.done():
-        await update.message.reply_text("Сон уже идёт, подожди немного.")
-        return
-    await update.message.reply_text(
-        "Сон памяти запущен. Это занимает до пары минут; "
-        "результат придёт отдельным сообщением.",
-    )
-
-    async def _runner() -> None:
-        try:
-            ok, status = await _run_chat_sleep(
-                user_id=user_id,
-                transcript=transcript,
-                trigger="manual:/sleep",
-            )
-            short = ("OK" if ok else "не удалось") + ": " + status
-            with suppress(Exception):
-                await context.bot.send_message(
-                    chat_id,
-                    f"Сон памяти завершён ({short[:300]}).",
-                )
-        finally:
-            _CHAT_SLEEP_RUNNING.pop(user_id, None)
-
-    _CHAT_SLEEP_RUNNING[user_id] = asyncio.create_task(_runner())
-
-
-async def memory_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """`/memory` — показать сохранённую память + текущие настройки тоггла."""
-    if not update.message or not update.effective_user:
-        return
-    user_id = update.effective_user.id
-    if not context.user_data.get(_CHAT_ACTIVE):
-        await update.message.reply_text("Команда /memory доступна только из активного /chat.")
-        return
-    pref = await asyncio.to_thread(
-        user_storage.chat_memory_get_pref, USER_DB_PATH, user_id,
-    )
-    files = chat_memory.list_memory_files(user_id)
-    lines = [
-        "<b>Память пользователя</b>",
-        f"Тоггл: {'включена' if pref.enabled else 'выключена'}",
-        f"Файлов: {len(files)}",
-        f"Реплик с прошлого сна: {pref.msgs_since_sleep} (порог {_chat_memory_sleep_after_msgs()})",
-    ]
-    if pref.last_sleep_at:
-        lines.append(
-            f"Последний сон: <code>{_h(pref.last_sleep_at)}</code> — "
-            f"{_h(pref.last_sleep_status or '?')}",
-        )
-    else:
-        lines.append("Сон ещё ни разу не запускался.")
-    if files:
-        lines.append("")
-        for fn in files:
-            body = chat_memory.read_memory_file(user_id, fn)
-            size = len(body.encode("utf-8"))
-            lines.append(f"<b>{_h(fn)}</b> ({size} байт):")
-            snippet = body.strip()
-            if len(snippet) > 1000:
-                snippet = snippet[:1000].rstrip() + "…"
-            lines.append(f"<pre>{_h(snippet)}</pre>")
-    await update.message.reply_text(
-        "\n".join(lines)[:4000],
-        parse_mode=ParseMode.HTML,
-        disable_web_page_preview=True,
-    )
 
 
 async def _run_homework_text_answer_check(
@@ -6802,8 +6248,6 @@ def main() -> None:
     app.add_handler(CommandHandler("begemot_logout", begemot_logout_cmd))
     app.add_handler(CommandHandler("chat", chat_cmd))
     app.add_handler(CommandHandler("chat_logout", chat_logout_cmd))
-    app.add_handler(CommandHandler("sleep", sleep_cmd))
-    app.add_handler(CommandHandler("memory", memory_cmd))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_homework_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))

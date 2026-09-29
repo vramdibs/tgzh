@@ -10,14 +10,17 @@ def _flatten(markup) -> list[tuple[str, str]]:
     return [(b.text, b.callback_data) for row in markup.inline_keyboard for b in row]
 
 
-def test_chat_menu_active_contains_all_five_buttons() -> None:
+def test_chat_menu_active_contains_expected_buttons() -> None:
     flat = _flatten(bot._chat_menu_keyboard(active=True))
     callbacks = [c for _, c in flat]
     assert "chat:new" in callbacks
     assert "chat:list" in callbacks
     assert "chat:purge" in callbacks
+    assert "chat:model" in callbacks
     assert "chat:logout" in callbacks
     assert "chat:back" in callbacks
+    # Долговременная память удалена — её кнопок в меню быть не должно.
+    assert not any(c.startswith("chat:mem_") for c in callbacks)
     # Лимит проброшен в подпись (10 на пользователя по умолчанию).
     list_label = next(t for t, c in flat if c == "chat:list")
     assert str(user_storage.CHAT_DIALOG_HISTORY_LIMIT) in list_label

@@ -60,15 +60,6 @@ def _clear_env_for_unit_tests(monkeypatch: pytest.MonkeyPatch) -> None:
         # из юнитов; тесты, которым preocr нужен, включают переменную сами или мокают
         # `preocr_client.fetch_preocr_block`.
         "PREOCR_URL",
-        # CHAT_MEMORY_* / MEMORY_DIR_BASE — иначе тесты «сна памяти» подхватят
-        # реальные настройки (например, кастомный путь к каталогу памяти),
-        # и unit-тесты, изолированные через tmp_path, начнут видеть «лишние»
-        # файлы или нестандартные пороги.
-        "MEMORY_DIR_BASE",
-        "CHAT_MEMORY_SLEEP_AFTER_MSGS",
-        "CHAT_MEMORY_SLEEP_MIN_GAP_SEC",
-        "CHAT_MEMORY_SLEEP_TRANSCRIPT_TURNS",
-        "CHAT_MEMORY_SLEEP_TIMEOUT_S",
         "CHAT_SYSTEM_PROMPT",
         # STT_* — у нас опциональный STT для голосовых; в юнит-тестах не должны
         # случайно стучаться в реальный Whisper-эндпоинт через dev-`.env`.

@@ -682,7 +682,9 @@ def init_db(path: str) -> None:
                 "CREATE INDEX IF NOT EXISTS idx_chat_dialog_user_updated "
                 "ON chat_dialog (user_id, updated_at DESC)",
             )
-            # Настройки и счётчики «сна памяти» — одна строка на пользователя.
+            # Настройки /chat — одна строка на пользователя. Сейчас используется
+            # только для выбранной модели Cursor (`chat_model_slug`); прочие колонки —
+            # legacy от удалённой «памяти», оставлены, чтобы не откатывать миграции.
             # Postgres-сторона создаётся миграцией 011_chat_memory_pref.
             _e(
                 conn,
@@ -2108,159 +2110,16 @@ def chat_dialog_purge(path: str, user_id: int) -> int:
     return deleted
 
 
-# ====================== /chat: сон памяти (toggle + счётчики) ======================
+# ====================== /chat: выбранная модель Cursor ======================
 #
-# Простая таблица `chat_memory_pref` (1 строка на user_id):
-#   enabled            — bool как INTEGER (1=on, 0=off); по умолчанию 1.
-#   msgs_since_sleep   — счётчик пользовательских реплик с последнего сна.
-#   last_sleep_at      — ISO UTC последнего успешного сна; NULL, если ещё не было.
-#   last_sleep_status  — короткая отметка ('ok', 'error: ...', 'noop', 'manual ok' ...).
-#   updated_at         — ISO UTC любого UPSERT'а строки (для дебага).
-#
-# Поведение default: если строки нет — считаем `enabled=True`, счётчик = 0.
-# Это позволяет включить фичу всем пользователям без миграции данных.
+# Таблица `chat_memory_pref` (1 строка на user_id) сейчас хранит только
+# `chat_model_slug` — выбранную модель для /chat. Остальные колонки — legacy
+# от удалённой «памяти», оставлены, чтобы не откатывать миграции.
 
 
+# Дефолт для legacy-колонки `enabled` при INSERT новой строки (значение не влияет
+# на поведение — «память» удалена; колонка не читается).
 CHAT_MEMORY_DEFAULT_ENABLED: bool = True
-
-
-@dataclass(frozen=True)
-class ChatMemoryPref:
-    user_id: int
-    enabled: bool
-    msgs_since_sleep: int
-    last_sleep_at: str | None
-    last_sleep_status: str | None
-
-
-def _row_to_chat_memory_pref(user_id: int, row: tuple | None) -> ChatMemoryPref:
-    if not row:
-        return ChatMemoryPref(
-            user_id=int(user_id),
-            enabled=CHAT_MEMORY_DEFAULT_ENABLED,
-            msgs_since_sleep=0,
-            last_sleep_at=None,
-            last_sleep_status=None,
-        )
-    enabled_raw, msgs_raw, last_at, last_st = row[0], row[1], row[2], row[3]
-    return ChatMemoryPref(
-        user_id=int(user_id),
-        enabled=bool(int(enabled_raw or 0)),
-        msgs_since_sleep=int(msgs_raw or 0),
-        last_sleep_at=str(last_at) if last_at else None,
-        last_sleep_status=str(last_st) if last_st else None,
-    )
-
-
-def chat_memory_get_pref(path: str, user_id: int) -> ChatMemoryPref:
-    """Текущие настройки сна памяти; «нет строки» = дефолт (enabled=True)."""
-    if not db_path_usable(path):
-        return ChatMemoryPref(
-            user_id=int(user_id),
-            enabled=CHAT_MEMORY_DEFAULT_ENABLED,
-            msgs_since_sleep=0,
-            last_sleep_at=None,
-            last_sleep_status=None,
-        )
-    conn = connect(path)
-    try:
-        row = _e(
-            conn,
-            "SELECT enabled, msgs_since_sleep, last_sleep_at, last_sleep_status "
-            "FROM chat_memory_pref WHERE user_id = ?",
-            (int(user_id),),
-        ).fetchone()
-    finally:
-        conn.close()
-    return _row_to_chat_memory_pref(int(user_id), tuple(row) if row else None)
-
-
-def _upsert_chat_memory_pref(
-    path: str,
-    user_id: int,
-    *,
-    enabled: bool | None = None,
-    msgs_since_sleep: int | None = None,
-    last_sleep_at: str | None = None,
-    last_sleep_status: str | None = None,
-) -> None:
-    """UPSERT по `user_id`; неуказанные поля сохраняются. Без транзакционных хитростей —
-    читаем текущее, мерджим, перезаписываем (одна строка, конкуренции по одному user_id
-    практически нет: чат-сессия одна)."""
-    if not db_path_usable(path):
-        return
-    cur = chat_memory_get_pref(path, user_id)
-    new_enabled = cur.enabled if enabled is None else bool(enabled)
-    new_msgs = cur.msgs_since_sleep if msgs_since_sleep is None else int(msgs_since_sleep)
-    new_at = cur.last_sleep_at if last_sleep_at is None else last_sleep_at
-    new_st = cur.last_sleep_status if last_sleep_status is None else last_sleep_status
-    now_iso = datetime.now(timezone.utc).isoformat()
-    conn = connect(path)
-    try:
-        _e(
-            conn,
-            """
-            INSERT INTO chat_memory_pref
-                (user_id, enabled, msgs_since_sleep, last_sleep_at, last_sleep_status, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET
-                enabled = excluded.enabled,
-                msgs_since_sleep = excluded.msgs_since_sleep,
-                last_sleep_at = excluded.last_sleep_at,
-                last_sleep_status = excluded.last_sleep_status,
-                updated_at = excluded.updated_at
-            """,
-            (
-                int(user_id),
-                1 if new_enabled else 0,
-                int(max(0, new_msgs)),
-                new_at,
-                new_st,
-                now_iso,
-            ),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def chat_memory_set_enabled(path: str, user_id: int, enabled: bool) -> None:
-    """Переключить «спать или нет»; счётчик/история сна не сбрасываются."""
-    _upsert_chat_memory_pref(path, user_id, enabled=bool(enabled))
-
-
-def chat_memory_increment_msgs(path: str, user_id: int) -> int:
-    """Атомарного `+1` нет (одной строки на пользователя достаточно).
-
-    Возвращает новое значение `msgs_since_sleep` (после инкремента) — бот по нему
-    решает, пора ли запускать авто-сон.
-    """
-    cur = chat_memory_get_pref(path, user_id)
-    new_val = int(cur.msgs_since_sleep) + 1
-    _upsert_chat_memory_pref(path, user_id, msgs_since_sleep=new_val)
-    return new_val
-
-
-def chat_memory_reset_msgs(path: str, user_id: int) -> None:
-    _upsert_chat_memory_pref(path, user_id, msgs_since_sleep=0)
-
-
-def chat_memory_record_sleep(
-    path: str,
-    user_id: int,
-    *,
-    status: str,
-    when_iso: str | None = None,
-) -> None:
-    """Зафиксировать факт прошедшего сна (успешного/неуспешного); сбрасывает счётчик."""
-    when = when_iso or datetime.now(timezone.utc).isoformat()
-    _upsert_chat_memory_pref(
-        path,
-        user_id,
-        msgs_since_sleep=0,
-        last_sleep_at=when,
-        last_sleep_status=(status or "ok")[:200],
-    )
 
 
 def _migrate_chat_memory_model_slug(conn: Any) -> None:

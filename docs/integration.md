@@ -33,7 +33,7 @@ flowchart LR
 | Компонент | Роль | Обязателен |
 |-----------|------|------------|
 | **tgzh-bot** | Telegram UI, FSM, вызовы `SERVER_URL` | да |
-| **tgzh-server** | FastAPI: проверка ДЗ, `/chat/stream`, `/chat/once` | да |
+| **tgzh-server** | FastAPI: проверка ДЗ, `/chat/stream` | да |
 | **postgres** / SQLite | Профили, сессии, статистика | postgres опционально |
 | **Primary VLLM** | Vision-модель для `/check` | при `AI_MOCK=0` |
 | **cursor-bridge** | OpenAI-совместимый proxy к `cursor-agent` | для `/chat`, recheck Cursor |
@@ -51,7 +51,6 @@ flowchart LR
 | `POST` | `/check/summarize` | Сводка по нескольким частям |
 | `POST` | `/check/quip` | Короткая реплика после проверки |
 | `POST` | `/chat/stream` | Стрим ответа Cursor (plain text, не SSE) |
-| `POST` | `/chat/once` | Нестримовый chat (sleep памяти) |
 
 Транспорт бота к `SERVER_URL` - **httpx** с приоритетом IPv4 (`tgzh_httpx`).
 

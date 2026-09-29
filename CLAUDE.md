@@ -40,11 +40,10 @@ Claude Code не подхватывает `.cursor/rules/` автоматиче�
 | Модуль | Назначение |
 |--------|------------|
 | `bot.py` | Telegram-хендлеры, FSM, inline-кнопки |
-| `server.py` | FastAPI: `/check`, `/chat/stream`, `/chat/once` |
+| `server.py` | FastAPI: `/check`, `/chat/stream` |
 | `ai_checker.py` | LLM-запросы, VLLM + fallback (Cursor bridge) |
 | `user_storage.py` | SQLite/Postgres helpers, сессии, блокировки |
 | `tgzh_db.py` | Подключение к БД, `init_db` |
-| `chat_memory.py` | Долговременная память `/chat` |
 | `preocr_client.py` | Pre-OCR для фото ДЗ |
 | `stt_client.py` | Whisper STT для голосовых |
 | `alembic/` | Миграции Postgres |

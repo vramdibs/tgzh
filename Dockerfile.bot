@@ -11,13 +11,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY bot.py telegram_format.py logging_config.py gdz_solution.py gdz_cache.py \
     photo_prepare.py user_storage.py homework_check_status.py bot_stats.py \
     tgzh_db.py tgzh_metrics.py tgzh_httpx.py feedback_tei.py preocr_client.py \
-    chat_memory.py stt_client.py hub_client.py catalog.py subjects.py ai_checker.py ./
+    stt_client.py hub_client.py catalog.py subjects.py ai_checker.py ./
 COPY alembic.ini /app/
 COPY alembic /app/alembic
 COPY scripts/postgres_schema.sql /app/scripts/postgres_schema.sql
 COPY data/gdz_catalog.json /app/static/gdz_catalog.json
 COPY data/gdz_matematika_textbooks.json /app/static/
 
-RUN mkdir -p /app/data/gdz_cache /app/data/memory
+RUN mkdir -p /app/data/gdz_cache
 
 CMD ["python3", "bot.py"]

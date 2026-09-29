@@ -50,6 +50,20 @@ def test_chat_safety_policy_always_present(monkeypatch: pytest.MonkeyPatch) -> N
     assert custom_prompt.endswith("кастомный промпт")
 
 
+def test_chat_safety_policy_mentions_stt_voice() -> None:
+    """Политика должна явно разрешать STT-транскрипт как обычную реплику (см. голос в /chat)."""
+    policy = ai_checker.CHAT_SAFETY_POLICY
+    assert "STT" in policy
+    assert "транскрип" in policy.lower()
+
+
+def test_bot_and_server_safety_policy_are_in_sync() -> None:
+    """`bot._CHAT_SAFETY_POLICY` и `ai_checker.CHAT_SAFETY_POLICY` должны совпадать байт-в-байт."""
+    import bot
+
+    assert bot._CHAT_SAFETY_POLICY == ai_checker.CHAT_SAFETY_POLICY
+
+
 def test_chat_safety_policy_in_normalized_messages(monkeypatch: pytest.MonkeyPatch) -> None:
     """`/chat/stream` должен передавать политику безопасности в system, даже если бот её не прислал."""
     monkeypatch.delenv("CHAT_SYSTEM_PROMPT", raising=False)
