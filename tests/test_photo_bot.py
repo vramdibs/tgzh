@@ -102,3 +102,27 @@ async def test_photo_check_stores_mixed_role(monkeypatch: pytest.MonkeyPatch) ->
     entries = ctx.user_data.get(bot._PHOTO_CHK_ENTRIES)
     assert entries
     assert entries[0][2] == "mixed"
+
+
+@pytest.mark.asyncio
+async def test_photo_run_callback_invokes_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _FakeContext()
+    ctx.user_data[bot._PHOTO_CHECK_ACTIVE] = True
+    ctx.user_data[bot._PHOTO_CHK_ENTRIES] = [(1, "fid1", "unspecified")]
+
+    run_check = AsyncMock()
+    monkeypatch.setattr(bot, "_run_photo_check_request", run_check)
+
+    class _FakeQuery:
+        from_user = type("U", (), {"id": 555})()
+        message = type("M", (), {"chat_id": 1, "message_id": 42})()
+
+        async def edit_message_text(self, *_a: Any, **_kw: Any) -> None:
+            return None
+
+    monkeypatch.setattr(bot, "_answer_query_once", AsyncMock())
+
+    await bot._handle_photo_check_callback(_FakeQuery(), ctx, "photo:run")
+
+    run_check.assert_awaited_once()
+    assert run_check.await_args.kwargs["user_id"] == 555

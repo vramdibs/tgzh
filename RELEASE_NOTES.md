@@ -33,6 +33,8 @@
 
 ### Fixed
 
+- **`/shot` — кнопка «Проверить»**: в колбэке `photo:run` передавался несуществующий `update` → `NameError`, проверка не стартовала. Тест — **`tests/test_photo_bot.py::test_photo_run_callback_invokes_check`**
+
 - **Проверка ДЗ без motok hub**: в `docker-compose.yml` у `tgzh-bot` больше не подставляется жёсткий `MOTOK_HUB_URL` — берётся из `.env` (пустой URL = режим без hub, как в `.env.example`). Раньше при пустых `MOTOK_INTERNAL_TOKEN`/`MOTOK_HUB_TOKEN_SECRET` бот всё равно считал hub включённым и отвечал «Вход хаба недоступен. Проверка без person_id не выполняется.»
 
 ### Changed

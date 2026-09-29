@@ -710,7 +710,6 @@ async def _photo_chk_batch_flush_delayed(
 
 
 async def _run_photo_check_request(
-    update: Update,
     context: ContextTypes.DEFAULT_TYPE,
     *,
     user_id: int,
@@ -958,7 +957,6 @@ async def _handle_photo_check_callback(
             await query.edit_message_text(text, **kw)
 
         await _run_photo_check_request(
-            update,
             context,
             user_id=user_id,
             chat_id=chat_id,
