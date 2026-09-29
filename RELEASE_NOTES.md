@@ -33,6 +33,8 @@
 
 ### Fixed
 
+- **Служебная метка `[tgzh_result:…]`**: в ответах `/shot` (и других проверок) вместо сырой строки показывается эмодзи (✅ / ☑️ / ❌); вердикт для статистики читается из метки. Тесты — **`tests/test_homework_check_status.py::test_tgzh_result_*`**
+
 - **`/shot` — кнопка «Проверить»**: в колбэке `photo:run` передавался несуществующий `update` → `NameError`, проверка не стартовала. Тест — **`tests/test_photo_bot.py::test_photo_run_callback_invokes_check`**
 
 - **`/shot` — multipart на httpx 0.28**: запрос `POST /photo/check` собирался из `files`-списка и `data`-списка одновременно, из-за чего httpx 0.28 делал синхронный `IteratorByteStream`, и `AsyncClient.send` падал с «Attempted to send an sync request with an AsyncClient instance». Теперь `mode` и `image_roles` кладутся в тот же multipart-`files` как поля `(None, value)` — поток становится async-совместимым. Тест — **`tests/test_photo_bot.py::test_photo_check_multipart_is_async_stream`**

@@ -92,6 +92,29 @@ def test_mixed_numbers_marker_strip_spaced_brackets() -> None:
     assert "Модель" in out
 
 
+def test_tgzh_result_marker_strip_to_emoji() -> None:
+    raw = "Задача 6: ошибка.\n[tgzh_result:partial]"
+    out = hcs.strip_homework_check_machine_tags(raw)
+    assert "tgzh_result" not in out.lower()
+    assert "\u2611\ufe0f" in out
+    assert hcs.homework_check_stats_result(raw) == "partial"
+
+
+def test_tgzh_result_correct_verdict_and_emoji() -> None:
+    raw = "Все верно.\n[tgzh_result:correct]"
+    assert hcs.homework_check_stats_result(raw) == "correct"
+    out = hcs.strip_homework_check_machine_tags(raw)
+    assert "\u2705" in out
+    assert "tgzh_result" not in out.lower()
+
+
+def test_tgzh_result_incorrect_maps_to_partial() -> None:
+    raw = "Неверно.\n[ tgzh_result : incorrect ]"
+    assert hcs.homework_check_stats_result(raw) == "partial"
+    out = hcs.strip_homework_check_machine_tags(raw)
+    assert "\u274c" in out
+
+
 def test_detach_trailing_mixed_numbers_marker() -> None:
     raw = "Текст.\n[tgzh_mixed_numbers]"
     head, trail = hcs.detach_trailing_mixed_numbers_marker(raw)

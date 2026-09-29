@@ -19,6 +19,25 @@ _TRAILING_MIXED_NUMBERS_MARKER_RE = re.compile(
     flags=re.IGNORECASE,
 )
 
+_TGZH_RESULT_TOKEN_RE = r"\[\s*tgzh_result\s*:\s*(?P<kind>correct|partial|incorrect)\s*\]"
+_TGZH_RESULT_MARKER_RE = re.compile(_TGZH_RESULT_TOKEN_RE, flags=re.IGNORECASE)
+
+
+def _tgzh_result_kind_to_emoji(kind: str) -> str:
+    k = (kind or "").strip().lower()
+    if k == "correct":
+        return "\u2705"
+    if k == "incorrect":
+        return "\u274c"
+    return "\u2611\ufe0f"
+
+
+def parse_tgzh_result_marker(raw: str) -> Literal["correct", "partial", "incorrect"] | None:
+    m = _TGZH_RESULT_MARKER_RE.search(raw or "")
+    if not m:
+        return None
+    return m.group("kind").lower()  # type: ignore[return-value]
+
 
 def homework_check_has_mixed_numbers_marker(raw: str) -> bool:
     return bool(_MIXED_NUMBERS_MARKER_RE.search(raw or ""))
@@ -30,6 +49,10 @@ def strip_homework_check_machine_tags(text: str) -> str:
         return ""
     t = text.strip()
     t = re.sub(r"(?i)[ \t]*" + _MIXED_NUMBERS_TOKEN_RE + r"[ \t]*", "", t)
+    t = _TGZH_RESULT_MARKER_RE.sub(
+        lambda m: _tgzh_result_kind_to_emoji(m.group("kind")),
+        t,
+    )
     t = re.sub(r"\n{3,}", "\n\n", t).strip()
     return t.rstrip()
 
@@ -146,6 +169,12 @@ def _compute_verdict(raw: str) -> VerdictKind:
         return "partial"
 
     if homework_check_has_mixed_numbers_marker(s):
+        return "partial"
+
+    tgzh_result = parse_tgzh_result_marker(s)
+    if tgzh_result == "correct":
+        return "correct"
+    if tgzh_result in ("partial", "incorrect"):
         return "partial"
 
     low = s.lower()
