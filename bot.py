@@ -727,7 +727,8 @@ async def _run_photo_check_request(
     await edit_message(
         "<b>Проверяю по фото…</b>\n"
         f"Снимков: <b>{len(file_ids)}</b>.\n"
-        "<i>Отправляю на сервер (без OCR и ГДЗ).</i>",
+        "<i>Отправляю на сервер (без OCR и ГДЗ).</i>\n"
+        "<i>Пока ждешь ответ Cursor - в чате будет статус \"печатает…\".</i>",
         parse_mode=ParseMode.HTML,
     )
     blobs: list[bytes] = []
@@ -771,11 +772,15 @@ async def _run_photo_check_request(
             transport=async_http_transport_ipv4_lookup(),
         ) as client:
             t0 = time.perf_counter()
-            response = await client.post(
-                url,
-                files=multipart_files,
-                headers=hub_headers,
-            )
+
+            async def _post_photo_check():
+                return await client.post(
+                    url,
+                    files=multipart_files,
+                    headers=hub_headers,
+                )
+
+            response = await run_with_typing(context.bot, chat_id, _post_photo_check())
             elapsed = time.perf_counter() - t0
             logger.info(
                 "photo/check user_id=%s status=%s elapsed_s=%.2f n=%s",
@@ -3888,29 +3893,35 @@ async def _stream_chat_response(
     timeout_s = _check_request_timeout_s("cursor")
     final_text = ""
     error_text: str | None = None
-    try:
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(timeout_s),
-            transport=async_http_transport_ipv4_lookup(),
-        ) as client:
-            url = f"{SERVER_URL.rstrip('/')}/chat/stream"
-            async with client.stream("POST", url, json=payload) as resp:
-                if resp.status_code != 200:
-                    body_bytes = await resp.aread()
-                    error_text = (
-                        f"Сервер ответил {resp.status_code}: {body_bytes.decode('utf-8', 'replace')[:500]}"
-                    )
-                else:
-                    async for chunk in resp.aiter_text():
-                        if not chunk:
-                            continue
-                        await on_delta(chunk)
-            final_text = "".join(full_buf)
-    except httpx.RequestError as e:
-        error_text = f"Ошибка связи с сервером: {e}"
-    except Exception as e:
-        logger.exception("chat stream consume failed user_id=%s", user_id)
-        error_text = f"Ошибка чата: {e}"
+
+    async def _consume_cursor_stream() -> None:
+        nonlocal final_text, error_text
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(timeout_s),
+                transport=async_http_transport_ipv4_lookup(),
+            ) as client:
+                url = f"{SERVER_URL.rstrip('/')}/chat/stream"
+                async with client.stream("POST", url, json=payload) as resp:
+                    if resp.status_code != 200:
+                        body_bytes = await resp.aread()
+                        error_text = (
+                            f"Сервер ответил {resp.status_code}: "
+                            f"{body_bytes.decode('utf-8', 'replace')[:500]}"
+                        )
+                    else:
+                        async for chunk in resp.aiter_text():
+                            if not chunk:
+                                continue
+                            await on_delta(chunk)
+                final_text = "".join(full_buf)
+        except httpx.RequestError as e:
+            error_text = f"Ошибка связи с сервером: {e}"
+        except Exception as e:
+            logger.exception("chat stream consume failed user_id=%s", user_id)
+            error_text = f"Ошибка чата: {e}"
+
+    await run_with_typing(bot, chat_id, _consume_cursor_stream())
 
     final_text = (final_text or "").strip()
     if not final_text and not error_text:
@@ -6062,14 +6073,18 @@ async def _button_callback_dispatch(
             )
             return
         if cached_text:
-            await _run_homework_text_answer_check(
-                None,
-                context,
-                user_id=user_id,
-                chat_id=chat_id,
-                profile=profile,
-                answer_plain=cached_text,
-                engine="cursor",
+            await run_with_typing(
+                context.bot,
+                chat_id,
+                _run_homework_text_answer_check(
+                    None,
+                    context,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    profile=profile,
+                    answer_plain=cached_text,
+                    engine="cursor",
+                ),
             )
             return
         await _answer_query_once(
