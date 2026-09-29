@@ -50,6 +50,110 @@ def format_llm_check_reply_plain(text: str) -> str:
     return t
 
 
+_FRAC_RE = re.compile(r"\\d?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}")
+_WRAP_CMD_RE = re.compile(
+    r"\\(?:mathbf|mathrm|text|textbf|mathit|operatorname)\s*\{([^{}]*)\}"
+)
+_LATEX_SYMBOLS: tuple[tuple[str, str], ...] = (
+    (r"\\cdot", " · "),
+    (r"\\times", " × "),
+    (r"\\div", ":"),
+    (r"\\pm", "±"),
+    (r"\\leq", "≤"),
+    (r"\\geq", "≥"),
+    (r"\\neq", "≠"),
+    (r"\\approx", "≈"),
+    (r"\\left", ""),
+    (r"\\right", ""),
+    (r"\\,", " "),
+    (r"\\;", " "),
+    (r"\\quad", " "),
+    (r"\\qquad", " "),
+)
+_LINE_SPLIT_RE = re.compile(r"^(\s*)((?:[-*•]\s+)?)(.*)$")
+_VERNO_WORD_RE = re.compile(r"(?<![а-яёА-ЯЁ*])верно(?![а-яёА-ЯЁ*])", re.IGNORECASE)
+_ERROR_LINE_RE = re.compile(r"неверно|ошибк|неправильн", re.IGNORECASE)
+_UNCLEAR_LINE_RE = re.compile(
+    r"нельзя|неясно|непонятно|не читается|нет условия|не удалось",
+    re.IGNORECASE,
+)
+_MARK_OK = "✅"
+_MARK_BAD = "❌"
+_MARK_UNK = "❓"
+_MARKS = (_MARK_OK, _MARK_BAD, _MARK_UNK)
+
+
+def _plain_math_from_latex(text: str) -> str:
+    """LaTeX-обрывки модели -> обычная запись. Обратные слэши в показ не попадают."""
+    t = text.replace(r"\(", "").replace(r"\)", "")
+    t = t.replace(r"\[", "").replace(r"\]", "")
+    t = t.replace(r"\$", "")
+    t = re.sub(r"\$([^$\n]+)\$", r"\1", t)
+    t = t.replace("$", "")
+    for _ in range(8):
+        nxt = _FRAC_RE.sub(
+            lambda m: f"{m.group(1).strip()}/{m.group(2).strip()}",
+            t,
+        )
+        nxt = _WRAP_CMD_RE.sub(lambda m: m.group(1), nxt)
+        if nxt == t:
+            break
+        t = nxt
+    for pat, repl in _LATEX_SYMBOLS:
+        t = re.sub(pat, repl, t)
+    t = re.sub(r"\\[a-zA-Z]+\s*", "", t)
+    t = t.replace("\\", "")
+    t = re.sub(r"[ \t]{2,}", " ", t)
+    return t
+
+
+def _strip_leading_mark(body: str) -> tuple[str, str]:
+    stripped = body.lstrip()
+    pad = body[: len(body) - len(stripped)]
+    for mark in _MARKS:
+        if stripped.startswith(mark):
+            rest = stripped[len(mark):]
+            if rest.startswith("\ufe0f"):
+                rest = rest[1:]
+            return mark, pad + rest.lstrip()
+    return "", body
+
+
+def _annotate_check_line(line: str) -> str:
+    if not line.strip():
+        return line
+    matched = _LINE_SPLIT_RE.match(line)
+    if matched is None:
+        return line
+    indent, bullet, body = matched.group(1), matched.group(2), matched.group(3)
+    existing, body = _strip_leading_mark(body)
+    low = body.replace("*", "").lower()
+    if existing == _MARK_BAD or _ERROR_LINE_RE.search(low):
+        kind = "bad"
+    elif existing == _MARK_UNK or _UNCLEAR_LINE_RE.search(low):
+        kind = "unk"
+    elif existing == _MARK_OK or _VERNO_WORD_RE.search(low):
+        kind = "ok"
+    else:
+        return f"{indent}{bullet}{body}" if bullet else line
+    if kind == "ok":
+        body = _VERNO_WORD_RE.sub(lambda m: f"**{m.group(0)}**", body)
+    mark = {"ok": _MARK_OK, "bad": _MARK_BAD, "unk": _MARK_UNK}[kind]
+    return f"{indent}{bullet}{mark} {body}".rstrip()
+
+
+def prepare_check_display_text(text: str) -> str:
+    """
+    Текст проверки для чата: без LaTeX и слэшей, пометки строк, **верно**.
+    Не использовать для подсчета вердикта.
+    """
+    if not text:
+        return ""
+    plain = _plain_math_from_latex(text)
+    lines = [_annotate_check_line(line) for line in plain.split("\n")]
+    return "\n".join(lines)
+
+
 def markdownish_to_telegram_html(text: str) -> str:
     """
     **жирный** -> <b>жирный</b>, остальное экранируется под parse_mode=HTML.

@@ -810,7 +810,9 @@ async def _run_photo_check_request(
     prefix = homework_check_status.format_check_result_prefix(final_text)
     suffix = homework_check_status.format_check_result_suffix_html()
     html_body = telegram_format.markdown_to_telegram_html(
-        homework_check_status.strip_homework_check_machine_tags(body_raw),
+        telegram_format.prepare_check_display_text(
+            homework_check_status.strip_homework_check_machine_tags(body_raw),
+        ),
     )
     profile = await asyncio.to_thread(user_storage.get_profile, USER_DB_PATH, user_id)
     _photo_check_clear(context)
@@ -4440,8 +4442,10 @@ async def _run_homework_text_answer_check(
     assert prof is not None
     cond_html = _check_result_task_condition_html(gdz_tc)
     suffix = homework_check_status.format_check_result_suffix_html()
-    raw_plain = telegram_format.format_llm_check_reply_plain(
-        homework_check_status.strip_homework_check_machine_tags(body_raw),
+    raw_plain = telegram_format.prepare_check_display_text(
+        telegram_format.format_llm_check_reply_plain(
+            homework_check_status.strip_homework_check_machine_tags(body_raw),
+        ),
     )
     base_budget = len(prefix) + len(suffix) + len(cond_html) + 80
     body_cap = max(500, min(3200, 4096 - base_budget))
@@ -4749,8 +4753,10 @@ async def _run_homework_check(
         assert prof is not None
         cond_html = _check_result_task_condition_html(gdz_tc)
         suffix = homework_check_status.format_check_result_suffix_html()
-        raw_plain = telegram_format.format_llm_check_reply_plain(
-            homework_check_status.strip_homework_check_machine_tags(body_raw),
+        raw_plain = telegram_format.prepare_check_display_text(
+            telegram_format.format_llm_check_reply_plain(
+                homework_check_status.strip_homework_check_machine_tags(body_raw),
+            ),
         )
         base_budget = len(prefix) + len(suffix) + len(cond_html) + 80
         body_cap = max(500, min(3200, 4096 - base_budget))

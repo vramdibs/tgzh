@@ -25,6 +25,42 @@ def test_format_llm_check_reply_plain_empty() -> None:
     assert tf.format_llm_check_reply_plain("   ") == ""
 
 
+def test_prepare_check_display_plain_math_no_backslash() -> None:
+    src = r"\((298 + 102) + 386 = 786\) и 2 \cdot 5 \mathbf{190} \frac{2}{3}"
+    out = tf.prepare_check_display_text(src)
+    assert "\\" not in out
+    assert "frac" not in out
+    assert "cdot" not in out
+    assert "mathbf" not in out
+    assert "(298 + 102) + 386 = 786" in out
+    assert "2 · 5" in out
+    assert "190" in out
+    assert "2/3" in out
+
+
+def test_prepare_check_display_line_marks_and_bold_verno() -> None:
+    src = "\n".join(
+        [
+            "- Задача 6 а): группировка",
+            r"- \((298 + 102) + 386 = 786\) - верно",
+            r"- 2 \cdot 5 \cdot 19 - сначала 10, а не 900. Ошибка в ответе",
+            "- Без текста условия с фото нельзя сказать",
+            "- решение неверно",
+        ]
+    )
+    out = tf.prepare_check_display_text(src)
+    lines = out.splitlines()
+    assert lines[0].startswith("- Задача 6")
+    assert not lines[0].startswith("- ✅")
+    assert lines[1].startswith("- ✅")
+    assert "**верно**" in lines[1]
+    assert "\\" not in lines[1]
+    assert lines[2].startswith("- ❌")
+    assert lines[3].startswith("- ❓")
+    assert lines[4].startswith("- ❌")
+    assert "**верно**" not in lines[4]
+
+
 def test_markdown_to_telegram_html_bold_italic() -> None:
     out = tf.markdown_to_telegram_html("Это **жирный** и _курсив_, ~~зачёркнут~~.")
     assert "<b>жирный</b>" in out
