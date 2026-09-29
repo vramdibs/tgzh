@@ -35,6 +35,8 @@
 
 - **`/shot` — кнопка «Проверить»**: в колбэке `photo:run` передавался несуществующий `update` → `NameError`, проверка не стартовала. Тест — **`tests/test_photo_bot.py::test_photo_run_callback_invokes_check`**
 
+- **`/shot` — multipart на httpx 0.28**: запрос `POST /photo/check` собирался из `files`-списка и `data`-списка одновременно, из-за чего httpx 0.28 делал синхронный `IteratorByteStream`, и `AsyncClient.send` падал с «Attempted to send an sync request with an AsyncClient instance». Теперь `mode` и `image_roles` кладутся в тот же multipart-`files` как поля `(None, value)` — поток становится async-совместимым. Тест — **`tests/test_photo_bot.py::test_photo_check_multipart_is_async_stream`**
+
 - **Проверка ДЗ без motok hub**: в `docker-compose.yml` у `tgzh-bot` больше не подставляется жёсткий `MOTOK_HUB_URL` — берётся из `.env` (пустой URL = режим без hub, как в `.env.example`). Раньше при пустых `MOTOK_INTERNAL_TOKEN`/`MOTOK_HUB_TOKEN_SECRET` бот всё равно считал hub включённым и отвечал «Вход хаба недоступен. Проверка без person_id не выполняется.»
 
 ### Changed

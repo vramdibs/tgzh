@@ -752,14 +752,18 @@ async def _run_photo_check_request(
         )
         return
 
-    multipart_files = []
+    # httpx 0.28: если передать `files` и `data` списками одновременно, тело
+    # становится синхронным IteratorByteStream, и AsyncClient.send падает с
+    # "Attempted to send an sync request with an AsyncClient instance".
+    # Складываем текстовые поля прямо в multipart-`files` как части без имени
+    # файла ((None, value)) — так httpx собирает async-совместимый MultipartStream.
+    multipart_files: list[tuple[str, tuple]] = [("mode", (None, mode))]
+    for r in roles:
+        multipart_files.append(("image_roles", (None, r)))
     for i, blob in enumerate(blobs):
         multipart_files.append(
             ("images", (f"photo_{i + 1}.jpg", blob, "image/jpeg"))
         )
-    form: list[tuple[str, str]] = [("mode", mode)]
-    for r in roles:
-        form.append(("image_roles", r))
 
     try:
         async with httpx.AsyncClient(
@@ -770,7 +774,6 @@ async def _run_photo_check_request(
             response = await client.post(
                 url,
                 files=multipart_files,
-                data=form,
                 headers=hub_headers,
             )
             elapsed = time.perf_counter() - t0

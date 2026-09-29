@@ -51,6 +51,23 @@
 
 ---
 
+## INC-2026-09-29-01: `/shot` «Проверить» - sync-поток в AsyncClient (httpx 0.28)
+
+| Поле | Значение |
+|------|----------|
+| **Дата** | 2026-09-29 |
+| **Симптом** | В `/shot` после «Проверить» бот пишет `Ошибка: Attempted to send an sync request with an AsyncClient instance.`; проверка не доходит до сервера |
+| **Диагностика** | Ошибка возникает в боте (`_run_photo_check_request`) до ответа сервера. Воспроизведение в контейнере `tgzh-bot`: `client.build_request("POST", ..., files=[...], data=[...])` дает `IteratorByteStream` (только sync, `mro` без `AsyncByteStream`), и `AsyncClient.send` кидает `RuntimeError`. Тот же multipart без `data=` (поля внутри `files`) дает `MultipartStream` (sync + async) |
+| **Причина** | На httpx 0.28 одновременная передача `files` **и** `data` **списками** формирует синхронный `IteratorByteStream`. `AsyncClient` его не отправляет. Обычный `POST /check` не задет: там `files`/`data` - **словари**, httpx строит `MultipartStream` |
+| **Решение** | В `bot._run_photo_check_request` убрать `data=`; `mode` и `image_roles` класть в тот же multipart-`files` как поля без имени файла: `("mode", (None, mode))`, `("image_roles", (None, role))`. Сервер `POST /photo/check` контракт не меняет |
+| **Проверка** | `pytest tests/test_photo_bot.py::test_photo_check_multipart_is_async_stream` (поток - наследник `httpx.AsyncByteStream`); ручной: `/shot` -> фото -> «Проверить» доходит до модели |
+
+**Связанные env:** `PHOTO_CHECK_*`, `BOT_PHOTO_CHECK_TIMEOUT_SEC`
+
+**Примечание:** правило на будущее - для async-запросов с multipart не смешивать списочные `files` и `data`; текстовые поля добавлять в `files` как `(None, value)`, либо использовать `data`-словарь.
+
+---
+
 ## Шаблон новой записи
 
 ```markdown

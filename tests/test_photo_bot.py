@@ -8,6 +8,7 @@ import tempfile
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
 import bot
@@ -126,3 +127,23 @@ async def test_photo_run_callback_invokes_check(monkeypatch: pytest.MonkeyPatch)
 
     run_check.assert_awaited_once()
     assert run_check.await_args.kwargs["user_id"] == 555
+
+
+def test_photo_check_multipart_is_async_stream() -> None:
+    """httpx 0.28: multipart с mode/roles внутри files должен быть async-совместим.
+
+    Если положить текстовые поля в отдельный `data=`-список, поток становится
+    только-sync IteratorByteStream и AsyncClient.send падает с
+    "Attempted to send an sync request with an AsyncClient instance".
+    """
+    blob = b"\xff\xd8\xff\x00\x01\x02"
+    roles = ["mixed", "unspecified"]
+    multipart_files: list[tuple[str, tuple]] = [("mode", (None, "single_album"))]
+    for r in roles:
+        multipart_files.append(("image_roles", (None, r)))
+    for i in range(2):
+        multipart_files.append(("images", (f"photo_{i + 1}.jpg", blob, "image/jpeg")))
+
+    client = httpx.AsyncClient()
+    req = client.build_request("POST", "http://example.invalid/photo/check", files=multipart_files)
+    assert isinstance(req.stream, httpx.AsyncByteStream)
