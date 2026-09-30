@@ -443,7 +443,6 @@ _POLL_BAR_OFF = "░"
 
 _ATTEND_BAR_WIDTH = 14
 _ATTEND_WEEK_DAYS = 7
-_ATTEND_MONTH_DAYS = 30
 
 
 def record_user_visit_day(path: str, user_id: int) -> None:
@@ -548,28 +547,35 @@ def _attendance_bar_line(label: str, count: int, max_count: int, width: int) -> 
 
 
 def format_attendance_charts_html(path: str) -> str:
-    """Блок /stats: график посещаемости за 7 дней и число уникальных за 30 дней."""
-    tz_name = _stats_tz_name()
+    """Блок /stats: график уникальных пользователей за 7 дней."""
     week = daily_unique_counts_last_days(path, _ATTEND_WEEK_DAYS)
+    if not week:
+        return ""
     w_max = max((c for _, c in week), default=0)
-    month_unique = unique_visitors_last_days(path, _ATTEND_MONTH_DAYS)
-
-    def _block(title: str, series: list[tuple[str, int]], mx: int) -> str:
-        if not series:
-            return ""
-        lines = [_attendance_bar_line(_visit_day_label_dd_mm(ds), c, mx, _ATTEND_BAR_WIDTH) for ds, c in series]
-        body = "\n".join(lines)
-        return f"<b>{title}</b>\n<pre>{body}</pre>\n"
-
-    out = [
-        "<b>Посещаемость</b> (уникальные пользователи в день, "
-        f"часовой пояс <code>{tz_name}</code>)\n",
-        "<i>Сбор данных с момента обновления бота; прошлые дни без записей — нули.</i>\n\n",
-        _block(f"Неделя (последние {_ATTEND_WEEK_DAYS} дней)", week, w_max),
-        "\n",
-        f"<b>Месяц (последние {_ATTEND_MONTH_DAYS} дней):</b> <b>{month_unique}</b> уникальных пользователей\n",
+    lines = [
+        _attendance_bar_line(_visit_day_label_dd_mm(ds), c, w_max, _ATTEND_BAR_WIDTH)
+        for ds, c in week
     ]
-    return "".join(out).rstrip() + "\n\n"
+    body = "\n".join(lines)
+    return (
+        f"<b>Неделя (последние {_ATTEND_WEEK_DAYS} дней)</b>\n"
+        f"<pre>{body}</pre>\n\n"
+    )
+
+
+def _html_count_line(label: str, n: int) -> str:
+    """Строка счетчика; пустая, если значение 0."""
+    if int(n) <= 0:
+        return ""
+    return f"{label}: <b>{int(n)}</b>"
+
+
+def _join_stat_section(title_html: str, lines: list[str]) -> str:
+    """Секция с заголовком; без строк заголовок тоже скрыт."""
+    body = [ln for ln in lines if ln]
+    if not body:
+        return ""
+    return title_html + "\n" + "\n".join(body) + "\n\n"
 
 
 def _format_year_block(ys: int, d: dict[str, int]) -> str:
@@ -598,39 +604,38 @@ def format_all_stats_html(path: str) -> str:
 
     init_stats(path)
     user_storage.init_db(path)
-    years = list_years_desc(path)
     grand = get_totals(path)
     chk_up, chk_down = user_storage.check_result_vote_totals(path)
     llm = get_llm_usage_totals(path)
-    head = (
+    totals = _join_stat_section(
+        "<b>Всего за все годы:</b>",
+        [
+            _html_count_line("Загружено фото решений", grand["photos_uploaded"]),
+            _html_count_line("Проверок завершено", grand["checks_completed"]),
+            _html_count_line("Не удалось проверить (техн.)", grand["checks_technical_failed"]),
+        ],
+    )
+    llm_block = _join_stat_section(
+        "<b>ИИ (токены и запросы):</b>",
+        [
+            _html_count_line("Запросов к модели", llm["requests"]),
+            _html_count_line("Токенов вход", llm["prompt_tokens"]),
+            _html_count_line("Токенов выход", llm["completion_tokens"]),
+            _html_count_line("Токенов всего", llm["total_tokens"]),
+            _html_count_line("Людей (уникальные)", llm["users"]),
+        ],
+    )
+    if chk_up > 0 or chk_down > 0:
+        votes = (
+            "<b>Оценили ответ:</b>\n"
+            f"👍 <b>{chk_up}</b>, 👎 <b>{chk_down}</b>\n\n"
+        )
+    else:
+        votes = ""
+    return (
         "<b>📊 Статистика</b> (все пользователи)\n\n"
-        "<b>Всего за все годы:</b>\n"
-        f"Загружено фото решений: <b>{grand['photos_uploaded']}</b>\n"
-        f"Проверок завершено: <b>{grand['checks_completed']}</b>\n"
-        f"Не удалось проверить (техн.): <b>{grand['checks_technical_failed']}</b>\n"
-        "\n"
-        "<b>ИИ (токены и запросы):</b>\n"
-        f"Запросов к модели: <b>{llm['requests']}</b>\n"
-        f"Токенов вход: <b>{llm['prompt_tokens']}</b>\n"
-        f"Токенов выход: <b>{llm['completion_tokens']}</b>\n"
-        f"Токенов всего: <b>{llm['total_tokens']}</b>\n"
-        f"Людей (уникальные): <b>{llm['users']}</b>\n"
-        "\n"
-        "<b>По тексту ответа модели (всего):</b>\n"
-        f"✅ Частично верных / с замечаниями: <b>{grand['verdict_partial']}</b>\n"
-        f"❌ Нет решения на листе: <b>{grand['verdict_absent']}</b>\n\n"
-        "<b>Оцени ответ (кнопки под сообщением):</b>\n"
-        f"👍 <b>{chk_up}</b>, 👎 <b>{chk_down}</b>\n\n"
-        f"{format_attendance_charts_html(path)}"
+        f"{totals}{llm_block}{votes}{format_attendance_charts_html(path)}"
     )
-    if not years:
-        y = academic_year_now()
-        years = [(y, _zero_row_dict())]
-    body = "<b>По учебным годам:</b>\n\n" + "\n\n".join(
-        _format_year_block(ys, d) for ys, d in years
-    )
-    foot = ""
-    return head + body + foot
 
 
 # Совместимость со старым вызовом (если где-то остался)

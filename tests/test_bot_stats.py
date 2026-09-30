@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import pytest
+
 import bot_stats
 import user_storage
 
@@ -31,16 +33,24 @@ def test_stats_counters_and_verdicts() -> None:
         assert t["verdict_absent"] == 1
         assert t["verdict_percent_sum"] == 0
         html = bot_stats.format_all_stats_html(path)
-        assert "По учебным годам" in html
+        assert "По учебным годам" not in html
         assert "Всего за все годы" in html
+        assert "Загружено фото решений: <b>2</b>" in html
+        assert "Проверок завершено: <b>3</b>" in html
+        assert "Не удалось проверить (техн.): <b>1</b>" in html
         assert "Средняя оценка выполнения задания" not in html
-        assert "Посещаемость" in html
+        assert "Посещаемость" not in html
+        assert "Сбор данных с момента обновления" not in html
         assert "Неделя" in html
-        assert "Месяц" in html
+        assert "Месяц" not in html
         assert "✅ Верных" not in html
         assert "☑️" not in html
-        assert "ИИ (токены и запросы)" in html
-        assert "Запросов к модели" in html
+        assert "По тексту ответа модели" not in html
+        assert "✅ Частично верных" not in html
+        assert "ИИ (токены и запросы)" not in html
+        assert "Запросов к модели" not in html
+        assert "Токенов вход" not in html
+        assert "Оценили ответ" not in html
         assert "Опрос" not in html
         assert "/polling" not in html
         assert "Математика нравится" not in html
@@ -60,7 +70,8 @@ def test_stats_has_no_polling_section() -> None:
         assert "Математика нравится" not in html
         assert "Завершили:" not in html
         assert "✅ Верных" not in html
-        assert "✅ Частично верных" in html
+        assert "✅ Частично верных" not in html
+        assert "По тексту ответа модели" not in html
 
 
 def test_academic_year_moscow_dates() -> None:
@@ -190,5 +201,41 @@ def test_llm_spend_requests_tokens_and_unique_users(monkeypatch: pytest.MonkeyPa
         assert tot["total_tokens"] == 45
         assert tot["users"] == 2
         html = bot_stats.format_all_stats_html(path)
+        assert "ИИ (токены и запросы)" in html
         assert "Запросов к модели: <b>3</b>" in html
+        assert "Токенов вход: <b>16</b>" in html
+        assert "Токенов выход: <b>29</b>" in html
+        assert "Токенов всего: <b>45</b>" in html
         assert "Людей (уникальные): <b>2</b>" in html
+
+
+def test_stats_hides_zero_llm_token_lines(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AI_MOCK", raising=False)
+    with tempfile.TemporaryDirectory() as td:
+        path = str(Path(td) / "z.sqlite")
+        bot_stats.init_stats(path)
+        bot_stats.record_llm_spend(
+            path, user_id=11, kind="chat", prompt_tokens=0, completion_tokens=0,
+        )
+        html = bot_stats.format_all_stats_html(path)
+        assert "Запросов к модели: <b>1</b>" in html
+        assert "Людей (уникальные): <b>1</b>" in html
+        assert "Токенов вход" not in html
+        assert "Токенов выход" not in html
+        assert "Токенов всего" not in html
+
+
+def test_stats_shows_votes_label() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        path = str(Path(td) / "votes.sqlite")
+        bot_stats.init_stats(path)
+        user_storage.init_db(path)
+        html0 = bot_stats.format_all_stats_html(path)
+        assert "Оценили ответ" not in html0
+        user_storage.upsert_check_result_vote(
+            path, chat_id=1, message_id=10, user_id=11, vote=1,
+        )
+        html = bot_stats.format_all_stats_html(path)
+        assert "<b>Оценили ответ:</b>" in html
+        assert "👍 <b>1</b>" in html
+        assert "👎 <b>0</b>" in html
