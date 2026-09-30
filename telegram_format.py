@@ -77,10 +77,26 @@ _UNCLEAR_LINE_RE = re.compile(
     r"нельзя|неясно|непонятно|не читается|нет условия|не удалось",
     re.IGNORECASE,
 )
+# Нет формулировки на снимке учебника - строка со знаком вопроса, фраза жирным.
+_MISSING_CONDITION_RE = re.compile(
+    r"("
+    r"текст\w*\s+задач\w*[^.\n]{0,80}?нет"
+    r"|формулировк\w*[^.\n]{0,80}?не\s+видн\w*"
+    r")",
+    re.IGNORECASE,
+)
+_TASK_NUMBER_RE = re.compile(
+    r"(?<!\*)(Задач[аеи]\s*№\s*\d+(?:\s*\([^)\n]{1,40}\))?)",
+    re.IGNORECASE,
+)
+_ANSWER_BREAK_RE = re.compile(r"(?<=\S)\s+(?=ответ\b)", re.IGNORECASE)
 _MARK_OK = "✅"
 _MARK_BAD = "❌"
 _MARK_UNK = "❓"
 _MARKS = (_MARK_OK, _MARK_BAD, _MARK_UNK)
+_MARK_TOKEN = r"(?:✅|❌|❓|✓|✔|✗|✕|✖)(?:\ufe0f)?"
+_ANY_MARK_RE = re.compile(rf"{_MARK_TOKEN}\s*")
+_SPLIT_MARK_RE = re.compile(rf"({_MARK_TOKEN})")
 
 
 def _plain_math_from_latex(text: str) -> str:
@@ -119,6 +135,33 @@ def _strip_leading_mark(body: str) -> tuple[str, str]:
     return "", body
 
 
+def _canonical_mark(mark: str) -> str:
+    bare = mark.replace("\ufe0f", "")
+    if bare in ("✓", "✔", _MARK_OK):
+        return _MARK_OK
+    if bare in ("✗", "✕", "✖", _MARK_BAD):
+        return _MARK_BAD
+    return _MARK_UNK
+
+
+def _split_marked_chunks(body: str) -> list[tuple[str, str]]:
+    """Текст и значки проверки. Пустой знак - фрагмент до первой пометки."""
+    parts = _SPLIT_MARK_RE.split(body)
+    if len(parts) == 1:
+        return [("", body)]
+    chunks: list[tuple[str, str]] = []
+    head = parts[0].strip()
+    if head:
+        chunks.append(("", head))
+    idx = 1
+    while idx < len(parts):
+        mark = _canonical_mark(parts[idx])
+        text = parts[idx + 1].strip() if idx + 1 < len(parts) else ""
+        chunks.append((mark, text))
+        idx += 2
+    return chunks or [("", body)]
+
+
 def _annotate_check_line(line: str) -> str:
     if not line.strip():
         return line
@@ -127,31 +170,87 @@ def _annotate_check_line(line: str) -> str:
         return line
     indent, bullet, body = matched.group(1), matched.group(2), matched.group(3)
     existing, body = _strip_leading_mark(body)
-    low = body.replace("*", "").lower()
+    if existing:
+        existing = _canonical_mark(existing)
+    low = _ANY_MARK_RE.sub("", body).replace("*", "").lower()
     if existing == _MARK_BAD or _ERROR_LINE_RE.search(low):
         kind = "bad"
-    elif existing == _MARK_UNK or _UNCLEAR_LINE_RE.search(low):
+    elif existing == _MARK_UNK or _UNCLEAR_LINE_RE.search(low) or _MISSING_CONDITION_RE.search(low):
         kind = "unk"
     elif existing == _MARK_OK or _VERNO_WORD_RE.search(low):
         kind = "ok"
     else:
         return f"{indent}{bullet}{body}" if bullet else line
+    body = _ANY_MARK_RE.sub("", body).strip()
     if kind == "ok":
         body = _VERNO_WORD_RE.sub(lambda m: f"**{m.group(0)}**", body)
     mark = {"ok": _MARK_OK, "bad": _MARK_BAD, "unk": _MARK_UNK}[kind]
-    return f"{indent}{bullet}{mark} {body}".rstrip()
+    return f"{indent}{mark} {body}".rstrip()
+
+
+def _expand_check_line(line: str) -> list[str]:
+    """Пункт с несколькими примерами -> заголовок и отдельная строка на пример."""
+    if not line.strip():
+        return [line]
+    matched = _LINE_SPLIT_RE.match(line)
+    if matched is None:
+        return [_annotate_check_line(line)]
+    indent, body = matched.group(1), matched.group(3)
+    chunks = _split_marked_chunks(body)
+    if not any(mark for mark, _text in chunks):
+        return [_annotate_check_line(line)]
+    out: list[str] = []
+    rest = chunks
+    if chunks[0][0] == "":
+        head = chunks[0][1].strip()
+        if head:
+            out.append(f"{indent}{head}")
+        rest = chunks[1:]
+    for mark, text in rest:
+        out.append(_annotate_check_line(f"{indent}{mark} {text}".rstrip()))
+    return out or [_annotate_check_line(line)]
+
+
+def _polish_check_line(line: str) -> str:
+    """Жирным: номер задачи и фразы про невидимую формулировку в учебнике."""
+    if not line.strip():
+        return line
+    line = _TASK_NUMBER_RE.sub(lambda m: f"**{m.group(1)}**", line)
+
+    def _bold_missing(match: re.Match[str]) -> str:
+        phrase = match.group(1)
+        if phrase.startswith("**"):
+            return phrase
+        return f"**{phrase}**"
+
+    return _MISSING_CONDITION_RE.sub(_bold_missing, line)
+
+
+def _break_answer_lines(line: str) -> list[str]:
+    """Слово "ответ" начинает новую строку."""
+    if not line.strip():
+        return [line]
+    parts = _ANSWER_BREAK_RE.split(line)
+    if len(parts) == 1:
+        return [line]
+    out = [parts[0].rstrip()]
+    out.extend(part.strip() for part in parts[1:] if part.strip())
+    return out
 
 
 def prepare_check_display_text(text: str) -> str:
     """
-    Текст проверки для чата: без LaTeX и слэшей, пометки строк, **верно**.
+    Текст проверки для чата: без LaTeX и слэшей, одна пометка на пример, **верно**.
     Не использовать для подсчета вердикта.
     """
     if not text:
         return ""
     plain = _plain_math_from_latex(text)
-    lines = [_annotate_check_line(line) for line in plain.split("\n")]
-    return "\n".join(lines)
+    lines: list[str] = []
+    for line in plain.split("\n"):
+        for piece in _break_answer_lines(line):
+            lines.extend(_expand_check_line(piece))
+    return "\n".join(_polish_check_line(line) for line in lines)
 
 
 def markdownish_to_telegram_html(text: str) -> str:

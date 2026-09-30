@@ -51,14 +51,54 @@ def test_prepare_check_display_line_marks_and_bold_verno() -> None:
     out = tf.prepare_check_display_text(src)
     lines = out.splitlines()
     assert lines[0].startswith("- Задача 6")
-    assert not lines[0].startswith("- ✅")
-    assert lines[1].startswith("- ✅")
+    assert "✅" not in lines[0]
+    assert lines[1].startswith("✅ ")
+    assert not lines[1].startswith("-")
     assert "**верно**" in lines[1]
     assert "\\" not in lines[1]
-    assert lines[2].startswith("- ❌")
-    assert lines[3].startswith("- ❓")
-    assert lines[4].startswith("- ❌")
+    assert lines[2].startswith("❌ ")
+    assert lines[3].startswith("❓ ")
+    assert lines[4].startswith("❌ ")
     assert "**верно**" not in lines[4]
+
+
+def test_prepare_check_display_splits_examples_one_mark() -> None:
+    src = (
+        "- Задача №6 (п. а): сложение. "
+        "✓ (298+102)+386=786 - итог верно. "
+        "✓ (489+11)+489=989 - итог верно. "
+        "✗ 2·5·19=900 - ошибка в ответе."
+    )
+    lines = tf.prepare_check_display_text(src).splitlines()
+    assert lines[0] == "**Задача №6 (п. а)**: сложение."
+    assert "✅" not in lines[0]
+    assert lines[1].startswith("✅ (298+102)+386=786")
+    assert lines[1].count("✅") == 1
+    assert "**верно**" in lines[1]
+    assert lines[2].startswith("✅ (489+11)+489=989")
+    assert lines[2].count("✅") == 1
+    assert lines[3].startswith("❌ 2·5·19=900")
+    assert lines[3].count("❌") == 1
+    assert "✓" not in "\n".join(lines)
+    assert "✗" not in "\n".join(lines)
+
+
+def test_prepare_check_display_task_number_missing_text_and_answer_line() -> None:
+    src = "\n".join(
+        [
+            "Задача №8: текста задачи в учебнике на фото нет, записи выражений есть.",
+            "- формулировка из учебника на фото не видна.",
+            "- (731-296)=435 - верно. Ответ 435 верно",
+        ]
+    )
+    lines = tf.prepare_check_display_text(src).splitlines()
+    assert lines[0].startswith("❓ ")
+    assert "**текста задачи в учебнике на фото нет**" in lines[0].lower()
+    assert "**Задача №8**" in lines[0]
+    assert lines[1].startswith("❓ ")
+    assert "**формулировка из учебника на фото не видна**" in lines[1].lower()
+    assert "Ответ" not in lines[2]
+    assert lines[3].startswith("✅ Ответ 435")
 
 
 def test_markdown_to_telegram_html_bold_italic() -> None:

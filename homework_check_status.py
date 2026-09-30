@@ -314,27 +314,12 @@ def format_check_result_suffix_html() -> str:
 
 
 def format_check_result_prefix(raw: str) -> str:
-    """Заголовок блока результата для Telegram (до HTML-разметки тела)."""
-    if (
-        not raw
-        or raw.startswith("Ошибка связи с сервером")
-        or raw.startswith("Ошибка:")
-    ):
-        return _RESULT_TITLE_HTML
-    verdict = homework_check_stats_result(raw)
-    if verdict == "absent":
-        return f"❌ {_RESULT_TITLE_HTML}"
-    return f"✅ {_RESULT_TITLE_HTML}"
+    """Заголовок блока результата для Telegram. Без эмодзи: пометки стоят у строк примеров."""
+    _ = raw
+    return _RESULT_TITLE_HTML
 
 
 def format_merged_check_prefix(raw_parts: list[str]) -> str:
-    """
-    Префикс, если итог собран из нескольких ответов модели без текстовой сводки.
-    ❌ если хотя бы одна часть absent, иначе ✅.
-    """
-    if not raw_parts:
-        return _RESULT_TITLE_HTML
-    results = [homework_check_stats_result((p or "").strip()) for p in raw_parts]
-    if any(v == "absent" for v in results):
-        return f"❌ {_RESULT_TITLE_HTML}"
-    return f"✅ {_RESULT_TITLE_HTML}"
+    """Префикс сводки из нескольких ответов: тот же заголовок без эмодзи."""
+    _ = raw_parts
+    return _RESULT_TITLE_HTML

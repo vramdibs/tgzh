@@ -54,15 +54,16 @@ def test_format_prefix_errors_plain() -> None:
 
 def test_format_prefix_absent_no_gdz_line() -> None:
     p = hcs.format_check_result_prefix("На фото нет решения, лист пуст.")
-    assert p == "\u274c <b>Результат проверки:</b>\n\n"
+    assert p == "<b>Результат проверки:</b>\n\n"
+    assert "\u274c" not in p
     assert "ГДЗ" not in p
     assert "Оценка выполнения" not in p
 
 
 def test_format_prefix_ok_no_footer_in_prefix() -> None:
     p = hcs.format_check_result_prefix("Вывод: Решение верно.")
-    assert p.startswith("\u2705 ")
-    assert "<b>Результат проверки:</b>" in p
+    assert p == "<b>Результат проверки:</b>\n\n"
+    assert "\u2705" not in p
     assert "Оценка выполнения" not in p
     assert "ГДЗ" not in p
 
@@ -142,7 +143,8 @@ def test_format_merged_prefix_any_absent() -> None:
             "На фото нет решения, лист пуст.",
         ],
     )
-    assert p.startswith("\u274c ")
+    assert p == "<b>Результат проверки:</b>\n\n"
+    assert "\u274c" not in p
     assert "Оценка выполнения" not in p
 
 
@@ -153,7 +155,8 @@ def test_format_merged_prefix_all_ok() -> None:
             "Вывод: В решении есть ошибки в вычислениях.",
         ],
     )
-    assert p.startswith("\u2705 ")
+    assert p == "<b>Результат проверки:</b>\n\n"
+    assert "\u2705" not in p
     assert "Оценка выполнения" not in p
     assert "%" not in p
 

@@ -73,6 +73,7 @@ def _system_prompt(stage: str) -> str:
 
 
 def test_photo_check_prompts_match_solution_to_condition() -> None:
-    needle = "Якорь - рукопись ученика"
     for stage in ("structure", "verify", "consolidated"):
-        assert needle in _system_prompt(stage), stage
+        text = _system_prompt(stage)
+        assert "Якорь - рукопись ученика" in text, stage
+        assert "Не дописывай условие, которого не видно" in text, stage
