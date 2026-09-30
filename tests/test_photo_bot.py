@@ -129,6 +129,87 @@ async def test_photo_run_callback_invokes_check(monkeypatch: pytest.MonkeyPatch)
     assert run_check.await_args.kwargs["user_id"] == 555
 
 
+@pytest.mark.asyncio
+async def test_photo_check_result_returns_to_shot_upload(
+    monkeypatch: pytest.MonkeyPatch,
+    db_path: str,
+) -> None:
+    assert db_path
+    ctx = _FakeContext()
+    ctx.user_data[bot._PHOTO_CHECK_ACTIVE] = True
+    ctx.user_data[bot._PHOTO_CHK_ENTRIES] = [(1, "fid1", "mixed")]
+    sent: list[tuple[str, Any]] = []
+    edits: list[Any] = []
+
+    class _File:
+        async def download_as_bytearray(self) -> bytearray:
+            return bytearray(b"jpeg")
+
+    class _Bot:
+        async def get_file(self, _fid: str) -> _File:
+            return _File()
+
+        async def send_message(self, _chat_id: int, text: str, **kw: Any) -> None:
+            sent.append((text, kw.get("reply_markup")))
+
+    ctx.bot = _Bot()
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, str]:
+            return {"result": "Задача 1: верно"}
+
+    class _Client:
+        def __init__(self, *_a: Any, **_kw: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *_exc: Any) -> bool:
+            return False
+
+        async def post(self, *_a: Any, **_kw: Any) -> _Resp:
+            return _Resp()
+
+    async def _edit(_text: str, **kw: Any) -> None:
+        edits.append(kw.get("reply_markup"))
+
+    async def _typing(_bot: Any, _chat_id: int, coro: Any) -> Any:
+        return await coro
+
+    monkeypatch.setattr(bot.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(bot, "async_http_transport_ipv4_lookup", lambda: None)
+    monkeypatch.setattr(bot, "_hub_check_headers", AsyncMock(return_value={}))
+    monkeypatch.setattr(bot, "run_with_typing", _typing)
+
+    await bot._run_photo_check_request(
+        ctx,
+        user_id=555,
+        chat_id=1,
+        status_msg_id=1,
+        edit_message=_edit,
+    )
+
+    def _callbacks(markup: Any) -> list[str]:
+        return [btn.callback_data for row in markup.inline_keyboard for btn in row]
+
+    result_cbs = _callbacks(edits[-1])
+    assert "cfv:1" in result_cbs
+    assert "show_sol" not in result_cbs
+    assert "answer_text" not in result_cbs
+    assert "chg_hw" not in result_cbs
+
+    assert sent
+    assert "photo:mode:single_album" in _callbacks(sent[-1][1])
+    assert ctx.user_data[bot._PHOTO_CHECK_ACTIVE] is True
+    assert not ctx.user_data.get(bot._PHOTO_CHK_ENTRIES)
+
+
 def test_photo_check_multipart_is_async_stream() -> None:
     """httpx 0.28: multipart с mode/roles внутри files должен быть async-совместим.
 

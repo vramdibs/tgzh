@@ -814,24 +814,35 @@ async def _run_photo_check_request(
             homework_check_status.strip_homework_check_machine_tags(body_raw),
         ),
     )
-    profile = await asyncio.to_thread(user_storage.get_profile, USER_DB_PATH, user_id)
     _photo_check_clear(context)
-    if profile is not None:
-        kb = get_check_result_keyboard(profile, user_id, cursor_recheck=False)
-    else:
-        kb = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton("👍", callback_data="cfv:1"),
-                    InlineKeyboardButton("👎", callback_data="cfv:-1"),
-                ],
-            ]
-        )
     await edit_message(
         prefix + html_body + suffix,
         parse_mode=ParseMode.HTML,
-        reply_markup=kb,
+        reply_markup=_photo_check_vote_keyboard(),
     )
+    context.user_data[_PHOTO_CHECK_ACTIVE] = True
+    await context.bot.send_message(
+        chat_id,
+        _SHOT_UPLOAD_PROMPT,
+        reply_markup=_photo_check_mode_keyboard(),
+    )
+
+
+def _photo_check_vote_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("👍", callback_data="cfv:1"),
+                InlineKeyboardButton("👎", callback_data="cfv:-1"),
+            ],
+        ]
+    )
+
+
+_SHOT_UPLOAD_PROMPT = (
+    "Проверка по фото без учебника и ГДЗ: пришли снимки условия и решения "
+    "(можно на одном кадре). Выбери, как удобнее загружать:"
+)
 
 
 async def shot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -848,8 +859,7 @@ async def shot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _photo_check_clear(context)
     context.user_data[_PHOTO_CHECK_ACTIVE] = True
     await update.message.reply_text(
-        "Проверка по фото без учебника и ГДЗ: пришли снимки условия и решения "
-        "(можно на одном кадре). Выбери, как удобнее загружать:",
+        _SHOT_UPLOAD_PROMPT,
         reply_markup=_photo_check_mode_keyboard(),
     )
 
