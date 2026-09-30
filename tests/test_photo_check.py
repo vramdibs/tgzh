@@ -78,20 +78,6 @@ def test_photo_check_prompts_match_solution_to_condition() -> None:
         assert "Якорь - рукопись ученика" in text, stage
         assert "Не дописывай условие, которого не видно" in text, stage
         assert "Печатный номер задачи на странице учебника" in text, stage
-        assert "[tgzh_offer:" in text, stage
-
-
-def test_photo_check_explain_prompt_has_no_verdict_marks() -> None:
-    msgs = photo_check.build_photo_check_messages(
-        images=[_tiny_jpeg()],
-        roles=["condition"],
-        mode="single_album",
-        stage="explain",
-        explain_task="10",
-    )
-    system = next(m for m in msgs if m["role"] == "system")
-    text = str(system["content"])
-    assert "Номер задачи: 10" in text
-    assert "Не пиши слово" in text
-    assert "эмодзи" in text
-    assert "[tgzh_result" not in text
+        assert "[tgzh_offer:" not in text, stage
+        assert "написан рукой рядом с решением" in text, stage
+        assert "Контрпример" in text, stage

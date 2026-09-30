@@ -80,6 +80,23 @@ async def test_photo_check_active_routes_before_chat(
     chat_photo.assert_not_awaited()
 
 
+def test_photo_check_status_keyboard_has_no_homework_back() -> None:
+    ctx = _FakeContext()
+    ctx.user_data[bot._PHOTO_CHECK_ACTIVE] = True
+    ctx.user_data[bot._PHOTO_CHECK_MODE] = "single_album"
+    ctx.user_data[bot._PHOTO_CHK_ENTRIES] = [(1, "fid1", "mixed")]
+    flat = [
+        (btn.text, btn.callback_data)
+        for row in bot._photo_check_status_keyboard(ctx).inline_keyboard
+        for btn in row
+    ]
+    callbacks = [cb for _, cb in flat]
+    assert "photo:cancel" in callbacks
+    assert "photo:run" in callbacks
+    assert "photo:back" not in callbacks
+    assert all(label != "К проверке ДЗ" for label, _ in flat)
+
+
 @pytest.mark.asyncio
 async def test_photo_check_stores_mixed_role(monkeypatch: pytest.MonkeyPatch) -> None:
     ctx = _FakeContext()
@@ -211,7 +228,7 @@ async def test_photo_check_result_returns_to_shot_upload(
 
 
 @pytest.mark.asyncio
-async def test_photo_check_result_offers_textbook_task_buttons(
+async def test_photo_check_result_strips_offer_tag_without_buttons(
     monkeypatch: pytest.MonkeyPatch,
     db_path: str,
 ) -> None:
@@ -277,86 +294,11 @@ async def test_photo_check_result_offers_textbook_task_buttons(
 
     text, markup = edits[-1]
     cbs = [btn.callback_data for row in markup.inline_keyboard for btn in row]
-    assert "photo:ex:10" in cbs
-    assert "photo:ex:11" in cbs
-    assert "cfv:1" in cbs
+    assert cbs == ["cfv:1", "cfv:-1"]
+    assert "photo:ex" not in "".join(cbs)
     assert "tgzh_offer" not in text.lower()
-    assert "Нажми номер" in text
-    assert ctx.user_data[bot._PHOTO_EXPLAIN_ENTRIES] == [("fid1", "mixed")]
-
-
-@pytest.mark.asyncio
-async def test_photo_explain_callback_posts_task_number(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    ctx = _FakeContext()
-    ctx.user_data[bot._PHOTO_EXPLAIN_ENTRIES] = [("fid1", "mixed")]
-    posted: list[Any] = []
-    edits: list[str] = []
-
-    class _File:
-        async def download_as_bytearray(self) -> bytearray:
-            return bytearray(b"jpeg")
-
-    class _WaitMsg:
-        async def edit_text(self, text: str, **_kw: Any) -> None:
-            edits.append(text)
-
-    class _Bot:
-        async def get_file(self, _fid: str) -> _File:
-            return _File()
-
-        async def send_message(self, *_a: Any, **_kw: Any) -> _WaitMsg:
-            return _WaitMsg()
-
-    ctx.bot = _Bot()
-
-    class _Resp:
-        status_code = 200
-
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict[str, str]:
-            return {"result": "Ход: 731 - 296 = 435.\nОтвет: 435."}
-
-    class _Client:
-        def __init__(self, *_a: Any, **_kw: Any) -> None:
-            pass
-
-        async def __aenter__(self) -> "_Client":
-            return self
-
-        async def __aexit__(self, *_exc: Any) -> bool:
-            return False
-
-        async def post(self, *_a: Any, **kw: Any) -> _Resp:
-            posted.append(kw.get("files"))
-            return _Resp()
-
-    async def _typing(_bot: Any, _chat_id: int, coro: Any) -> Any:
-        return await coro
-
-    monkeypatch.setattr(bot.httpx, "AsyncClient", _Client)
-    monkeypatch.setattr(bot, "async_http_transport_ipv4_lookup", lambda: None)
-    monkeypatch.setattr(bot, "_hub_check_headers", AsyncMock(return_value={}))
-    monkeypatch.setattr(bot, "run_with_typing", _typing)
-
-    await bot._run_photo_explain_request(
-        ctx,
-        user_id=555,
-        chat_id=1,
-        task_no="10",
-    )
-
-    assert posted
-    names = [item[0] for item in posted[0]]
-    assert "explain_task" in names
-    explain_part = next(item for item in posted[0] if item[0] == "explain_task")
-    assert explain_part[1][1] == "10"
-    assert edits
-    assert "435" in edits[-1]
-    assert "✅" not in edits[-1]
+    assert "Нажми номер" not in text
+    assert "photo_explain_entries" not in ctx.user_data
 
 
 def test_photo_check_multipart_is_async_stream() -> None:

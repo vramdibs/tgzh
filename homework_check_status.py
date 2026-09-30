@@ -25,7 +25,6 @@ _TGZH_OFFER_RE = re.compile(
     r"\[\s*tgzh_offer\s*:\s*(?P<ids>[^\]]+)\]",
     flags=re.IGNORECASE,
 )
-_OFFER_LIMIT = 8
 
 
 def _tgzh_result_kind_to_emoji(kind: str) -> str:
@@ -35,24 +34,6 @@ def _tgzh_result_kind_to_emoji(kind: str) -> str:
     if k == "incorrect":
         return "\u274c"
     return "\u2611\ufe0f"
-
-
-def parse_tgzh_offer_ids(raw: str) -> list[str]:
-    """Номера задач учебника без решения ученика из метки [tgzh_offer:9,10]."""
-    m = _TGZH_OFFER_RE.search(raw or "")
-    if not m:
-        return []
-    out: list[str] = []
-    seen: set[str] = set()
-    for part in m.group("ids").split(","):
-        token = "".join(ch for ch in part.strip() if ch.isdigit())
-        if not token or token in seen:
-            continue
-        seen.add(token)
-        out.append(token)
-        if len(out) >= _OFFER_LIMIT:
-            break
-    return out
 
 
 def parse_tgzh_result_marker(raw: str) -> Literal["correct", "partial", "incorrect"] | None:

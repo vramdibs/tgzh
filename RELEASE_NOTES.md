@@ -4,9 +4,7 @@
 
 ### Added
 
-- **`/shot` — разбор задач из учебника кнопками**: если на фото учебника есть печатные номера без рукописного решения, бот предлагает их кнопками. По нажатию - ход решения и ответ, без слова "верно" и без эмодзи. Метка `[tgzh_offer:…]`, поле `explain_task` в `POST /photo/check`
-
-- **`/shot` — проверка по снимкам без OCR и ГДЗ** (в меню под `/start`; API `POST /photo/check`): модуль **`photo_check.py`**. Multimodal Composer → Grok (bridge) или Qwen VL. Env **`PHOTO_CHECK_*`**, **`BOT_PHOTO_CHECK_TIMEOUT_SEC`**. Тесты — **`tests/test_photo_check.py`**, **`tests/test_photo_bot.py`**, **`tests/test_server.py`**
+- **`/shot` - проверка по снимкам без OCR и ГДЗ** (в меню под `/start`; API `POST /photo/check`): модуль **`photo_check.py`**. Multimodal Composer → Grok (bridge) или Qwen VL. Env **`PHOTO_CHECK_*`**, **`BOT_PHOTO_CHECK_TIMEOUT_SEC`**. Тесты - **`tests/test_photo_check.py`**, **`tests/test_photo_bot.py`**, **`tests/test_server.py`**
 
 - **Публичный репозиторий cursor-bridge**: [discourse-cursor-bridge](https://github.com/vramdibs/discourse-cursor-bridge) - установка и env bridge; ссылки в **README**, **docs/integration.md**, **docs/README.md**
 
@@ -35,6 +33,8 @@
 
 ### Fixed
 
+- **`/shot` проверяет только рукопись**: номер задачи берется из записи рукой в тетради (как "№6", "№8"), не из печатного списка учебника. Если номера разные, условие чужой печатной задачи не подставляется. Выдуманные номера и сюжеты запрещены в промпте. Тест - **`tests/test_photo_check.py::test_photo_check_prompts_match_solution_to_condition`**
+
 - **Лишние звездочки у фразы про учебник**: "текста задачи на фото нет" показывается одной парой `**`, даже если модель уже выделила фразу. Тест - **`tests/test_telegram_format.py::test_prepare_check_display_collapses_extra_stars_around_missing_text`**
 
 - **Служебная метка `[tgzh_result:…]`**: в ответах `/shot` (и других проверок) вместо сырой строки показывается эмодзи (✅ / ☑️ / ❌); вердикт для статистики читается из метки. Тесты — **`tests/test_homework_check_status.py::test_tgzh_result_*`**
@@ -46,6 +46,10 @@
 - **Проверка ДЗ без motok hub**: в `docker-compose.yml` у `tgzh-bot` больше не подставляется жёсткий `MOTOK_HUB_URL` — берётся из `.env` (пустой URL = режим без hub, как в `.env.example`). Раньше при пустых `MOTOK_INTERNAL_TOKEN`/`MOTOK_HUB_TOKEN_SECRET` бот всё равно считал hub включённым и отвечал «Вход хаба недоступен. Проверка без person_id не выполняется.»
 
 ### Changed
+
+- **`/shot` без кнопки "К проверке ДЗ"**: из статуса загрузки снимков убрана кнопка возврата к обычному ДЗ. Выход из режима - "Отмена". Тест - **`tests/test_photo_bot.py::test_photo_check_status_keyboard_has_no_homework_back`**
+
+- **`/shot` без разбора по номерам**: кнопки № и повторный запрос `explain_task` сняты. После проверки только оценка (👍/👎) и повторная загрузка фото. Служебная метка `[tgzh_offer]` с показа снимается, если модель ее все же вернет. Тест - **`tests/test_photo_bot.py::test_photo_check_result_strips_offer_tag_without_buttons`**
 
 - **`/chat` - актуальный список Composer/Grok**: кнопка "Модель" показывает доступные имена (сейчас Composer 2.5, Grok 4.6, Grok 4.7). Если `CHAT_CURSOR_MODELS` пуст, каталог берется из встроенного списка и при открытии выбора обновляется с `GET /v1/models` на Cursor bridge: новые slug появляются, снятые с эксплуатации пропадают. Fast и reasoning выше Low скрыты. При сбое bridge остается прошлый кэш или встроенный список. Тесты - `tests/test_chat_streaming.py`, `tests/test_chat_menu.py`
 

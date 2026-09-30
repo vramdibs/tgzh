@@ -116,13 +116,11 @@ def test_tgzh_result_incorrect_maps_to_partial() -> None:
     assert "\u274c" in out
 
 
-def test_tgzh_offer_ids_parse_and_strip() -> None:
+def test_tgzh_offer_tag_stripped_from_display() -> None:
     raw = "Задача 6: верно.\n[tgzh_result:partial]\n[tgzh_offer:9, 10, 10, a11]"
-    assert hcs.parse_tgzh_offer_ids(raw) == ["9", "10", "11"]
     out = hcs.strip_homework_check_machine_tags(raw)
     assert "tgzh_offer" not in out.lower()
     assert "Задача 6" in out
-    assert hcs.parse_tgzh_offer_ids("без метки") == []
 
 
 def test_detach_trailing_mixed_numbers_marker() -> None:

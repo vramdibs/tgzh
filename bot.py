@@ -577,7 +577,6 @@ _PHOTO_CHECK_MODE = "photo_check_mode"
 _PHOTO_CHECK_PHASE = "photo_check_phase"
 _PHOTO_CHECK_MIXED_SINGLE = "photo_check_mixed_single"
 _PHOTO_CHK_ENTRIES = "photo_chk_entries"
-_PHOTO_EXPLAIN_ENTRIES = "photo_explain_entries"
 _PHOTO_CHK_BATCH_GID = "photo_chk_batch_gid"
 _PHOTO_CHK_BATCH_ENTRIES = "photo_chk_batch_entries"
 _PHOTO_CHK_BATCH_TASK = "photo_chk_batch_task"
@@ -594,6 +593,7 @@ def _photo_check_clear(context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop(_PHOTO_CHECK_MODE, None)
     context.user_data.pop(_PHOTO_CHECK_PHASE, None)
     context.user_data.pop(_PHOTO_CHECK_MIXED_SINGLE, None)
+    context.user_data.pop("photo_explain_entries", None)
 
 
 def _photo_check_entries(context: ContextTypes.DEFAULT_TYPE) -> list[tuple[int, str, str]]:
@@ -620,12 +620,7 @@ def _photo_check_status_keyboard(context: ContextTypes.DEFAULT_TYPE) -> InlineKe
                 )
             ]
         )
-    rows.append(
-        [
-            InlineKeyboardButton("Отмена", callback_data="photo:cancel"),
-            InlineKeyboardButton("К проверке ДЗ", callback_data="photo:back"),
-        ]
-    )
+    rows.append([InlineKeyboardButton("Отмена", callback_data="photo:cancel")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -813,20 +808,11 @@ async def _run_photo_check_request(
             homework_check_status.strip_homework_check_machine_tags(body_raw),
         ),
     )
-    offers = homework_check_status.parse_tgzh_offer_ids(body_raw)
-    if offers:
-        context.user_data[_PHOTO_EXPLAIN_ENTRIES] = [
-            (entry[1], entry[2]) for entry in _photo_check_entries(context)
-        ]
-        html_body += (
-            "\n\nВ учебнике есть задачи без твоего решения. "
-            "Нажми номер, чтобы разобрать."
-        )
     _photo_check_clear(context)
     await edit_message(
         prefix + html_body + suffix,
         parse_mode=ParseMode.HTML,
-        reply_markup=_photo_check_result_keyboard(offers),
+        reply_markup=_photo_check_vote_keyboard(),
     )
     context.user_data[_PHOTO_CHECK_ACTIVE] = True
     await context.bot.send_message(
@@ -841,11 +827,8 @@ def _photo_multipart_files(
     mode: str,
     roles: list[str],
     blobs: list[bytes],
-    explain_task: str = "",
 ) -> list[tuple[str, tuple]]:
     multipart_files: list[tuple[str, tuple]] = [("mode", (None, mode))]
-    if explain_task:
-        multipart_files.append(("explain_task", (None, explain_task)))
     for r in roles:
         multipart_files.append(("image_roles", (None, r)))
     for i, blob in enumerate(blobs):
@@ -855,116 +838,15 @@ def _photo_multipart_files(
     return multipart_files
 
 
-async def _run_photo_explain_request(
-    context: ContextTypes.DEFAULT_TYPE,
-    *,
-    user_id: int,
-    chat_id: int,
-    task_no: str,
-) -> None:
-    entries = context.user_data.get(_PHOTO_EXPLAIN_ENTRIES) or []
-    if not entries:
-        await context.bot.send_message(
-            chat_id,
-            "Снимки для разбора уже не сохранены. Пришли фото заново через /shot.",
-        )
-        return
-    file_ids = [str(e[0]) for e in entries]
-    roles = [str(e[1]) for e in entries]
-    wait_msg = await context.bot.send_message(
-        chat_id,
-        f"<b>Разбираю задачу №{_h(task_no)}…</b>",
-        parse_mode=ParseMode.HTML,
-    )
-    blobs: list[bytes] = []
-    try:
-        for fid in file_ids:
-            tg_file = await context.bot.get_file(fid)
-            raw = await tg_file.download_as_bytearray()
-            blobs.append(bytes(raw))
-    except Exception as e:
-        logger.exception("photo/explain download user_id=%s", user_id)
-        await wait_msg.edit_text(
-            f"Не удалось скачать фото: {_h(str(e))}",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-
-    url = f"{SERVER_URL.rstrip('/')}/photo/check"
-    try:
-        hub_headers = await _hub_check_headers(user_id)
-    except hub_client.HubUnavailable:
-        await wait_msg.edit_text(
-            "Вход хаба недоступен. Разбор без person_id не выполняется.",
-        )
-        return
-
-    multipart_files = _photo_multipart_files(
-        mode=str(context.user_data.get(_PHOTO_CHECK_MODE) or "single_album"),
-        roles=roles,
-        blobs=blobs,
-        explain_task=task_no,
-    )
-    try:
-        async with httpx.AsyncClient(
-            timeout=_bot_photo_check_timeout_s(),
-            transport=async_http_transport_ipv4_lookup(),
-        ) as client:
-
-            async def _post_explain():
-                return await client.post(
-                    url,
-                    files=multipart_files,
-                    headers=hub_headers,
-                )
-
-            response = await run_with_typing(context.bot, chat_id, _post_explain())
-            response.raise_for_status()
-            body_raw = (response.json().get("result") or "").strip()
-    except httpx.RequestError as e:
-        logger.warning("photo/explain request error user_id=%s err=%s", user_id, e)
-        await wait_msg.edit_text(
-            f"Ошибка связи с сервером: {_h(str(e))}",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-    except Exception as e:
-        logger.exception("photo/explain unexpected user_id=%s", user_id)
-        await wait_msg.edit_text(f"Ошибка: {_h(str(e))}", parse_mode=ParseMode.HTML)
-        return
-
-    html_body = telegram_format.markdown_to_telegram_html(
-        homework_check_status.strip_homework_check_machine_tags(body_raw),
-    )
-    await wait_msg.edit_text(
-        html_body or "Не удалось получить разбор.",
-        parse_mode=ParseMode.HTML,
-    )
-
-
 def _photo_check_vote_keyboard() -> InlineKeyboardMarkup:
-    return _photo_check_result_keyboard([])
-
-
-def _photo_check_result_keyboard(offers: list[str]) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    row: list[InlineKeyboardButton] = []
-    for number in offers[:8]:
-        row.append(
-            InlineKeyboardButton(f"№{number}", callback_data=f"photo:ex:{number}")
-        )
-        if len(row) == 4:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    rows.append(
+    return InlineKeyboardMarkup(
         [
-            InlineKeyboardButton("👍", callback_data="cfv:1"),
-            InlineKeyboardButton("👎", callback_data="cfv:-1"),
-        ]
+            [
+                InlineKeyboardButton("👍", callback_data="cfv:1"),
+                InlineKeyboardButton("👎", callback_data="cfv:-1"),
+            ],
+        ],
     )
-    return InlineKeyboardMarkup(rows)
 
 
 _SHOT_UPLOAD_PROMPT = (
@@ -1031,21 +913,6 @@ async def _handle_photo_check_callback(
         await query.edit_message_text("Режим /shot отменен.")
         return
 
-    if data == "photo:back":
-        _photo_check_clear(context)
-        profile = await asyncio.to_thread(user_storage.get_profile, USER_DB_PATH, user_id)
-        await query.edit_message_text(
-            "Вернулся к обычной проверке ДЗ. Команда /start или «Указать задание».",
-            reply_markup=get_main_keyboard(
-                uploaded=_user_has_uploaded_photo(user_id),
-                profile=profile,
-                user_id=user_id,
-            )
-            if profile
-            else None,
-        )
-        return
-
     if data == "photo:mode:mixed_one":
         _photo_check_clear(context)
         context.user_data[_PHOTO_CHECK_ACTIVE] = True
@@ -1110,19 +977,6 @@ async def _handle_photo_check_callback(
             chat_id=chat_id,
             status_msg_id=query.message.message_id,
             edit_message=_edit,
-        )
-        return
-
-    if data.startswith("photo:ex:"):
-        task_no = data.split(":", 2)[2].strip()
-        if not task_no.isdigit():
-            await _answer_query_once(query, "Некорректный номер", show_alert=True)
-            return
-        await _run_photo_explain_request(
-            context,
-            user_id=user_id,
-            chat_id=chat_id,
-            task_no=task_no,
         )
         return
 
