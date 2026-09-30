@@ -318,6 +318,7 @@ async def photo_check_multipart(
     mode: str = Form("single_album"),
     images: list[UploadFile] = File(...),
     image_roles: list[str] = Form(default=[]),
+    explain_task: str = Form(""),
 ) -> CheckResponse:
     """Multimodal проверка по нескольким фото без OCR и ГДЗ (/photo)."""
     if not photo_check_enabled():
@@ -355,7 +356,12 @@ async def photo_check_multipart(
     t0 = time.perf_counter()
     failed = False
     try:
-        result = await run_photo_check(images=blobs, roles=roles, mode=mode_norm)
+        result = await run_photo_check(
+            images=blobs,
+            roles=roles,
+            mode=mode_norm,
+            explain_task=explain_task,
+        )
     except Exception:
         failed = True
         logger.exception("photo/check failed")

@@ -191,3 +191,17 @@ def test_photo_check_mock(monkeypatch: pytest.MonkeyPatch, client: TestClient) -
     assert "/photo" in r.json()["result"] or "mock" in r.json()["result"].lower()
 
 
+def test_photo_check_explain_mock(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
+    monkeypatch.setenv("AI_MOCK", "1")
+    monkeypatch.setenv("PHOTO_CHECK_ENABLE", "1")
+    jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+    r = client.post(
+        "/photo/check",
+        files=[("images", ("a.jpg", io.BytesIO(jpeg), "image/jpeg"))],
+        data={"mode": "single_album", "image_roles": "mixed", "explain_task": "10"},
+    )
+    assert r.status_code == 200
+    assert "№10" in r.json()["result"]
+    assert "верно" not in r.json()["result"].lower()
+
+
