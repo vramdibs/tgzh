@@ -72,11 +72,6 @@ _LATEX_SYMBOLS: tuple[tuple[str, str], ...] = (
 )
 _LINE_SPLIT_RE = re.compile(r"^(\s*)((?:[-*•]\s+)?)(.*)$")
 _VERNO_WORD_RE = re.compile(r"(?<![а-яёА-ЯЁ*])верно(?![а-яёА-ЯЁ*])", re.IGNORECASE)
-_ERROR_LINE_RE = re.compile(r"неверно|ошибк|неправильн", re.IGNORECASE)
-_UNCLEAR_LINE_RE = re.compile(
-    r"нельзя|неясно|непонятно|не читается|нет условия|не удалось",
-    re.IGNORECASE,
-)
 # Нет формулировки на снимке учебника - строка со знаком вопроса, фраза жирным.
 # Соседние звездочки входят в совпадение, чтобы не получить ****фразу****.
 _MISSING_CONDITION_RE = re.compile(
@@ -91,12 +86,12 @@ _TASK_NUMBER_RE = re.compile(
     re.IGNORECASE,
 )
 _ANSWER_BREAK_RE = re.compile(r"(?<=\S)\s+(?=ответ\b)", re.IGNORECASE)
+_LEADING_Q_RE = re.compile(r"^[?？]\s*")
 _MARK_OK = "✅"
 _MARK_BAD = "❌"
 _MARK_UNK = "❓"
 _MARKS = (_MARK_OK, _MARK_BAD, _MARK_UNK)
 _MARK_TOKEN = r"(?:✅|❌|❓|✓|✔|✗|✕|✖)(?:\ufe0f)?"
-_ANY_MARK_RE = re.compile(rf"{_MARK_TOKEN}\s*")
 _SPLIT_MARK_RE = re.compile(rf"({_MARK_TOKEN})")
 
 
@@ -163,40 +158,143 @@ def _split_marked_chunks(body: str) -> list[tuple[str, str]]:
     return chunks or [("", body)]
 
 
+def _line_prefix(line: str) -> tuple[str, str, str]:
+    matched = _LINE_SPLIT_RE.match(line)
+    if matched is None:
+        return "", "", line
+    return matched.group(1), matched.group(2), matched.group(3)
+
+
+def _rebuild_line(indent: str, bullet: str, body: str, *, keep_bullet: bool) -> str:
+    prefix = f"{indent}{bullet}" if keep_bullet else indent
+    return f"{prefix}{body}".rstrip()
+
+
+def _is_division_colon(text: str, idx: int) -> bool:
+    """Деление 12 : 4 или 12:4, не заголовок '№6: пункт' и не '386: 298 + …'."""
+    after = idx + 1
+    while after < len(text) and text[after] in " \t":
+        after += 1
+    spaces_after = after > idx + 1
+    before = idx - 1
+    while before >= 0 and text[before] in " \t":
+        before -= 1
+    spaces_before = before < idx - 1
+    if before < 0 or not text[before].isdigit():
+        return False
+    if after >= len(text) or not text[after].isdigit():
+        return False
+    if spaces_before and spaces_after:
+        return True
+    if not spaces_before and not spaces_after:
+        return True
+    return False
+
+
+def _break_colon_lines(line: str) -> list[str]:
+    if not line.strip():
+        return [line]
+    indent, bullet, body = _line_prefix(line)
+    parts: list[str] = []
+    rest = body
+    while rest:
+        split_at: int | None = None
+        pos = 0
+        while True:
+            idx = rest.find(":", pos)
+            if idx < 0:
+                break
+            if (
+                idx + 1 < len(rest)
+                and rest[idx + 1] in " \t"
+                and not _is_division_colon(rest, idx)
+            ):
+                split_at = idx
+                break
+            pos = idx + 1
+        if split_at is None:
+            parts.append(rest)
+            break
+        parts.append(rest[: split_at + 1].rstrip())
+        rest = rest[split_at + 1 :].lstrip()
+    out: list[str] = []
+    for i, part in enumerate(parts):
+        out.append(_rebuild_line(indent, bullet, part, keep_bullet=(i == 0)))
+    return out or [line]
+
+
+def _looks_like_expression(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return False
+    if "=" in t:
+        return True
+    has_digit = bool(re.search(r"\d", t))
+    has_op = bool(re.search(r"[+·:/]|-\d", t))
+    return has_digit and has_op
+
+
+def _break_comma_expr_lines(line: str) -> list[str]:
+    if not line.strip() or "," not in line:
+        return [line]
+    indent, bullet, body = _line_prefix(line)
+    parts: list[str] = []
+    start = 0
+    i = 0
+    while i < len(body):
+        if body[i] == "," and i + 1 < len(body) and body[i + 1] == " ":
+            after = body[i + 2 :]
+            nxt_comma = after.find(", ")
+            nxt = after if nxt_comma < 0 else after[:nxt_comma]
+            if _looks_like_expression(nxt):
+                parts.append(body[start:i].rstrip())
+                start = i + 2
+                i = start
+                continue
+        i += 1
+    tail = body[start:].strip()
+    if tail:
+        parts.append(tail)
+    if len(parts) <= 1:
+        return [line]
+    out: list[str] = []
+    for i, part in enumerate(parts):
+        out.append(_rebuild_line(indent, bullet, part, keep_bullet=(i == 0)))
+    return out
+
+
+def _replace_leading_question(body: str) -> str:
+    stripped = body.lstrip()
+    pad = body[: len(body) - len(stripped)]
+    matched = _LEADING_Q_RE.match(stripped)
+    if matched is None:
+        return body
+    rest = stripped[matched.end() :]
+    if rest:
+        return f"{pad}{_MARK_UNK} {rest}"
+    return f"{pad}{_MARK_UNK}"
+
+
 def _annotate_check_line(line: str) -> str:
     if not line.strip():
         return line
-    matched = _LINE_SPLIT_RE.match(line)
-    if matched is None:
-        return line
-    indent, bullet, body = matched.group(1), matched.group(2), matched.group(3)
+    indent, bullet, body = _line_prefix(line)
     existing, body = _strip_leading_mark(body)
     if existing:
         existing = _canonical_mark(existing)
-    low = _ANY_MARK_RE.sub("", body).replace("*", "").lower()
-    if existing == _MARK_BAD or _ERROR_LINE_RE.search(low):
-        kind = "bad"
-    elif existing == _MARK_UNK or _UNCLEAR_LINE_RE.search(low) or _MISSING_CONDITION_RE.search(low):
-        kind = "unk"
-    elif existing == _MARK_OK or _VERNO_WORD_RE.search(low):
-        kind = "ok"
     else:
-        return f"{indent}{bullet}{body}" if bullet else line
-    body = _ANY_MARK_RE.sub("", body).strip()
-    if kind == "ok":
-        body = _VERNO_WORD_RE.sub(lambda m: f"**{m.group(0)}**", body)
-    mark = {"ok": _MARK_OK, "bad": _MARK_BAD, "unk": _MARK_UNK}[kind]
-    return f"{indent}{mark} {body}".rstrip()
+        body = _replace_leading_question(body)
+    body = _VERNO_WORD_RE.sub(lambda m: f"**{m.group(0)}**", body)
+    if existing:
+        body = f"{existing} {body}".strip()
+    return _rebuild_line(indent, bullet, body, keep_bullet=True)
 
 
 def _expand_check_line(line: str) -> list[str]:
     """Пункт с несколькими примерами -> заголовок и отдельная строка на пример."""
     if not line.strip():
         return [line]
-    matched = _LINE_SPLIT_RE.match(line)
-    if matched is None:
-        return [_annotate_check_line(line)]
-    indent, body = matched.group(1), matched.group(3)
+    indent, bullet, body = _line_prefix(line)
     chunks = _split_marked_chunks(body)
     if not any(mark for mark, _text in chunks):
         return [_annotate_check_line(line)]
@@ -205,10 +303,14 @@ def _expand_check_line(line: str) -> list[str]:
     if chunks[0][0] == "":
         head = chunks[0][1].strip()
         if head:
-            out.append(f"{indent}{head}")
+            out.append(_annotate_check_line(_rebuild_line(indent, bullet, head, keep_bullet=True)))
         rest = chunks[1:]
-    for mark, text in rest:
-        out.append(_annotate_check_line(f"{indent}{mark} {text}".rstrip()))
+    for i, (mark, text) in enumerate(rest):
+        keep_bullet = bool(bullet) and not (chunks[0][0] == "" and chunks[0][1].strip()) and i == 0
+        piece = f"{mark} {text}".strip()
+        out.append(
+            _annotate_check_line(_rebuild_line(indent, bullet, piece, keep_bullet=keep_bullet)),
+        )
     return out or [_annotate_check_line(line)]
 
 
@@ -232,24 +334,32 @@ def _break_answer_lines(line: str) -> list[str]:
     parts = _ANSWER_BREAK_RE.split(line)
     if len(parts) == 1:
         return [line]
+    indent, bullet, _body = _line_prefix(line)
     out = [parts[0].rstrip()]
-    out.extend(part.strip() for part in parts[1:] if part.strip())
+    for part in parts[1:]:
+        chunk = part.strip()
+        if not chunk:
+            continue
+        out.append(_rebuild_line(indent, bullet, chunk, keep_bullet=False))
     return out
 
 
 def prepare_check_display_text(text: str) -> str:
     """
-    Текст проверки для чата: без LaTeX и слэшей, одна пометка на пример, **верно**.
-    Не использовать для подсчета вердикта.
+    Текст проверки для чата: без LaTeX и длинного тире, маркер списка как есть,
+    ведущий ? -> эмодзи вопроса, **верно**. Не использовать для подсчета вердикта.
     """
     if not text:
         return ""
     plain = _plain_math_from_latex(text)
+    plain = plain.replace("\u2014", "-").replace("\u2013", "-")
     lines: list[str] = []
     for line in plain.split("\n"):
-        for piece in _break_answer_lines(line):
-            lines.extend(_expand_check_line(piece))
-    return "\n".join(_polish_check_line(line) for line in lines)
+        for colon_piece in _break_colon_lines(line):
+            for comma_piece in _break_comma_expr_lines(colon_piece):
+                for ans_piece in _break_answer_lines(comma_piece):
+                    lines.extend(_expand_check_line(ans_piece))
+    return "\n".join(_polish_check_line(item) for item in lines)
 
 
 def markdownish_to_telegram_html(text: str) -> str:

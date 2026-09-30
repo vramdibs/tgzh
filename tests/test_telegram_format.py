@@ -41,25 +41,32 @@ def test_prepare_check_display_plain_math_no_backslash() -> None:
 def test_prepare_check_display_line_marks_and_bold_verno() -> None:
     src = "\n".join(
         [
-            "- Задача 6 а): группировка",
+            "- Задача 6 а) группировка",
             r"- \((298 + 102) + 386 = 786\) - верно",
             r"- 2 \cdot 5 \cdot 19 - сначала 10, а не 900. Ошибка в ответе",
             "- Без текста условия с фото нельзя сказать",
             "- решение неверно",
+            "? формулировка из учебника на фото не видна",
         ]
     )
     out = tf.prepare_check_display_text(src)
     lines = out.splitlines()
     assert lines[0].startswith("- Задача 6")
     assert "✅" not in lines[0]
-    assert lines[1].startswith("✅ ")
-    assert not lines[1].startswith("-")
+    assert lines[1].startswith("- ")
+    assert "✅" not in lines[1]
     assert "**верно**" in lines[1]
     assert "\\" not in lines[1]
-    assert lines[2].startswith("❌ ")
-    assert lines[3].startswith("❓ ")
-    assert lines[4].startswith("❌ ")
+    assert lines[2].startswith("- ")
+    assert "❌" not in lines[2]
+    assert lines[3].startswith("- ")
+    assert "❓" not in lines[3]
+    assert lines[4].startswith("- ")
+    assert "❌" not in lines[4]
     assert "**верно**" not in lines[4]
+    assert lines[5].startswith("❓ ")
+    assert not lines[5].startswith("?")
+    assert "**формулировка из учебника на фото не видна**" in lines[5].lower()
 
 
 def test_prepare_check_display_splits_examples_one_mark() -> None:
@@ -70,17 +77,17 @@ def test_prepare_check_display_splits_examples_one_mark() -> None:
         "✗ 2·5·19=900 - ошибка в ответе."
     )
     lines = tf.prepare_check_display_text(src).splitlines()
-    assert lines[0] == "**Задача №6 (п. а)**: сложение."
+    assert lines[0] == "- **Задача №6 (п. а)**:"
     assert "✅" not in lines[0]
-    assert lines[1].startswith("✅ (298+102)+386=786")
-    assert lines[1].count("✅") == 1
-    assert "**верно**" in lines[1]
-    assert lines[2].startswith("✅ (489+11)+489=989")
-    assert lines[2].count("✅") == 1
-    assert lines[3].startswith("❌ 2·5·19=900")
-    assert lines[3].count("❌") == 1
-    assert "✓" not in "\n".join(lines)
-    assert "✗" not in "\n".join(lines)
+    joined = "\n".join(lines)
+    assert any(line.startswith("✅ (298+102)+386=786") for line in lines)
+    assert any("**верно**" in line and "(298+102)+386=786" in line for line in lines)
+    assert any(line.startswith("✅ (489+11)+489=989") for line in lines)
+    assert any(line.startswith("❌ 2·5·19=900") for line in lines)
+    assert joined.count("✅") == 2
+    assert joined.count("❌") == 1
+    assert "✓" not in joined
+    assert "✗" not in joined
 
 
 def test_prepare_check_display_task_number_missing_text_and_answer_line() -> None:
@@ -92,13 +99,15 @@ def test_prepare_check_display_task_number_missing_text_and_answer_line() -> Non
         ]
     )
     lines = tf.prepare_check_display_text(src).splitlines()
-    assert lines[0].startswith("❓ ")
-    assert "**текста задачи в учебнике на фото нет**" in lines[0].lower()
-    assert "**Задача №8**" in lines[0]
-    assert lines[1].startswith("❓ ")
-    assert "**формулировка из учебника на фото не видна**" in lines[1].lower()
-    assert "Ответ" not in lines[2]
-    assert lines[3].startswith("✅ Ответ 435")
+    assert lines[0] == "**Задача №8**:"
+    assert any("**текста задачи в учебнике на фото нет**" in line.lower() for line in lines)
+    assert not any(line.startswith("❓ ") and "текста задачи" in line.lower() for line in lines)
+    formul = next(line for line in lines if "формулировка" in line.lower())
+    assert formul.startswith("- ")
+    assert "❓" not in formul
+    assert "**формулировка из учебника на фото не видна**" in formul.lower()
+    assert any(line.startswith("Ответ 435") for line in lines)
+    assert not any("(731-296)=435" in line and "Ответ" in line for line in lines)
 
 
 def test_prepare_check_display_collapses_extra_stars_around_missing_text() -> None:
@@ -106,6 +115,38 @@ def test_prepare_check_display_collapses_extra_stars_around_missing_text() -> No
     out = tf.prepare_check_display_text(src)
     assert "****" not in out
     assert "**Текста задачи из учебника на фото нет**" in out
+
+
+def test_prepare_check_display_replaces_em_dash() -> None:
+    src = "пункт а) \u2014 три примера, ответ 989 \u2013 верно"
+    out = tf.prepare_check_display_text(src)
+    assert "\u2014" not in out
+    assert "\u2013" not in out
+    assert "пункт а) - три примера" in out
+    assert "989 - **верно**" in out
+
+
+def test_prepare_check_display_breaks_after_colon_not_division() -> None:
+    src = "Задача №6: пункт а) три примера\n12 : 4 = 3"
+    lines = tf.prepare_check_display_text(src).splitlines()
+    assert lines[0] == "**Задача №6**:"
+    assert lines[1].startswith("пункт а)")
+    assert any("12 : 4 = 3" in line for line in lines)
+    assert not any(line.strip() == "4 = 3" for line in lines)
+
+
+def test_prepare_check_display_breaks_comma_expressions() -> None:
+    src = "298 + 102 = 400, 400 + 386 = 786\nтри примера на сложение со скобками и группировкой"
+    lines = tf.prepare_check_display_text(src).splitlines()
+    assert "298 + 102 = 400" in lines
+    assert "400 + 386 = 786" in lines
+    assert any("со скобками и группировкой" in line for line in lines)
+    prose = next(line for line in lines if "группировкой" in line)
+    assert "," not in prose or "скобками и группировкой" in prose
+    src_verno = "ответ 786, верно"
+    out_verno = tf.prepare_check_display_text(src_verno)
+    assert "\n" not in out_verno
+    assert "786, **верно**" in out_verno or "786, верно" in out_verno.lower()
 
 
 def test_markdown_to_telegram_html_bold_italic() -> None:
