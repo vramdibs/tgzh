@@ -34,6 +34,7 @@ services:
       - tgzh-internal
     ports:
       - "127.0.0.1:8000:8000"
+      - "${TGZH_METRICS_BIND:-127.0.0.1}:9112:9112"
     # host-gateway даёт `host.docker.internal` -> хост-машина. Нужно для
     # VLLM_FALLBACK_BASE_URL на локальный bridge (см. .env, блок VLLM_FALLBACK_*).
     # Когда bridge станет доступен публично через cloudflared tunnel, эту запись
@@ -52,6 +53,8 @@ services:
       VLLM_VISION: ${VLLM_VISION:-0}
       VLLM_API_KEY: ${VLLM_API_KEY:-lm-studio}
       VLLM_NO_THINK: ${VLLM_NO_THINK:-1}
+      METRICS_PORT: ${SERVER_METRICS_PORT:-9112}
+      METRICS_BIND: 0.0.0.0
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status==200 else 1)\""]
       interval: 10s
@@ -162,8 +165,11 @@ services:
       STATS_TIMEZONE: ${STATS_TIMEZONE:-Europe/Moscow}
       TELEGRAM_WEBHOOK_LISTEN: 0.0.0.0
       TELEGRAM_WEBHOOK_PORT: ${TELEGRAM_WEBHOOK_PORT:-8081}
+      METRICS_PORT: ${METRICS_PORT:-9109}
+      METRICS_BIND: 0.0.0.0
     ports:
       - "${TGZH_WEBHOOK_BIND:-0.0.0.0}:8081:8081"
+      - "${TGZH_METRICS_BIND:-127.0.0.1}:9109:9109"
     volumes:
       # Именованный том: SQLite (профили, статистика) и кеш GDZ переживают удаление контейнера.
       # Не используй docker compose down -v, если нужны данные.

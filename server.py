@@ -26,8 +26,10 @@ from ai_checker import (
     chat_max_history_turns,
     chat_resolve_cursor_model,
     generate_check_quip,
+    reset_completion_usage,
     stream_chat_via_cursor,
     summarize_check_parts,
+    take_completion_usage,
 )
 from photo_check import (
     ImageRole,
@@ -38,6 +40,8 @@ from photo_check import (
 )
 
 logger = setup_logging("tgzh.server")
+
+_USER_DB_PATH = os.getenv("USER_DB_PATH", "data/users.sqlite")
 
 # Лимиты для входов LLM-эндпоинтов: страховка против гигантских payload'ов и
 # разогнанного потребления токенов. Значения с запасом по сравнению с реальными вызовами от бота.
@@ -80,6 +84,30 @@ def _resolve_engine(value: str | None) -> str:
     return raw
 
 
+def _form_telegram_user_id(raw: str | int | None) -> int:
+    try:
+        v = int(raw or 0)
+    except (TypeError, ValueError):
+        return 0
+    return v if v > 0 else 0
+
+
+def _record_llm_spend(*, kind: str, user_id: int = 0) -> None:
+    usage = take_completion_usage()
+    try:
+        import bot_stats
+
+        bot_stats.record_llm_spend(
+            _USER_DB_PATH,
+            user_id=user_id,
+            kind=kind,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+        )
+    except Exception:
+        logger.debug("llm spend record failed", exc_info=True)
+
+
 class SummarizeRequest(BaseModel):
     parts: list[str] = Field(
         ...,
@@ -88,15 +116,18 @@ class SummarizeRequest(BaseModel):
     )
     engine: str = Field(default="auto")
     subject_slug: str = Field(default="matematika")
+    user_id: int = Field(default=0)
 
 
 class QuipRequest(BaseModel):
     excerpt: str = Field(default="", max_length=_MAX_QUIP_EXCERPT_LEN)
+    user_id: int = Field(default=0)
 
 
 @app.post("/check/quip", response_model=CheckResponse)
 async def check_quip(body: QuipRequest) -> CheckResponse:
     """Короткая ироничная фраза после низкой оценки проверки (текстовый вызов LLM)."""
+    reset_completion_usage()
     t0 = time.perf_counter()
     try:
         text = await generate_check_quip(excerpt=body.excerpt)
@@ -111,6 +142,8 @@ async def check_quip(body: QuipRequest) -> CheckResponse:
         clip_check_log_body(body.excerpt),
         clip_check_log_body(text),
     )
+    if text:
+        _record_llm_spend(kind="quip", user_id=_form_telegram_user_id(body.user_id))
     return CheckResponse(result=text)
 
 
@@ -129,6 +162,7 @@ async def check_summarize(request: Request, body: SummarizeRequest) -> CheckResp
             f"Часть {too_long} длиннее лимита {_MAX_SUMMARIZE_PART_LEN} символов",
         )
     engine = _resolve_engine(body.engine)
+    reset_completion_usage()
     t0 = time.perf_counter()
     try:
         result = await summarize_check_parts(
@@ -156,6 +190,7 @@ async def check_summarize(request: Request, body: SummarizeRequest) -> CheckResp
         engine,
         clip_check_log_body(result),
     )
+    _record_llm_spend(kind="summarize", user_id=_form_telegram_user_id(body.user_id))
     return CheckResponse(result=result)
 
 
@@ -197,6 +232,7 @@ async def check_photo(
     subject_slug: str = Form("matematika"),
     engine: str = Form("auto"),
     check_id: str = Form(""),
+    telegram_user_id: str = Form("0"),
 ) -> CheckResponse:
     """Принимает фото или документ (см. allowed_check_mime), возвращает результат проверки."""
     person_id = _hub_person_id(request)
@@ -250,6 +286,7 @@ async def check_photo(
         student_excerpt,
     )
     tgzh_metrics.record_server_check_start()
+    reset_completion_usage()
     t0 = time.perf_counter()
     failed = False
     try:
@@ -285,6 +322,10 @@ async def check_photo(
         engine_norm,
         clip_check_log_body(result),
     )
+    _record_llm_spend(
+        kind="check",
+        user_id=_form_telegram_user_id(telegram_user_id),
+    )
     return CheckResponse(result=result)
 
 
@@ -318,6 +359,7 @@ async def photo_check_multipart(
     mode: str = Form("single_album"),
     images: list[UploadFile] = File(...),
     image_roles: list[str] = Form(default=[]),
+    telegram_user_id: str = Form("0"),
 ) -> CheckResponse:
     """Multimodal проверка по нескольким фото без OCR и ГДЗ (/photo)."""
     if not photo_check_enabled():
@@ -352,6 +394,7 @@ async def photo_check_multipart(
         roles,
     )
     tgzh_metrics.record_server_check_start()
+    reset_completion_usage()
     t0 = time.perf_counter()
     failed = False
     try:
@@ -371,6 +414,10 @@ async def photo_check_multipart(
         "photo/check done elapsed_s=%.2f result_len=%s",
         elapsed,
         len(result),
+    )
+    _record_llm_spend(
+        kind="photo",
+        user_id=_form_telegram_user_id(telegram_user_id),
     )
     return CheckResponse(result=result)
 
@@ -554,6 +601,7 @@ async def chat_stream(req: ChatStreamRequest):
         last_image_count,
     )
     t0 = time.perf_counter()
+    reset_completion_usage()
 
     queue: asyncio.Queue[bytes | None] = asyncio.Queue()
 
@@ -574,6 +622,7 @@ async def chat_stream(req: ChatStreamRequest):
                 elapsed,
                 len(full),
             )
+            _record_llm_spend(kind="chat", user_id=_form_telegram_user_id(req.user_id))
         except asyncio.CancelledError:
             raise
         except Exception:

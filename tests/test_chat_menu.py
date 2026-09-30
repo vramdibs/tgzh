@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import tempfile
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 import ai_checker
@@ -87,3 +91,36 @@ def test_format_chat_dialog_when_returns_short_local_format() -> None:
     assert s[2] == "."
     assert s[5] == " "
     assert s[8] == ":"
+
+
+def test_chat_cmd_opens_without_password(monkeypatch: pytest.MonkeyPatch) -> None:
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+        path = f.name
+    user_storage.init_db(path)
+    monkeypatch.setattr(bot, "USER_DB_PATH", path)
+    monkeypatch.setattr(bot, "_cursor_recheck_available", lambda: True)
+
+    class _Msg:
+        async def reply_text(self, *a, **k):
+            raise AssertionError("password must not be requested")
+
+    class _Update:
+        message = _Msg()
+        effective_user = type("U", (), {"id": 51})()
+        effective_chat = type("C", (), {"id": 9})()
+
+    class _Ctx:
+        def __init__(self) -> None:
+            self.user_data: dict = {}
+            self.bot = object()
+
+    menu = AsyncMock()
+    blocked = AsyncMock(return_value=False)
+    with (
+        patch.object(bot, "_send_chat_menu", menu),
+        patch.object(bot, "_reply_if_blocked_cmd", blocked),
+    ):
+        asyncio.run(bot.chat_cmd(_Update(), _Ctx()))
+
+    menu.assert_called_once()
+    assert user_storage.chat_session_active_until(path, 51) is not None

@@ -11,6 +11,16 @@ from telegram.error import BadRequest
 import bot as bot_module
 
 
+def test_bot_commands_list_menu_descriptions() -> None:
+    cmds = bot_module._bot_commands_list()
+    by_name = {c.command: c.description for c in cmds}
+    assert by_name["start"] == "Проверка по ГДЗ"
+    assert by_name["shot"] == "Проверка по фото"
+    assert by_name["chat"] == "Чат-бот ИИ"
+    assert by_name["textbook"] == "Сменить класс или учебник"
+    assert [c.command for c in cmds] == ["start", "shot", "chat", "textbook"]
+
+
 @pytest.mark.asyncio
 async def test_flow_ensure_chat_commands_menu_calls_set_chat_menu_button() -> None:
     bot = MagicMock()

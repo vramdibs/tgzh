@@ -39,6 +39,8 @@ def test_stats_counters_and_verdicts() -> None:
         assert "Месяц" in html
         assert "✅ Верных" not in html
         assert "☑️" not in html
+        assert "ИИ (токены и запросы)" in html
+        assert "Запросов к модели" in html
 
 
 def test_stats_poll_bars_and_no_correct_line() -> None:
@@ -161,3 +163,28 @@ def test_unique_visitors_last_days() -> None:
         conn.commit()
         conn.close()
         assert bot_stats.unique_visitors_last_days(path, 3) == 3
+
+
+def test_llm_spend_requests_tokens_and_unique_users(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AI_MOCK", raising=False)
+    with tempfile.TemporaryDirectory() as td:
+        path = str(Path(td) / "llm.sqlite")
+        bot_stats.init_stats(path)
+        bot_stats.record_llm_spend(
+            path, user_id=11, kind="chat", prompt_tokens=10, completion_tokens=20,
+        )
+        bot_stats.record_llm_spend(
+            path, user_id=11, kind="check", prompt_tokens=5, completion_tokens=7,
+        )
+        bot_stats.record_llm_spend(
+            path, user_id=22, kind="photo", prompt_tokens=1, completion_tokens=2,
+        )
+        tot = bot_stats.get_llm_usage_totals(path)
+        assert tot["requests"] == 3
+        assert tot["prompt_tokens"] == 16
+        assert tot["completion_tokens"] == 29
+        assert tot["total_tokens"] == 45
+        assert tot["users"] == 2
+        html = bot_stats.format_all_stats_html(path)
+        assert "Запросов к модели: <b>3</b>" in html
+        assert "Людей (уникальные): <b>2</b>" in html

@@ -13,6 +13,8 @@ import re
 import time
 from collections import defaultdict
 from contextlib import suppress
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any, Final
 
 from dotenv import load_dotenv
@@ -26,6 +28,60 @@ from homework_check_status import (
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class CompletionUsage:
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
+
+
+_COMPLETION_USAGE: ContextVar[CompletionUsage] = ContextVar(
+    "tgzh_completion_usage",
+    default=CompletionUsage(),
+)
+
+
+def reset_completion_usage() -> None:
+    _COMPLETION_USAGE.set(CompletionUsage())
+
+
+def take_completion_usage() -> CompletionUsage:
+    u = _COMPLETION_USAGE.get()
+    _COMPLETION_USAGE.set(CompletionUsage())
+    return u
+
+
+def usage_from_openai(obj: Any) -> CompletionUsage:
+    usage = getattr(obj, "usage", None)
+    if usage is None and isinstance(obj, dict):
+        usage = obj.get("usage")
+    if usage is None:
+        return CompletionUsage()
+    if isinstance(usage, dict):
+        prompt = int(usage.get("prompt_tokens") or 0)
+        completion = int(usage.get("completion_tokens") or 0)
+        return CompletionUsage(prompt_tokens=max(0, prompt), completion_tokens=max(0, completion))
+    prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
+    completion = int(getattr(usage, "completion_tokens", 0) or 0)
+    return CompletionUsage(prompt_tokens=max(0, prompt), completion_tokens=max(0, completion))
+
+
+def add_completion_usage(obj: Any) -> CompletionUsage:
+    extra = usage_from_openai(obj)
+    if extra.prompt_tokens == 0 and extra.completion_tokens == 0:
+        return extra
+    cur = _COMPLETION_USAGE.get()
+    merged = CompletionUsage(
+        prompt_tokens=cur.prompt_tokens + extra.prompt_tokens,
+        completion_tokens=cur.completion_tokens + extra.completion_tokens,
+    )
+    _COMPLETION_USAGE.set(merged)
+    return extra
 
 
 def _vllm_request_timeout_s() -> float:
@@ -540,6 +596,7 @@ async def _chat_with_fallback(
             if primary_response is not None and not getattr(primary_response, "choices", None):
                 fallback_reason = "empty_choices"
             else:
+                add_completion_usage(primary_response)
                 return primary_response, False, str(primary_kwargs.get("model") or "")
 
         # primary не дал валидного ответа — есть ли fallback?
@@ -589,8 +646,10 @@ async def _chat_with_fallback(
         )
         if primary_exc is not None:
             raise primary_exc
+        add_completion_usage(primary_response)
         return primary_response, False, str(primary_kwargs.get("model") or "")
 
+    add_completion_usage(fb_response)
     return fb_response, True, fb_model
 
 
@@ -944,16 +1003,20 @@ async def _stream_chat_model_once(
 
     full_parts: list[str] = []
 
-    async def _consume_stream() -> None:
-        stream = await client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=chat_stream_temperature(),
-            max_tokens=chat_max_response_tokens(),
-            stream=True,
-        )
+    async def _consume_stream(*, with_usage: bool) -> None:
+        create_kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": chat_stream_temperature(),
+            "max_tokens": chat_max_response_tokens(),
+            "stream": True,
+        }
+        if with_usage:
+            create_kwargs["stream_options"] = {"include_usage": True}
+        stream = await client.chat.completions.create(**create_kwargs)
         try:
             async for event in stream:
+                add_completion_usage(event)
                 choices = getattr(event, "choices", None) or []
                 if not choices:
                     continue
@@ -975,14 +1038,18 @@ async def _stream_chat_model_once(
                 await stream.close()
 
     try:
-        await _consume_stream()
+        await _consume_stream(with_usage=True)
     except APIStatusError as e:
         body_text = ""
         try:
             body_text = (e.response.text or "") if e.response is not None else ""
         except Exception:
             body_text = ""
-        if e.status_code == 400 and "stream" in body_text.lower():
+        low = body_text.lower()
+        if e.status_code == 400 and ("stream_options" in low or "include_usage" in low):
+            logger.warning("chat stream_options include_usage rejected, retry without usage")
+            await _consume_stream(with_usage=False)
+        elif e.status_code == 400 and "stream" in low:
             logger.warning(
                 "vllm fallback: stream=true rejected by bridge, falling back to single completion",
             )
@@ -994,6 +1061,7 @@ async def _stream_chat_model_once(
                 max_tokens=chat_max_response_tokens(),
                 stream=False,
             )
+            add_completion_usage(response)
             choices = getattr(response, "choices", None) or []
             if choices:
                 msg = getattr(choices[0], "message", None)

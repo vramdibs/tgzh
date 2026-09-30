@@ -62,6 +62,31 @@ def test_mime_from_bytes_webp() -> None:
     assert ai_checker._mime_from_bytes(head + b"x" * 200) == "image/webp"
 
 
+def test_usage_from_openai_object_and_dict() -> None:
+    class _U:
+        prompt_tokens = 3
+        completion_tokens = 7
+
+    class _R:
+        usage = _U()
+
+    ai_checker.reset_completion_usage()
+    got = ai_checker.usage_from_openai(_R())
+    assert got.prompt_tokens == 3
+    assert got.completion_tokens == 7
+    assert got.total_tokens == 10
+    from_dict = ai_checker.usage_from_openai({"usage": {"prompt_tokens": 1, "completion_tokens": 2}})
+    assert from_dict.prompt_tokens == 1
+    assert from_dict.completion_tokens == 2
+    ai_checker.add_completion_usage(_R())
+    ai_checker.add_completion_usage({"usage": {"prompt_tokens": 4, "completion_tokens": 5}})
+    taken = ai_checker.take_completion_usage()
+    assert taken.prompt_tokens == 7
+    assert taken.completion_tokens == 12
+    empty = ai_checker.take_completion_usage()
+    assert empty.prompt_tokens == 0
+
+
 def test_normalize_vllm_base_url_strips_trailing_v1_slash() -> None:
     out = ai_checker._normalize_vllm_base_url("http://host:9/v1/")
     assert out == "http://host:9/v1"

@@ -15,10 +15,10 @@ if TYPE_CHECKING:
     from telegram import Update
 
 try:
-    from prometheus_client import Counter, Histogram, start_http_server
+    from prometheus_client import Counter, Gauge, Histogram, start_http_server
 except ImportError:  # pragma: no cover - optional dependency
     start_http_server = None  # type: ignore[misc, assignment]
-    Counter = Histogram = None  # type: ignore[misc, assignment]
+    Counter = Histogram = Gauge = None  # type: ignore[misc, assignment]
 
 _bot_updates_total = None
 _bot_handler_errors_total = None
@@ -29,12 +29,16 @@ _server_check_duration_seconds = None
 _check_feedback_total = None
 _llm_fallback_total = None
 _stt_requests_total = None
+_llm_requests_total = None
+_llm_tokens_total = None
+_llm_users = None
 
 
 def _ensure_metrics() -> None:
     global _bot_updates_total, _bot_handler_errors_total, _poll_completed_total
     global _server_check_requests_total, _server_check_errors_total, _server_check_duration_seconds
     global _check_feedback_total, _llm_fallback_total, _stt_requests_total
+    global _llm_requests_total, _llm_tokens_total, _llm_users
     if Counter is None:
         return
     if _bot_updates_total is None:
@@ -86,6 +90,23 @@ def _ensure_metrics() -> None:
             "tgzh_stt_requests_total",
             "Распознавание голосовых сообщений в /chat",
             ["outcome"],
+        )
+    if _llm_requests_total is None:
+        _llm_requests_total = Counter(
+            "tgzh_llm_requests_total",
+            "Запросы к LLM (проверка ДЗ, /chat, /shot, сводка, quip)",
+            ["kind"],
+        )
+    if _llm_tokens_total is None:
+        _llm_tokens_total = Counter(
+            "tgzh_llm_tokens_total",
+            "Токены LLM (вход/выход), если провайдер вернул usage",
+            ["kind", "direction"],
+        )
+    if _llm_users is None and Gauge is not None:
+        _llm_users = Gauge(
+            "tgzh_llm_users",
+            "Уникальные пользователи с запросами к LLM в текущем учебном году",
         )
 
 
@@ -185,6 +206,33 @@ def record_stt(*, outcome: str) -> None:
         return
     safe = outcome if outcome in _STT_OUTCOMES else "other"
     _stt_requests_total.labels(safe).inc()
+
+
+_LLM_KINDS: frozenset[str] = frozenset(
+    {"check", "chat", "photo", "summarize", "quip", "other"}
+)
+
+
+def record_llm_usage(
+    *,
+    kind: str,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    requests: int = 1,
+    users: int | None = None,
+) -> None:
+    """Счётчики `tgzh_llm_requests_total` / `tgzh_llm_tokens_total` и gauge людей."""
+    _ensure_metrics()
+    safe_kind = kind if kind in _LLM_KINDS else "other"
+    if requests > 0 and _llm_requests_total is not None:
+        _llm_requests_total.labels(safe_kind).inc(requests)
+    if _llm_tokens_total is not None:
+        if prompt_tokens > 0:
+            _llm_tokens_total.labels(safe_kind, "prompt").inc(prompt_tokens)
+        if completion_tokens > 0:
+            _llm_tokens_total.labels(safe_kind, "completion").inc(completion_tokens)
+    if users is not None and _llm_users is not None:
+        _llm_users.set(max(0, int(users)))
 
 
 def observe_server_check(*, elapsed_seconds: float, failed: bool) -> None:

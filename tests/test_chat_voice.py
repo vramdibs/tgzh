@@ -401,41 +401,28 @@ def test_handle_voice_lazy_loads_chat_active_from_db(
     assert ctx.user_data.get(bot._CHAT_ACTIVE) is True
 
 
-def test_voice_chat_password_via_stt(
+def test_voice_leftover_pw_wait_is_ignored(
     db_path: str,
     stt_enabled: None,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("CHAT_PASSWORD", "secret42")
-    user_id = 88
+    """Пароль /chat больше не спрашивается: старый `_CHAT_PW_WAIT` не крадёт голос."""
     msg = _FakeMessage(voice=_FakeVoice())
-    update = _FakeUpdate(user_id=user_id, chat_id=42, message=msg)
+    update = _FakeUpdate(user_id=88, chat_id=42, message=msg)
     ctx = _FakeContext()
     ctx.user_data[bot._CHAT_PW_WAIT] = True
 
-    menu_mock = AsyncMock()
+    asyncio.run(bot.handle_voice(update, ctx))
 
-    async def _fake_transcribe(audio: bytes, **kw: Any) -> str:
-        return "secret42"
-
-    with (
-        patch.object(stt_client, "transcribe", side_effect=_fake_transcribe),
-        patch.object(bot, "_send_chat_menu", menu_mock),
-    ):
-        asyncio.run(bot.handle_voice(update, ctx))
-
-    menu_mock.assert_called_once()
-    assert ctx.user_data.get(bot._CHAT_ACTIVE) is True
     assert bot._CHAT_PW_WAIT not in ctx.user_data
+    assert msg.replies == []
+    assert ctx.user_data.get(bot._CHAT_ACTIVE) is not True
 
 
-def test_voice_chat_after_password_login_not_stolen_by_await_text_answer(
+def test_voice_after_chat_activate_not_stolen_by_await_text_answer(
     db_path: str,
     stt_enabled: None,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """После входа в /chat сбрасывается `_AWAIT_TEXT_ANSWER` — голос идёт в чат, не в ДЗ."""
-    monkeypatch.setenv("CHAT_PASSWORD", "secret42")
     user_id = 89
     user_storage.set_textbook(
         db_path,
@@ -454,22 +441,11 @@ def test_voice_chat_after_password_login_not_stolen_by_await_text_answer(
         exercise="1",
         page=None,
     )
+    user_storage.chat_session_login(db_path, user_id)
 
-    msg = _FakeMessage(voice=_FakeVoice())
-    update = _FakeUpdate(user_id=user_id, chat_id=42, message=msg)
     ctx = _FakeContext()
-    ctx.user_data[bot._CHAT_PW_WAIT] = True
     ctx.user_data[bot._AWAIT_TEXT_ANSWER] = True
-
-    async def _fake_transcribe(audio: bytes, **kw: Any) -> str:
-        return "secret42"
-
-    with (
-        patch.object(stt_client, "transcribe", side_effect=_fake_transcribe),
-        patch.object(bot, "_send_chat_menu", AsyncMock()),
-    ):
-        asyncio.run(bot.handle_voice(update, ctx))
-
+    bot._activate_chat_session_ram(ctx, fresh=True)
     assert bot._AWAIT_TEXT_ANSWER not in ctx.user_data
     assert ctx.user_data.get(bot._CHAT_ACTIVE) is True
 

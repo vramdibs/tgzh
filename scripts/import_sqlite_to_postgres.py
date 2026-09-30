@@ -129,6 +129,18 @@ def main() -> int:
             "bot_user_visit_day",
             ["user_id", "visit_day"],
         )
+        _copy_table(
+            lite,
+            pg,
+            "bot_llm_usage_by_year",
+            ["academic_year", "requests", "prompt_tokens", "completion_tokens"],
+        )
+        _copy_table(
+            lite,
+            pg,
+            "bot_llm_user_year",
+            ["user_id", "academic_year"],
+        )
         _copy_check_result_vote(lite, pg)
         _copy_table(
             lite,

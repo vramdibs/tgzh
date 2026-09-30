@@ -83,6 +83,100 @@
       ],
       "title": "Оценка проверки 👍/👎 (24h)",
       "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 4, "w": 8, "x": 12, "y": 12},
+      "id": 7,
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [
+        {
+          "expr": "sum(rate(tgzh_llm_requests_total[5m]))",
+          "legendFormat": "llm req/s",
+          "refId": "A"
+        }
+      ],
+      "title": "LLM запросы (rate)",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+      "id": 8,
+      "targets": [
+        {
+          "expr": "sum by (kind) (rate(tgzh_llm_requests_total[5m]))",
+          "legendFormat": "{{kind}}",
+          "refId": "A"
+        }
+      ],
+      "title": "LLM запросы по типу",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "id": 9,
+      "targets": [
+        {
+          "expr": "sum by (direction) (rate(tgzh_llm_tokens_total[5m]))",
+          "legendFormat": "{{direction}}",
+          "refId": "A"
+        }
+      ],
+      "title": "LLM токены (вход/выход)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 4, "w": 8, "x": 0, "y": 24},
+      "id": 10,
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [
+        {
+          "expr": "max(tgzh_llm_users)",
+          "legendFormat": "users",
+          "refId": "A"
+        }
+      ],
+      "title": "Люди с LLM (учебный год)",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 4, "w": 8, "x": 8, "y": 24},
+      "id": 11,
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [
+        {
+          "expr": "sum(increase(tgzh_llm_tokens_total[24h]))",
+          "legendFormat": "tokens 24h",
+          "refId": "A"
+        }
+      ],
+      "title": "Токены за 24h",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 4, "w": 8, "x": 16, "y": 24},
+      "id": 12,
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [
+        {
+          "expr": "sum(increase(tgzh_llm_requests_total[24h]))",
+          "legendFormat": "requests 24h",
+          "refId": "A"
+        }
+      ],
+      "title": "LLM запросы за 24h",
+      "type": "stat"
     }
   ],
   "schemaVersion": 39,

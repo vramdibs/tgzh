@@ -84,6 +84,19 @@ CREATE TABLE IF NOT EXISTS bot_user_visit_day (
     PRIMARY KEY (user_id, visit_day)
 );
 
+CREATE TABLE IF NOT EXISTS bot_llm_usage_by_year (
+    academic_year INTEGER NOT NULL PRIMARY KEY,
+    requests INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS bot_llm_user_year (
+    user_id BIGINT NOT NULL,
+    academic_year INTEGER NOT NULL,
+    PRIMARY KEY (user_id, academic_year)
+);
+
 CREATE TABLE IF NOT EXISTS check_result_vote (
     chat_id TEXT NOT NULL,
     message_id INTEGER NOT NULL,
@@ -111,7 +124,7 @@ CREATE TABLE IF NOT EXISTS check_sticker_reward (
     created_at TEXT NOT NULL
 );
 
--- /chat: пароль (CHAT_PASSWORD/ADMIN_PASSWORD) → запись сессии на CHAT_SESSION_TTL_DAYS суток.
+-- /chat: сессия на CHAT_SESSION_TTL_DAYS суток (пароль на вход не требуется).
 CREATE TABLE IF NOT EXISTS chat_session (
     user_id BIGINT PRIMARY KEY NOT NULL,
     granted_at TEXT NOT NULL,

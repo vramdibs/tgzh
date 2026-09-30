@@ -13,6 +13,7 @@ import re
 from typing import Final, Literal
 
 from photo_prepare import prepare_photo_for_upload
+from ai_checker import add_completion_usage
 
 logger = logging.getLogger("tgzh.photo_check")
 
@@ -280,6 +281,7 @@ async def _completion_once(
         temperature=0.2,
         max_tokens=max_tokens,
     )
+    add_completion_usage(response)
     choices = getattr(response, "choices", None) or []
     if not choices:
         return ""

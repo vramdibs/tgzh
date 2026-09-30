@@ -25,6 +25,26 @@ def test_get_main_keyboard_includes_answer_text_when_hw_complete() -> None:
     kb2 = bot_module.get_main_keyboard(uploaded=True, profile=p, user_id=1)
     flat2 = [b.callback_data for row in kb2.inline_keyboard for b in row]
     assert "answer_text" in flat2
+    assert "chg_sub" not in flat_cb
+    assert "chg_tb" not in flat_cb
+    assert "chg_sub" not in flat2
+    assert "chg_tb" not in flat2
+    incomplete = user_storage.UserProfile(
+        user_id=1,
+        grade=7,
+        textbook_slug="x",
+        textbook_url="http://x",
+        textbook_label="L",
+        is_premium=False,
+        hw_paragraph=None,
+        hw_exercise=None,
+        hw_page=None,
+        subject_slug="matematika",
+    )
+    kb3 = bot_module.get_main_keyboard(uploaded=False, profile=incomplete, user_id=1)
+    flat3 = [b.callback_data for row in kb3.inline_keyboard for b in row]
+    assert "chg_sub" not in flat3
+    assert "chg_tb" not in flat3
 
 
 def test_format_text_answer_prompt_single_pre_block() -> None:

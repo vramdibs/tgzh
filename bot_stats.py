@@ -102,6 +102,23 @@ CREATE TABLE IF NOT EXISTS bot_user_visit_day (
 )
 """
 
+_CREATE_LLM_USAGE = """
+CREATE TABLE IF NOT EXISTS bot_llm_usage_by_year (
+    academic_year INTEGER NOT NULL PRIMARY KEY,
+    requests INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0
+)
+"""
+
+_CREATE_LLM_USER_YEAR = """
+CREATE TABLE IF NOT EXISTS bot_llm_user_year (
+    user_id BIGINT NOT NULL,
+    academic_year INTEGER NOT NULL,
+    PRIMARY KEY (user_id, academic_year)
+)
+"""
+
 
 def _ensure_verdict_percent_sum_column(conn: Any) -> None:
     if use_postgres():
@@ -204,6 +221,8 @@ def init_stats(path: str) -> None:
             _e(conn, _CREATE_VISIT_DAY_PG)
         else:
             _e(conn, _CREATE_VISIT_DAY_SQLITE)
+        _e(conn, _CREATE_LLM_USAGE)
+        _e(conn, _CREATE_LLM_USER_YEAR)
         _ensure_verdict_percent_sum_column(conn)
         _migrate_legacy_aggregate(conn)
         conn.commit()
@@ -255,6 +274,120 @@ def record_photo_uploaded(path: str) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def _ensure_llm_year_row(conn: Any, academic_year: int) -> None:
+    if use_postgres():
+        _e(
+            conn,
+            "INSERT INTO bot_llm_usage_by_year (academic_year) VALUES (?) "
+            "ON CONFLICT (academic_year) DO NOTHING",
+            (academic_year,),
+        )
+    else:
+        _e(
+            conn,
+            "INSERT OR IGNORE INTO bot_llm_usage_by_year (academic_year) VALUES (?)",
+            (academic_year,),
+        )
+
+
+def record_llm_spend(
+    path: str,
+    *,
+    user_id: int = 0,
+    kind: str = "other",
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    requests: int = 1,
+) -> None:
+    """Учет запросов/токенов LLM и уникальных людей. Пишет БД и Prometheus."""
+    if (os.getenv("AI_MOCK") or "").strip() == "1":
+        return
+    y = academic_year_now()
+    init_stats(path)
+    prompt_n = max(0, int(prompt_tokens))
+    completion_n = max(0, int(completion_tokens))
+    req_n = max(0, int(requests))
+    if req_n <= 0 and prompt_n <= 0 and completion_n <= 0:
+        return
+    conn = connect(path)
+    users_year = 0
+    try:
+        _ensure_llm_year_row(conn, y)
+        _e(
+            conn,
+            "UPDATE bot_llm_usage_by_year SET "
+            "requests = requests + ?, "
+            "prompt_tokens = prompt_tokens + ?, "
+            "completion_tokens = completion_tokens + ? "
+            "WHERE academic_year = ?",
+            (req_n, prompt_n, completion_n, y),
+        )
+        uid = int(user_id or 0)
+        if uid > 0:
+            if use_postgres():
+                _e(
+                    conn,
+                    "INSERT INTO bot_llm_user_year (user_id, academic_year) VALUES (?, ?) "
+                    "ON CONFLICT (user_id, academic_year) DO NOTHING",
+                    (uid, y),
+                )
+            else:
+                _e(
+                    conn,
+                    "INSERT OR IGNORE INTO bot_llm_user_year (user_id, academic_year) VALUES (?, ?)",
+                    (uid, y),
+                )
+        conn.commit()
+        row = _e(
+            conn,
+            "SELECT COUNT(*) FROM bot_llm_user_year WHERE academic_year = ?",
+            (y,),
+        ).fetchone()
+        users_year = int(row[0]) if row else 0
+    finally:
+        conn.close()
+    try:
+        import tgzh_metrics
+
+        tgzh_metrics.record_llm_usage(
+            kind=kind,
+            prompt_tokens=prompt_n,
+            completion_tokens=completion_n,
+            requests=req_n,
+            users=users_year,
+        )
+    except Exception:
+        pass
+
+
+def get_llm_usage_totals(path: str) -> dict[str, int]:
+    init_stats(path)
+    conn = connect(path)
+    try:
+        row = _e(
+            conn,
+            "SELECT COALESCE(SUM(requests), 0), COALESCE(SUM(prompt_tokens), 0), "
+            "COALESCE(SUM(completion_tokens), 0) FROM bot_llm_usage_by_year",
+        ).fetchone()
+        users_row = _e(
+            conn,
+            "SELECT COUNT(DISTINCT user_id) FROM bot_llm_user_year",
+        ).fetchone()
+    finally:
+        conn.close()
+    requests = int(row[0]) if row else 0
+    prompt = int(row[1]) if row else 0
+    completion = int(row[2]) if row else 0
+    users = int(users_row[0]) if users_row else 0
+    return {
+        "requests": requests,
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": prompt + completion,
+        "users": users,
+    }
 
 
 def record_check_technical_failed(path: str) -> None:
@@ -502,12 +635,20 @@ def format_all_stats_html(path: str) -> str:
     poll_n = user_storage.count_user_poll_rows(path)
     poll_yes, poll_no = user_storage.poll_math_yes_no_counts(path)
     chk_up, chk_down = user_storage.check_result_vote_totals(path)
+    llm = get_llm_usage_totals(path)
     head = (
         "<b>📊 Статистика</b> (все пользователи)\n\n"
         "<b>Всего за все годы:</b>\n"
         f"Загружено фото решений: <b>{grand['photos_uploaded']}</b>\n"
         f"Проверок завершено: <b>{grand['checks_completed']}</b>\n"
         f"Не удалось проверить (техн.): <b>{grand['checks_technical_failed']}</b>\n"
+        "\n"
+        "<b>ИИ (токены и запросы):</b>\n"
+        f"Запросов к модели: <b>{llm['requests']}</b>\n"
+        f"Токенов вход: <b>{llm['prompt_tokens']}</b>\n"
+        f"Токенов выход: <b>{llm['completion_tokens']}</b>\n"
+        f"Токенов всего: <b>{llm['total_tokens']}</b>\n"
+        f"Людей (уникальные): <b>{llm['users']}</b>\n"
         "\n"
         "<b>По тексту ответа модели (всего):</b>\n"
         f"✅ Частично верных / с замечаниями: <b>{grand['verdict_partial']}</b>\n"

@@ -155,7 +155,7 @@ Egress-IP VPS **не** подставляется в KeenDNS для webhook.
 |----------|----------------|
 | Только проверка ДЗ (VLLM) | `BOT_TOKEN`, `SERVER_URL`, `VLLM_*`, `AI_MOCK` |
 | + Recheck Cursor | + `VLLM_FALLBACK_*`, bridge с `CURSOR_API_KEY` |
-| + `/chat` | + `CHAT_PASSWORD`, fallback как выше |
+| + `/chat` | fallback как выше; пароль не нужен |
 | + Pre-OCR по фото | + `PREOCR_URL`, профиль `preocr` в compose |
 | + Голос в `/chat` | + `STT_BASE_URL` (`tgzh-stt`) |
 | Блокировка Telegram | `TG_MODE=polling`, при необходимости `TELEGRAM_PROXY` |

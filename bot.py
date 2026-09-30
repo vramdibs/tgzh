@@ -302,7 +302,7 @@ _ADMIN_BAN_WAIT = "admin_ban_wait"
 _CHECK_DISLIKE_FEEDBACK_WAIT = "check_dislike_feedback_wait"
 _FEEDBACK_PAGE = 3
 
-# /chat: скрытое меню, FSM ввода пароля и активный диалог.
+# /chat: меню и активный диалог (пароль на вход не нужен).
 _CHAT_PW_WAIT = "chat_pw_wait"
 _CHAT_ACTIVE = "chat_active"
 _CHAT_HISTORY = "chat_history"  # list[dict[role,content]] — храним только в RAM
@@ -758,6 +758,7 @@ async def _run_photo_check_request(
         mode=str(mode),
         roles=roles,
         blobs=blobs,
+        telegram_user_id=user_id,
     )
 
     try:
@@ -827,8 +828,11 @@ def _photo_multipart_files(
     mode: str,
     roles: list[str],
     blobs: list[bytes],
+    telegram_user_id: int = 0,
 ) -> list[tuple[str, tuple]]:
     multipart_files: list[tuple[str, tuple]] = [("mode", (None, mode))]
+    if telegram_user_id > 0:
+        multipart_files.append(("telegram_user_id", (None, str(telegram_user_id))))
     for r in roles:
         multipart_files.append(("image_roles", (None, r)))
     for i, blob in enumerate(blobs):
@@ -1358,9 +1362,9 @@ def flow_note(context: ContextTypes.DEFAULT_TYPE, message: object | None) -> Non
 
 def _bot_commands_list() -> list[BotCommand]:
     return [
-        BotCommand("start", "Новое упражнение"),
-        BotCommand("shot", "Проверка по снимкам"),
-        BotCommand("chat", "ИИ-ассистент"),
+        BotCommand("start", "Проверка по ГДЗ"),
+        BotCommand("shot", "Проверка по фото"),
+        BotCommand("chat", "Чат-бот ИИ"),
         BotCommand("textbook", "Сменить класс или учебник"),
     ]
 
@@ -1936,7 +1940,7 @@ def _voice_history_placeholder(transcript: str) -> str:
 
 
 def _activate_chat_session_ram(context: ContextTypes.DEFAULT_TYPE, *, fresh: bool = False) -> None:
-    """RAM-флаги активной /chat-сессии. `fresh=True` — новый вход (пароль), чистим историю."""
+    """RAM-флаги активной /chat-сессии. `fresh=True` — новый вход, чистим историю."""
     _photo_check_clear(context)
     context.user_data.pop(_CHAT_PW_WAIT, None)
     context.user_data.pop(_AWAIT_TEXT_ANSWER, None)
@@ -1983,25 +1987,12 @@ async def chat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     logger.info("cmd /chat user_id=%s", user_id)
-    if not _chat_password_configured():
-        await update.message.reply_text("Раздел /chat недоступен.")
-        return
     if not _cursor_recheck_available():
         await update.message.reply_text(
             "Чат через Cursor сейчас недоступен (на сервере не сконфигурирован fallback).",
         )
         return
-    until = await asyncio.to_thread(
-        user_storage.chat_session_active_until,
-        USER_DB_PATH,
-        user_id,
-    )
-    if until is None:
-        context.user_data[_CHAT_PW_WAIT] = True
-        await update.message.reply_text(
-            "Введи пароль одним сообщением, чтобы открыть чат-ассистент.",
-        )
-        return
+    await asyncio.to_thread(user_storage.chat_session_login, USER_DB_PATH, user_id)
     _activate_chat_session_ram(context, fresh=False)
     await _send_chat_menu(context.bot, chat_id, user_id=user_id)
 
@@ -2554,8 +2545,6 @@ def get_main_keyboard(
         rows.append(
             [InlineKeyboardButton("Выбрать упражнение или проверочную", callback_data="chg_hw")],
         )
-    rows.append([InlineKeyboardButton("Сменить предмет", callback_data="chg_sub")])
-    rows.append([InlineKeyboardButton("Сменить учебник", callback_data="chg_tb")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -3413,8 +3402,7 @@ async def handle_homework_text(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     if context.user_data.get(_CHAT_PW_WAIT):
-        await _try_chat_password_from_text(update, context, user_id, text)
-        return
+        context.user_data.pop(_CHAT_PW_WAIT, None)
 
     if context.user_data.get(_AWAIT_TEXT_ANSWER):
         if not await _disclaimer_consent_ok(update, context):
@@ -4352,6 +4340,7 @@ async def _run_homework_text_answer_check(
         "gdz_verif_works": gdz_vw,
         "gdz_task_condition": gdz_tc,
         "engine": engine_norm,
+        "telegram_user_id": str(user_id),
     }
     _check_url = f"{SERVER_URL.rstrip('/')}/check"
     outs: list[str] = []
@@ -4576,6 +4565,7 @@ async def _run_homework_check(
             "gdz_verif_works": gdz_vw,
             "gdz_task_condition": gdz_tc,
             "engine": engine_norm,
+            "telegram_user_id": str(user_id),
         }
         _check_url = f"{SERVER_URL.rstrip('/')}/check"
         _summarize_url = f"{SERVER_URL.rstrip('/')}/check/summarize"
@@ -4714,6 +4704,7 @@ async def _run_homework_check(
                             "parts": outs,
                             "engine": engine_norm,
                             "subject_slug": profile.subject_slug,
+                            "user_id": user_id,
                         },
                         headers=hub_headers,
                     )
@@ -6457,10 +6448,9 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """Голосовое сообщение → STT → дальнейший маршрут.
 
     Сценарии (по приоритету):
-    1. **`_CHAT_PW_WAIT`** — STT → пароль `/chat` (как текстовый ввод).
-    2. **`_AWAIT_TEXT_ANSWER`** (этап «Напиши решение…» в проверке ДЗ) — STT →
+    1. **`_AWAIT_TEXT_ANSWER`** (этап «Напиши решение…» в проверке ДЗ) — STT →
        `_run_homework_text_answer_check` (приоритет над ленивым `_CHAT_ACTIVE`).
-    3. **`_CHAT_ACTIVE`** — STT → `_handle_chat_user_message` с обёрткой для Cursor.
+    2. **`_CHAT_ACTIVE`** — STT → `_handle_chat_user_message` с обёрткой для Cursor.
 
     Вне этих режимов голосовые **тихо игнорируются**.
     """
@@ -6490,26 +6480,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             return
 
     chat_id = update.effective_chat.id
-
-    # === Маршрут 0: голос как пароль /chat ===================================
-    if context.user_data.get(_CHAT_PW_WAIT):
-        text_pw = await _stt_transcribe_voice_message(
-            update,
-            context,
-            user_id=user_id,
-            chat_id=chat_id,
-            log_label="chat_pw",
-        )
-        if not text_pw:
-            return
-        text_pw = text_pw.strip()
-        if not text_pw:
-            await update.message.reply_text(
-                "Распознанный пароль пустой. Попробуй ещё раз или введи текстом.",
-            )
-            return
-        await _try_chat_password_from_text(update, context, user_id, text_pw)
-        return
+    context.user_data.pop(_CHAT_PW_WAIT, None)
 
     # === Маршрут 1: голос как ответ на ДЗ ====================================
     # Имеет приоритет над /chat: если ученик в этом конкретном шаге проверки,
