@@ -438,7 +438,6 @@ def record_check_completed(path: str, result_text: str) -> None:
         conn.close()
 
 
-_POLL_BAR_WIDTH = 10
 _POLL_BAR_ON = "█"
 _POLL_BAR_OFF = "░"
 
@@ -573,37 +572,6 @@ def format_attendance_charts_html(path: str) -> str:
     return "".join(out).rstrip() + "\n\n"
 
 
-def _poll_ratio_bar(count: int, total: int) -> tuple[str, int]:
-    """Полоска длиной _POLL_BAR_WIDTH и процент (0-100) для count из total."""
-    if total <= 0:
-        return _POLL_BAR_OFF * _POLL_BAR_WIDTH, 0
-    pct = min(100, max(0, round(100.0 * count / total)))
-    filled = min(_POLL_BAR_WIDTH, max(0, round(_POLL_BAR_WIDTH * count / total)))
-    bar = _POLL_BAR_ON * filled + _POLL_BAR_OFF * (_POLL_BAR_WIDTH - filled)
-    return bar, pct
-
-
-def _format_poll_section_html(poll_n: int, poll_yes: int, poll_no: int) -> str:
-    """Блок опроса: завершившие и полоски Да/Нет по вопросу про математику."""
-    lines = [
-        "<b>Опрос (/polling):</b>",
-        f"Завершили: <b>{poll_n}</b>",
-    ]
-    if poll_n <= 0:
-        lines.append("<i>Пока нет завершенных анкет</i>")
-        return "\n".join(lines) + "\n\n"
-    lines.append("Математика нравится:")
-    bar_y, pct_y = _poll_ratio_bar(poll_yes, poll_n)
-    bar_n, pct_n = _poll_ratio_bar(poll_no, poll_n)
-    lines.append(
-        f"<code>Да   {bar_y} {pct_y:>3}% ({poll_yes})</code>",
-    )
-    lines.append(
-        f"<code>Нет  {bar_n} {pct_n:>3}% ({poll_no})</code>",
-    )
-    return "\n".join(lines) + "\n\n"
-
-
 def _format_year_block(ys: int, d: dict[str, int]) -> str:
     c = int(d["checks_completed"])
     vc = int(d["verdict_correct"])
@@ -632,8 +600,6 @@ def format_all_stats_html(path: str) -> str:
     user_storage.init_db(path)
     years = list_years_desc(path)
     grand = get_totals(path)
-    poll_n = user_storage.count_user_poll_rows(path)
-    poll_yes, poll_no = user_storage.poll_math_yes_no_counts(path)
     chk_up, chk_down = user_storage.check_result_vote_totals(path)
     llm = get_llm_usage_totals(path)
     head = (
@@ -655,7 +621,6 @@ def format_all_stats_html(path: str) -> str:
         f"❌ Нет решения на листе: <b>{grand['verdict_absent']}</b>\n\n"
         "<b>Оцени ответ (кнопки под сообщением):</b>\n"
         f"👍 <b>{chk_up}</b>, 👎 <b>{chk_down}</b>\n\n"
-        f"{_format_poll_section_html(poll_n, poll_yes, poll_no)}"
         f"{format_attendance_charts_html(path)}"
     )
     if not years:

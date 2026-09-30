@@ -41,9 +41,12 @@ def test_stats_counters_and_verdicts() -> None:
         assert "☑️" not in html
         assert "ИИ (токены и запросы)" in html
         assert "Запросов к модели" in html
+        assert "Опрос" not in html
+        assert "/polling" not in html
+        assert "Математика нравится" not in html
 
 
-def test_stats_poll_bars_and_no_correct_line() -> None:
+def test_stats_has_no_polling_section() -> None:
     with tempfile.TemporaryDirectory() as td:
         path = str(Path(td) / "u.sqlite")
         bot_stats.init_stats(path)
@@ -52,9 +55,10 @@ def test_stats_poll_bars_and_no_correct_line() -> None:
         user_storage.upsert_user_poll(path, 102, 0, "учитель")
         user_storage.upsert_user_poll(path, 103, 1, "врач")
         html = bot_stats.format_all_stats_html(path)
-        assert "█" in html
-        assert "░" in html
-        assert "Математика нравится" in html
+        assert "Опрос" not in html
+        assert "/polling" not in html
+        assert "Математика нравится" not in html
+        assert "Завершили:" not in html
         assert "✅ Верных" not in html
         assert "✅ Частично верных" in html
 
