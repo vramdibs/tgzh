@@ -78,11 +78,12 @@ _UNCLEAR_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 # Нет формулировки на снимке учебника - строка со знаком вопроса, фраза жирным.
+# Соседние звездочки входят в совпадение, чтобы не получить ****фразу****.
 _MISSING_CONDITION_RE = re.compile(
-    r"("
-    r"текст\w*\s+задач\w*[^.\n]{0,80}?нет"
-    r"|формулировк\w*[^.\n]{0,80}?не\s+видн\w*"
-    r")",
+    r"\*{0,6}("
+    r"текст\w*\s+задач\w*[^.\n*]{0,80}?нет"
+    r"|формулировк\w*[^.\n*]{0,80}?не\s+видн\w*"
+    r")\*{0,6}",
     re.IGNORECASE,
 )
 _TASK_NUMBER_RE = re.compile(
@@ -218,9 +219,7 @@ def _polish_check_line(line: str) -> str:
     line = _TASK_NUMBER_RE.sub(lambda m: f"**{m.group(1)}**", line)
 
     def _bold_missing(match: re.Match[str]) -> str:
-        phrase = match.group(1)
-        if phrase.startswith("**"):
-            return phrase
+        phrase = match.group(1).strip("*").strip()
         return f"**{phrase}**"
 
     return _MISSING_CONDITION_RE.sub(_bold_missing, line)

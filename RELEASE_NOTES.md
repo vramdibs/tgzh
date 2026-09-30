@@ -33,6 +33,8 @@
 
 ### Fixed
 
+- **Лишние звездочки у фразы про учебник**: "текста задачи на фото нет" показывается одной парой `**`, даже если модель уже выделила фразу. Тест - **`tests/test_telegram_format.py::test_prepare_check_display_collapses_extra_stars_around_missing_text`**
+
 - **Служебная метка `[tgzh_result:…]`**: в ответах `/shot` (и других проверок) вместо сырой строки показывается эмодзи (✅ / ☑️ / ❌); вердикт для статистики читается из метки. Тесты — **`tests/test_homework_check_status.py::test_tgzh_result_*`**
 
 - **`/shot` — кнопка «Проверить»**: в колбэке `photo:run` передавался несуществующий `update` → `NameError`, проверка не стартовала. Тест — **`tests/test_photo_bot.py::test_photo_run_callback_invokes_check`**

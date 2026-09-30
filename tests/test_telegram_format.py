@@ -101,6 +101,13 @@ def test_prepare_check_display_task_number_missing_text_and_answer_line() -> Non
     assert lines[3].startswith("✅ Ответ 435")
 
 
+def test_prepare_check_display_collapses_extra_stars_around_missing_text() -> None:
+    src = "****Текста задачи из учебника на фото нет****"
+    out = tf.prepare_check_display_text(src)
+    assert "****" not in out
+    assert "**Текста задачи из учебника на фото нет**" in out
+
+
 def test_markdown_to_telegram_html_bold_italic() -> None:
     out = tf.markdown_to_telegram_html("Это **жирный** и _курсив_, ~~зачёркнут~~.")
     assert "<b>жирный</b>" in out
