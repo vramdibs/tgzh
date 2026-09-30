@@ -2291,12 +2291,15 @@ async def _handle_chat_callback(
         return
     if action == "model":
         await _answer_query_once(query)
+        await ai_checker.chat_cursor_refresh_live_catalog(force=True)
         current = await asyncio.to_thread(
             user_storage.chat_model_get, USER_DB_PATH, user_id,
         )
+        names = ", ".join(label for _, label in ai_checker.chat_cursor_model_catalog())
         body = (
             "<b>Модель Cursor</b>\n"
-            "Только варианты без Fast, reasoning — Low.\n"
+            "Composer и Grok, без Fast, reasoning - Low.\n"
+            f"Доступны: {_h(names)}.\n"
             f"Сейчас: <b>{_h(ai_checker.chat_cursor_model_label(current))}</b>"
         )
         with suppress(BadRequest, Exception):

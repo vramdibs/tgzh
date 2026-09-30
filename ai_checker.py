@@ -9,6 +9,8 @@ import asyncio
 import base64
 import logging
 import os
+import re
+import time
 from collections import defaultdict
 from contextlib import suppress
 from typing import Any, Final
@@ -711,12 +713,28 @@ def chat_max_response_tokens() -> int:
 
 CHAT_CURSOR_MODEL_DEFAULT: Final = "composer-2.5"
 CHAT_CURSOR_MODEL_FALLBACK: Final = "cursor-grok-4.6-low"
+CHAT_CURSOR_MODELS_BUILTIN: Final[tuple[str, ...]] = (
+    "composer-2.5",
+    "cursor-grok-4.6-low",
+    "cursor-grok-4.7-low",
+)
 
 CHAT_CURSOR_MODEL_LABELS: Final[dict[str, str]] = {
     "composer-2.5": "Composer 2.5",
     "composer-2": "Composer 2",
-    "cursor-grok-4.6-low": "Grok 4.6 Low",
+    "cursor-grok-4.6-low": "Grok 4.6",
+    "cursor-grok-4.7-low": "Grok 4.7",
+    "grok-4.6": "Grok 4.6",
+    "grok-4.7": "Grok 4.7",
 }
+
+_CHAT_LIVE_CATALOG: list[str] | None = None
+_CHAT_LIVE_CATALOG_AT: float = 0.0
+_CHAT_LIVE_CATALOG_TTL_S: Final = 1800.0
+_SLUG_TAIL_RE = re.compile(
+    r"-(?:low|fast|thinking(?:-low|-medium|-high)?)$",
+    re.IGNORECASE,
+)
 
 
 def _chat_cursor_model_slug_blocked(slug: str) -> bool:
@@ -743,32 +761,117 @@ def chat_cursor_model_fallback() -> str:
     return raw or CHAT_CURSOR_MODEL_FALLBACK
 
 
-def chat_cursor_model_catalog() -> tuple[tuple[str, str], ...]:
-    """Допустимые модели /chat: без Fast, reasoning только Low (по slug)."""
-    raw = (os.getenv("CHAT_CURSOR_MODELS") or "").strip()
-    if raw:
-        slugs = [item.strip() for item in raw.split(",") if item.strip()]
-    else:
-        slugs = [chat_cursor_model_default(), chat_cursor_model_fallback()]
+def chat_cursor_model_pretty_label(slug: str) -> str:
+    """Человекочитаемое имя: cursor-grok-4.7-low -> Grok 4.7."""
+    name = (slug or "").strip()
+    if not name:
+        return name
+    if name in CHAT_CURSOR_MODEL_LABELS:
+        return CHAT_CURSOR_MODEL_LABELS[name]
+    bare = name
+    if bare.lower().startswith("cursor-"):
+        bare = bare[7:]
+    bare = _SLUG_TAIL_RE.sub("", bare)
+    bits = [p for p in bare.replace("_", "-").split("-") if p]
+    titled: list[str] = []
+    for bit in bits:
+        if bit.lower() == "grok":
+            titled.append("Grok")
+        elif bit.lower() == "composer":
+            titled.append("Composer")
+        else:
+            titled.append(bit)
+    return " ".join(titled) if titled else name
+
+
+def _chat_cursor_family_ok(slug: str) -> bool:
+    name = (slug or "").strip().lower()
+    if not name:
+        return False
+    return name.startswith("composer") or "grok" in name
+
+
+def _catalog_sort_key(slug: str) -> tuple[int, tuple[int, ...]]:
+    name = (slug or "").strip().lower()
+    family = 0 if "composer" in name else 1
+    nums = tuple(int(x) for x in re.findall(r"\d+", name))
+    return (family, nums)
+
+
+def _catalog_from_slugs(slugs: list[str]) -> tuple[tuple[str, str], ...]:
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
     for slug in slugs:
-        if _chat_cursor_model_slug_blocked(slug) or slug in seen:
+        if _chat_cursor_model_slug_blocked(slug) or not _chat_cursor_family_ok(slug):
+            continue
+        if slug in seen:
             continue
         seen.add(slug)
-        label = CHAT_CURSOR_MODEL_LABELS.get(slug, slug)
-        out.append((slug, label))
-    if out:
-        return tuple(out)
+        out.append((slug, chat_cursor_model_pretty_label(slug)))
+    out.sort(key=lambda pair: _catalog_sort_key(pair[0]))
+    return tuple(out)
+
+
+def chat_cursor_model_catalog() -> tuple[tuple[str, str], ...]:
+    """Допустимые модели /chat: Composer и Grok, без Fast, reasoning только Low."""
+    raw = (os.getenv("CHAT_CURSOR_MODELS") or "").strip()
+    if raw:
+        slugs = [item.strip() for item in raw.split(",") if item.strip()]
+        built = _catalog_from_slugs(slugs)
+        if built:
+            return built
+    if _CHAT_LIVE_CATALOG:
+        built = _catalog_from_slugs(list(_CHAT_LIVE_CATALOG))
+        if built:
+            return built
+    slugs = [
+        chat_cursor_model_default(),
+        *CHAT_CURSOR_MODELS_BUILTIN,
+        chat_cursor_model_fallback(),
+    ]
+    built = _catalog_from_slugs(slugs)
+    if built:
+        return built
     default = chat_cursor_model_default()
-    return ((default, CHAT_CURSOR_MODEL_LABELS.get(default, default)),)
+    return ((default, chat_cursor_model_pretty_label(default)),)
 
 
 def chat_cursor_model_label(slug: str) -> str:
     for model_slug, label in chat_cursor_model_catalog():
         if model_slug == slug:
             return label
-    return CHAT_CURSOR_MODEL_LABELS.get(slug, slug)
+    return chat_cursor_model_pretty_label(slug)
+
+
+async def chat_cursor_refresh_live_catalog(*, force: bool = False) -> None:
+    """Подтянуть composer/grok с Cursor bridge GET /models; при сбое оставить прошлый кэш."""
+    global _CHAT_LIVE_CATALOG, _CHAT_LIVE_CATALOG_AT
+    if (os.getenv("CHAT_CURSOR_MODELS") or "").strip():
+        return
+    now = time.monotonic()
+    if (
+        not force
+        and _CHAT_LIVE_CATALOG is not None
+        and (now - _CHAT_LIVE_CATALOG_AT) < _CHAT_LIVE_CATALOG_TTL_S
+    ):
+        return
+    if not _fallback_ready():
+        return
+    try:
+        client = await _cursor_openai_client()
+        listing = await client.models.list()
+        ids: list[str] = []
+        for item in getattr(listing, "data", None) or []:
+            sid = str(getattr(item, "id", "") or "").strip()
+            if sid:
+                ids.append(sid)
+        filtered = [s for s, _ in _catalog_from_slugs(ids)]
+        if filtered:
+            _CHAT_LIVE_CATALOG = filtered
+            _CHAT_LIVE_CATALOG_AT = now
+            logger.info("chat cursor live catalog n=%s", len(filtered))
+    except Exception:
+        logger.debug("chat cursor live catalog refresh failed", exc_info=True)
 
 
 def chat_resolve_cursor_model(requested: str | None) -> str:

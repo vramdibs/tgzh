@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+
+import ai_checker
 import bot
 import user_storage
 
@@ -25,6 +28,16 @@ def test_chat_menu_active_contains_expected_buttons() -> None:
     list_label = next(t for t, c in flat if c == "chat:list")
     assert str(user_storage.CHAT_DIALOG_HISTORY_LIMIT) in list_label
     assert "Мои чаты" in list_label
+
+
+def test_chat_model_keyboard_lists_available_composer_grok(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CHAT_CURSOR_MODELS", raising=False)
+    ai_checker._CHAT_LIVE_CATALOG = None
+    flat = _flatten(bot._chat_model_keyboard("composer-2.5"))
+    labels = [t for t, _ in flat if t != "Назад в меню чата"]
+    assert labels == ["Composer 2.5 ✓", "Grok 4.6", "Grok 4.7"]
 
 
 def test_chat_menu_inactive_only_back_button() -> None:

@@ -294,13 +294,78 @@ def test_chat_cursor_model_catalog_filters_fast(monkeypatch: pytest.MonkeyPatch)
 def test_chat_cursor_model_try_chain_default_only(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CHAT_CURSOR_MODEL_DEFAULT", raising=False)
     monkeypatch.delenv("CHAT_CURSOR_MODEL_FALLBACK", raising=False)
+    monkeypatch.delenv("CHAT_CURSOR_MODELS", raising=False)
+    ai_checker._CHAT_LIVE_CATALOG = None
     assert ai_checker.chat_cursor_model_try_chain("composer-2.5") == [
         "composer-2.5",
         "cursor-grok-4.6-low",
     ]
-    assert ai_checker.chat_cursor_model_try_chain("cursor-grok-4.6-low") == [
+
+
+def test_chat_cursor_default_catalog_includes_current_grok(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CHAT_CURSOR_MODELS", raising=False)
+    ai_checker._CHAT_LIVE_CATALOG = None
+    slugs = [slug for slug, _ in ai_checker.chat_cursor_model_catalog()]
+    assert slugs == [
+        "composer-2.5",
         "cursor-grok-4.6-low",
+        "cursor-grok-4.7-low",
     ]
+    labels = [label for _, label in ai_checker.chat_cursor_model_catalog()]
+    assert labels == ["Composer 2.5", "Grok 4.6", "Grok 4.7"]
+
+
+def test_chat_cursor_pretty_label() -> None:
+    assert ai_checker.chat_cursor_model_pretty_label("cursor-grok-4.7-low") == "Grok 4.7"
+    assert ai_checker.chat_cursor_model_pretty_label("grok-4.6") == "Grok 4.6"
+    assert ai_checker.chat_cursor_model_pretty_label("cursor-grok-4.8-low") == "Grok 4.8"
+
+
+@pytest.mark.asyncio
+async def test_chat_cursor_live_catalog_replaces_builtin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CHAT_CURSOR_MODELS", raising=False)
+    monkeypatch.setenv("VLLM_FALLBACK_ENABLE", "1")
+    monkeypatch.setenv("VLLM_FALLBACK_BASE_URL", "http://bridge:8787/v1")
+    ai_checker._CHAT_LIVE_CATALOG = None
+    ai_checker._CHAT_LIVE_CATALOG_AT = 0.0
+
+    class _Model:
+        def __init__(self, id: str) -> None:
+            self.id = id
+
+    class _Listing:
+        data = [
+            _Model("composer-2.5"),
+            _Model("composer-2.5-fast"),
+            _Model("cursor-grok-4.7-low"),
+            _Model("gpt-5"),
+        ]
+
+    class _Client:
+        class models:
+            @staticmethod
+            async def list() -> _Listing:
+                return _Listing()
+
+    async def _client() -> _Client:
+        return _Client()
+
+    monkeypatch.setattr(ai_checker, "_fallback_ready", lambda: True)
+    monkeypatch.setattr(ai_checker, "_cursor_openai_client", _client)
+    await ai_checker.chat_cursor_refresh_live_catalog(force=True)
+    slugs = [slug for slug, _ in ai_checker.chat_cursor_model_catalog()]
+    assert slugs == ["composer-2.5", "cursor-grok-4.7-low"]
+    assert "cursor-grok-4.6-low" not in slugs
+
+    async def _boom() -> None:
+        raise RuntimeError("bridge down")
+
+    monkeypatch.setattr(ai_checker, "_cursor_openai_client", _boom)
+    await ai_checker.chat_cursor_refresh_live_catalog(force=True)
+    slugs_after = [slug for slug, _ in ai_checker.chat_cursor_model_catalog()]
+    assert slugs_after == slugs
 
 
 @pytest.mark.asyncio
