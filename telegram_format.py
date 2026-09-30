@@ -72,12 +72,20 @@ _LATEX_SYMBOLS: tuple[tuple[str, str], ...] = (
 )
 _LINE_SPLIT_RE = re.compile(r"^(\s*)((?:[-*•]\s+)?)(.*)$")
 _VERNO_WORD_RE = re.compile(r"(?<![а-яёА-ЯЁ*])верно(?![а-яёА-ЯЁ*])", re.IGNORECASE)
+_ERROR_LINE_RE = re.compile(r"неверно|ошибк|неправильн", re.IGNORECASE)
+_TASK_HEADING_RE = re.compile(
+    r"^Задач[аеи]\s*№\s*\d+(?:\s*\([^)]{1,40}\))?\s*:?\s*$",
+    re.IGNORECASE,
+)
 # Нет формулировки на снимке учебника - строка со знаком вопроса, фраза жирным.
 # Соседние звездочки входят в совпадение, чтобы не получить ****фразу****.
 _MISSING_CONDITION_RE = re.compile(
     r"\*{0,6}("
     r"текст\w*\s+задач\w*[^.\n*]{0,80}?нет"
+    r"|текст\w*\s+учебник\w*[^.\n*]{0,80}?нет"
     r"|формулировк\w*[^.\n*]{0,80}?не\s+видн\w*"
+    r"|отдельн\w*\s+услов\w*[^.\n*]{0,80}?нет"
+    r"|услов\w*[^.\n*]{0,60}?на\s+фото\s+нет"
     r")\*{0,6}",
     re.IGNORECASE,
 )
@@ -170,25 +178,45 @@ def _rebuild_line(indent: str, bullet: str, body: str, *, keep_bullet: bool) -> 
     return f"{prefix}{body}".rstrip()
 
 
-def _is_division_colon(text: str, idx: int) -> bool:
-    """Деление 12 : 4 или 12:4, не заголовок '№6: пункт' и не '386: 298 + …'."""
-    after = idx + 1
-    while after < len(text) and text[after] in " \t":
-        after += 1
-    spaces_after = after > idx + 1
-    before = idx - 1
-    while before >= 0 and text[before] in " \t":
-        before -= 1
-    spaces_before = before < idx - 1
-    if before < 0 or not text[before].isdigit():
+def _left_math_atom(text: str, idx: int) -> bool:
+    i = idx - 1
+    while i >= 0 and text[i] in " \t":
+        i -= 1
+    if i < 0:
         return False
-    if after >= len(text) or not text[after].isdigit():
-        return False
-    if spaces_before and spaces_after:
+    if text[i] == ")":
         return True
-    if not spaces_before and not spaces_after:
+    if text[i].isdigit():
         return True
+    if text[i].isalpha():
+        j = i
+        while j >= 0 and text[j].isalpha():
+            j -= 1
+        return (i - j) == 1
     return False
+
+
+def _right_math_atom(text: str, idx: int) -> bool:
+    i = idx + 1
+    while i < len(text) and text[i] in " \t":
+        i += 1
+    if i >= len(text):
+        return False
+    if text[i] == "(":
+        return True
+    if text[i].isdigit():
+        return True
+    if text[i].isalpha():
+        j = i
+        while j < len(text) and text[j].isalpha():
+            j += 1
+        return (j - i) == 1
+    return False
+
+
+def _is_division_colon(text: str, idx: int) -> bool:
+    """Деление в выражении: 12 : 4, c : 3, (m : 4). Не заголовок '№6: пункт'."""
+    return _left_math_atom(text, idx) and _right_math_atom(text, idx)
 
 
 def _break_colon_lines(line: str) -> list[str]:
@@ -263,6 +291,21 @@ def _break_comma_expr_lines(line: str) -> list[str]:
     return out
 
 
+def _is_task_heading_line(body: str) -> bool:
+    return bool(_TASK_HEADING_RE.match((body or "").strip()))
+
+
+def _verdict_from_body(body: str) -> str:
+    low = (body or "").replace("*", "")
+    if _ERROR_LINE_RE.search(low):
+        return _MARK_BAD
+    if _MISSING_CONDITION_RE.search(body or ""):
+        return _MARK_UNK
+    if _VERNO_WORD_RE.search(low):
+        return _MARK_OK
+    return ""
+
+
 def _replace_leading_question(body: str) -> str:
     stripped = body.lstrip()
     pad = body[: len(body) - len(stripped)]
@@ -284,6 +327,11 @@ def _annotate_check_line(line: str) -> str:
         existing = _canonical_mark(existing)
     else:
         body = _replace_leading_question(body)
+        existing, body = _strip_leading_mark(body)
+        if existing:
+            existing = _canonical_mark(existing)
+        elif not _is_task_heading_line(body):
+            existing = _verdict_from_body(body)
     body = _VERNO_WORD_RE.sub(lambda m: f"**{m.group(0)}**", body)
     if existing:
         body = f"{existing} {body}".strip()

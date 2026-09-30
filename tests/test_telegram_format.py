@@ -53,18 +53,15 @@ def test_prepare_check_display_line_marks_and_bold_verno() -> None:
     lines = out.splitlines()
     assert lines[0].startswith("- Задача 6")
     assert "✅" not in lines[0]
-    assert lines[1].startswith("- ")
-    assert "✅" not in lines[1]
+    assert lines[1].startswith("- ✅ ")
     assert "**верно**" in lines[1]
     assert "\\" not in lines[1]
-    assert lines[2].startswith("- ")
-    assert "❌" not in lines[2]
+    assert lines[2].startswith("- ❌ ")
     assert lines[3].startswith("- ")
     assert "❓" not in lines[3]
-    assert lines[4].startswith("- ")
-    assert "❌" not in lines[4]
+    assert lines[4].startswith("- ❌ ")
     assert "**верно**" not in lines[4]
-    assert lines[5].startswith("❓ ")
+    assert lines[5].startswith("- ❓ ") or lines[5].startswith("❓ ")
     assert not lines[5].startswith("?")
     assert "**формулировка из учебника на фото не видна**" in lines[5].lower()
 
@@ -100,13 +97,15 @@ def test_prepare_check_display_task_number_missing_text_and_answer_line() -> Non
     )
     lines = tf.prepare_check_display_text(src).splitlines()
     assert lines[0] == "**Задача №8**:"
-    assert any("**текста задачи в учебнике на фото нет**" in line.lower() for line in lines)
-    assert not any(line.startswith("❓ ") and "текста задачи" in line.lower() for line in lines)
+    assert any(
+        line.startswith("❓ ") and "текста задачи в учебнике на фото нет" in line.lower()
+        for line in lines
+    )
     formul = next(line for line in lines if "формулировка" in line.lower())
-    assert formul.startswith("- ")
-    assert "❓" not in formul
+    assert "❓" in formul
+    assert formul.startswith("- ❓ ") or formul.startswith("❓ ")
     assert "**формулировка из учебника на фото не видна**" in formul.lower()
-    assert any(line.startswith("Ответ 435") for line in lines)
+    assert any("Ответ 435" in line for line in lines)
     assert not any("(731-296)=435" in line and "Ответ" in line for line in lines)
 
 
@@ -146,7 +145,34 @@ def test_prepare_check_display_breaks_comma_expressions() -> None:
     src_verno = "ответ 786, верно"
     out_verno = tf.prepare_check_display_text(src_verno)
     assert "\n" not in out_verno
-    assert "786, **верно**" in out_verno or "786, верно" in out_verno.lower()
+    assert "786, **верно**" in out_verno
+    assert out_verno.startswith("✅ ")
+
+
+def test_prepare_check_display_keeps_algebra_division_colon() -> None:
+    src = "a) c - (c : 3); б) (m : 4) · 9"
+    out = tf.prepare_check_display_text(src)
+    assert "c : 3" in out
+    assert "(m : 4)" in out
+    assert "\n3)" not in out
+    assert "\n4)" not in out
+
+
+def test_prepare_check_display_verdict_prefixes() -> None:
+    ok = tf.prepare_check_display_text("Ответы 786, 989, 900 - верно.")
+    assert ok.startswith("✅ ")
+    assert "**верно**" in ok
+    bad = tf.prepare_check_display_text(
+        "но 10·19=190, а не 900 - ошибка в последнем действии.",
+    )
+    assert bad.startswith("❌ ")
+    unk = tf.prepare_check_display_text(
+        "Отдельного условия из учебника на фото нет.",
+    )
+    assert unk.startswith("❓ ")
+    assert "**Отдельного условия из учебника на фото нет**" in unk or (
+        "отдельного условия" in unk.lower() and "**" in unk
+    )
 
 
 def test_markdown_to_telegram_html_bold_italic() -> None:

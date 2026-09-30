@@ -85,3 +85,4 @@ def test_photo_check_prompts_match_solution_to_condition() -> None:
             assert "Маркер списка не заменяй" in text, stage
             assert "дефис" in text, stage
             assert "выражение после запятой" in text, stage
+            assert "c : 3" in text, stage
