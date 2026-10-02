@@ -811,6 +811,8 @@ def _chat_cursor_model_slug_blocked(slug: str) -> bool:
         return True
     if "-thinking-high" in name or "-thinking-medium" in name:
         return True
+    if "-xhigh" in name or name.endswith("xhigh"):
+        return True
     if name.endswith("-high") or name.endswith("-medium"):
         return True
     return False

@@ -49,6 +49,8 @@
 
 ### Changed
 
+- **`/chat` без xhigh**: Extra High (`…-xhigh`) скрыты в выборе модели, как Fast и High. Тест - **`tests/test_chat_streaming.py`**
+
 - **Grok Low любой версии**: slug `cursor-grok-…-low` и `grok-…-low` (4.6, 4.7, 4.8, 5, 5.0, 5.5, ...) принимаются без дописывания CSV. В CLI с 4.7 префикс `cursor-` снимается (`cursor-grok-4.8-low` → `grok-4.8-low`); 4.6 остается `cursor-grok-4.6-low`. Каталог Composer/Grok обновляется с `GET /v1/models` на bridge (`cursor-agent --list-models`) при `/chat`, при запросе к ассистенту (TTL 5 мин) и принудительно при ошибке ответа. В меню попадает то, что сейчас есть у CLI, без ручного 4.8. High/Fast по-прежнему нет. Ошибка bridge на `/chat/stream` больше не пустой 200. Тесты - **`tests/test_chat_streaming.py`**, **`tests/test_chat_model_pref.py`**
 
 - **`/stats` короче**: нулевые строки скрыты (в т.ч. токены без `usage`). Нет шапки посещаемости, месяца за 30 дней, блока вердиктов модели и разреза по учебным годам. График за 7 дней остается. Голоса - **Оценили ответ**. Тест - **`tests/test_bot_stats.py`**

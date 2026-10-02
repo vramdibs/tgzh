@@ -288,10 +288,13 @@ def test_stream_chat_via_cursor_requires_fallback(monkeypatch: pytest.MonkeyPatc
 def test_chat_cursor_model_catalog_filters_fast(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(
         "CHAT_CURSOR_MODELS",
-        "composer-2.5,composer-2.5-fast,cursor-grok-4.6-low",
+        "composer-2.5,composer-2.5-fast,cursor-grok-4.6-low,"
+        "cursor-grok-4.6-xhigh,grok-4.7-xhigh,grok-4.7-low",
     )
     slugs = [slug for slug, _ in ai_checker.chat_cursor_model_catalog()]
-    assert slugs == ["composer-2.5", "cursor-grok-4.6-low"]
+    assert slugs == ["composer-2.5", "cursor-grok-4.6-low", "grok-4.7-low"]
+    assert "cursor-grok-4.6-xhigh" not in slugs
+    assert "grok-4.7-xhigh" not in slugs
 
 
 def test_chat_cursor_model_try_chain_default_only(monkeypatch: pytest.MonkeyPatch) -> None:
