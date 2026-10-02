@@ -116,11 +116,14 @@ def test_chat_cmd_opens_without_password(monkeypatch: pytest.MonkeyPatch) -> Non
 
     menu = AsyncMock()
     blocked = AsyncMock(return_value=False)
+    refresh = AsyncMock()
     with (
         patch.object(bot, "_send_chat_menu", menu),
         patch.object(bot, "_reply_if_blocked_cmd", blocked),
+        patch.object(ai_checker, "chat_cursor_refresh_live_catalog", refresh),
     ):
         asyncio.run(bot.chat_cmd(_Update(), _Ctx()))
 
     menu.assert_called_once()
+    refresh.assert_awaited()
     assert user_storage.chat_session_active_until(path, 51) is not None

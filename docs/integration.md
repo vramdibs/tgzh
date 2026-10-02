@@ -109,6 +109,8 @@ VLLM_FALLBACK_MODEL=composer-2.5
 
 - **`stream=true` не поддержан** - bridge отвечает **400**. tgzh в `ai_checker.py` автоматически делает fallback на `stream=false`
 - Модель в теле запроса маппится в `cursor-agent --model <slug>`
+- Кроме точного CSV allowlist, разрешены шаблоны **`cursor-grok-…-low`** и **`grok-…-low`** (Grok Low любой версии, в т.ч. `5` без минора). С 4.7 CLI-slug без `cursor-`; 4.6 остается с префиксом
+- **`GET /v1/models`** отдает список `cursor-agent --list-models` (OpenAI `{object: list, data}`). `?refresh=1` сбрасывает кэш моста (~2 мин). tgzh обновляет каталог `/chat` с этого эндпоинта
 - Таймаут одного запуска: `BRIDGE_OPENAI_TIMEOUT_SEC` / `AGENT_TIMEOUT_SEC`
 
 ### Smoke bridge с хоста

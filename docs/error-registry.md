@@ -39,6 +39,21 @@
 
 ---
 
+## INC-2026-10-02-01: `/chat` Grok 4.7 - «Cursor не вернул ответа»
+
+| Поле | Значение |
+|------|----------|
+| **Дата** | 2026-10-02 |
+| **Симптом** | В `/chat` модель Grok 4.7 отвечает «Cursor не вернул ответа. Попробуй переформулировать.» Composer и Grok 4.6 работают |
+| **Диагностика** | `tgzh-server`: `chat stream failed`, `400 model 'cursor-grok-4.7-low' is not in BRIDGE_OPENAI_ALLOWED_MODELS`. В CSV allowlist был только `cursor-grok-4.6-low`. Сервер отдавал **200 пусто**, бот принимал это за пустой ответ модели. После расширения allowlist `cursor-agent --list-models` для 4.7 Low показывает **`grok-4.7-low`**, не `cursor-grok-4.7-low` - неверный slug дает `502` exit_code=1 |
+| **Причина** | Жесткий CSV на bridge плюс глотание 400 в `POST /chat/stream`. Плюс смена CLI-slug Grok 4.7 |
+| **Решение** | На bridge поверх CSV разрешены `cursor-grok-…-low` и `grok-…-low` (в т.ч. `5` без минора). С 4.7 CLI без `cursor-` (`cursor-grok-4.8-low` → `grok-4.8-low`); 4.6 остается с префиксом. `GET /v1/models` берет `cursor-agent --list-models`. В tgzh та же канонизация в `chat_canonical_cursor_model`, каталог обновляется при `/chat`, запросе к ассистенту и ошибке ответа. Ошибка до первого токена уходит HTTP 400/502, не пустым 200. Рестарт `discourse-cursor-bridge`, `tgzh-server` и `tgzh-bot` |
+| **Проверка** | `pytest` в tgzh (`test_chat_resolve_keeps_grok_xy_low_outside_catalog`, `test_chat_stream_bridge_400_is_not_empty_200`) и в discourse-cursor-bridge (`test_cursor_grok_xy_low_allowed_without_csv`). Ручной: `/chat` -> Модель Grok 4.7 -> короткий вопрос получает текст, не «переформулируй» |
+
+**Связанные env:** `BRIDGE_OPENAI_ALLOWED_MODELS`, `CHAT_CURSOR_MODELS`
+
+---
+
 ## INC-2026-09-27-03: ложная диагностика «устаревший DNS»
 
 | Поле | Значение |

@@ -1994,6 +1994,7 @@ async def chat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await asyncio.to_thread(user_storage.chat_session_login, USER_DB_PATH, user_id)
     _activate_chat_session_ram(context, fresh=False)
+    await ai_checker.chat_cursor_refresh_live_catalog()
     await _send_chat_menu(context.bot, chat_id, user_id=user_id)
 
 
@@ -3933,6 +3934,8 @@ async def _stream_chat_response(
                 text=_h(error_text)[:4096],
                 parse_mode=ParseMode.HTML,
             )
+        with suppress(Exception):
+            await ai_checker.chat_cursor_refresh_live_catalog(force=True)
         return ""
 
     final_html = telegram_format.markdown_to_telegram_html(final_text)

@@ -17,6 +17,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Final
 
+import httpx
 from dotenv import load_dotenv
 
 from homework_check_status import (
@@ -775,7 +776,7 @@ CHAT_CURSOR_MODEL_FALLBACK: Final = "cursor-grok-4.6-low"
 CHAT_CURSOR_MODELS_BUILTIN: Final[tuple[str, ...]] = (
     "composer-2.5",
     "cursor-grok-4.6-low",
-    "cursor-grok-4.7-low",
+    "grok-4.7-low",
 )
 
 CHAT_CURSOR_MODEL_LABELS: Final[dict[str, str]] = {
@@ -785,15 +786,20 @@ CHAT_CURSOR_MODEL_LABELS: Final[dict[str, str]] = {
     "cursor-grok-4.7-low": "Grok 4.7",
     "grok-4.6": "Grok 4.6",
     "grok-4.7": "Grok 4.7",
+    "grok-4.7-low": "Grok 4.7",
 }
 
 _CHAT_LIVE_CATALOG: list[str] | None = None
 _CHAT_LIVE_CATALOG_AT: float = 0.0
-_CHAT_LIVE_CATALOG_TTL_S: Final = 1800.0
+_CHAT_LIVE_CATALOG_TTL_S: Final = 300.0
 _SLUG_TAIL_RE = re.compile(
     r"-(?:low|fast|thinking(?:-low|-medium|-high)?)$",
     re.IGNORECASE,
 )
+# Grok Low: cursor-grok-4.6-low, grok-4.7-low, grok-5-low, grok-5.5-low, ...
+_GROK_LOW_RE = re.compile(r"^(?:cursor-)?grok-(\d+(?:\.\d+)?)-low$")
+# cursor-agent --list-models: до 4.6 префикс cursor-, с 4.7 его нет.
+_GROK_BARE_PREFIX_FROM: Final[tuple[int, int]] = (4, 7)
 
 
 def _chat_cursor_model_slug_blocked(slug: str) -> bool:
@@ -821,7 +827,7 @@ def chat_cursor_model_fallback() -> str:
 
 
 def chat_cursor_model_pretty_label(slug: str) -> str:
-    """Человекочитаемое имя: cursor-grok-4.7-low -> Grok 4.7."""
+    """Человекочитаемое имя: grok-4.7-low / cursor-grok-4.7-low -> Grok 4.7."""
     name = (slug or "").strip()
     if not name:
         return name
@@ -861,6 +867,7 @@ def _catalog_from_slugs(slugs: list[str]) -> tuple[tuple[str, str], ...]:
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
     for slug in slugs:
+        slug = chat_canonical_cursor_model(slug)
         if _chat_cursor_model_slug_blocked(slug) or not _chat_cursor_family_ok(slug):
             continue
         if slug in seen:
@@ -902,6 +909,38 @@ def chat_cursor_model_label(slug: str) -> str:
     return chat_cursor_model_pretty_label(slug)
 
 
+async def _fetch_live_cursor_model_ids(*, force: bool = False) -> list[str]:
+    url = _fallback_base_url().rstrip("/") + "/models"
+    headers: dict[str, str] = {}
+    key = _fallback_api_key()
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    params = {"refresh": "1"} if force else None
+    timeout = httpx.Timeout(8.0)
+    http = await _get_fallback_http_client()
+    if http is not None:
+        response = await http.get(url, headers=headers, params=params, timeout=timeout)
+    else:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(url, headers=headers, params=params)
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        return []
+    raw = payload.get("data")
+    if not isinstance(raw, list):
+        return []
+    ids: list[str] = []
+    for item in raw:
+        if isinstance(item, dict):
+            sid = str(item.get("id") or "").strip()
+        else:
+            sid = str(getattr(item, "id", "") or "").strip()
+        if sid:
+            ids.append(sid)
+    return ids
+
+
 async def chat_cursor_refresh_live_catalog(*, force: bool = False) -> None:
     """Подтянуть composer/grok с Cursor bridge GET /models; при сбое оставить прошлый кэш."""
     global _CHAT_LIVE_CATALOG, _CHAT_LIVE_CATALOG_AT
@@ -917,26 +956,52 @@ async def chat_cursor_refresh_live_catalog(*, force: bool = False) -> None:
     if not _fallback_ready():
         return
     try:
-        client = await _cursor_openai_client()
-        listing = await client.models.list()
-        ids: list[str] = []
-        for item in getattr(listing, "data", None) or []:
-            sid = str(getattr(item, "id", "") or "").strip()
-            if sid:
-                ids.append(sid)
+        ids = await _fetch_live_cursor_model_ids(force=force)
         filtered = [s for s, _ in _catalog_from_slugs(ids)]
         if filtered:
             _CHAT_LIVE_CATALOG = filtered
             _CHAT_LIVE_CATALOG_AT = now
-            logger.info("chat cursor live catalog n=%s", len(filtered))
+            logger.info("chat cursor live catalog n=%s force=%s", len(filtered), force)
     except Exception:
-        logger.debug("chat cursor live catalog refresh failed", exc_info=True)
+        if force:
+            logger.warning("chat cursor live catalog refresh failed", exc_info=True)
+        else:
+            logger.debug("chat cursor live catalog refresh failed", exc_info=True)
+
+
+def _canonical_grok_low_slug(name: str) -> str:
+    """cursor-grok-4.6-low остается; 4.7+ (4.8, 5, 5.0, 5.5) → grok-…-low."""
+    matched = _GROK_LOW_RE.fullmatch(name)
+    if matched is None:
+        return name
+    ver = ".".join(str(int(part)) for part in matched.group(1).split("."))
+    parts = [int(part) for part in ver.split(".")]
+    major = parts[0]
+    minor = parts[1] if len(parts) > 1 else 0
+    if (major, minor) >= _GROK_BARE_PREFIX_FROM:
+        return f"grok-{ver}-low"
+    return f"cursor-grok-{ver}-low"
+
+
+def chat_canonical_cursor_model(slug: str) -> str:
+    """Клиентский slug → slug `cursor-agent --model` (префикс Grok по версии)."""
+    name = (slug or "").strip()
+    if _GROK_LOW_RE.fullmatch(name):
+        return _canonical_grok_low_slug(name)
+    return name
+
+
+def chat_cursor_grok_low_slug(slug: str) -> bool:
+    """True для cursor-grok-/grok- Low любой версии (4.6, 4.7, 4.8, 5, 5.5, ...)."""
+    return _GROK_LOW_RE.fullmatch((slug or "").strip()) is not None
 
 
 def chat_resolve_cursor_model(requested: str | None) -> str:
     allowed = {slug for slug, _ in chat_cursor_model_catalog()}
-    name = (requested or "").strip()
+    name = chat_canonical_cursor_model((requested or "").strip())
     if name and name in allowed:
+        return name
+    if name and chat_cursor_grok_low_slug(name) and not _chat_cursor_model_slug_blocked(name):
         return name
     default = chat_cursor_model_default()
     if default in allowed:
@@ -1086,7 +1151,27 @@ async def stream_chat_via_cursor(
     `on_delta(piece: str)` вызывается на каждый непустой фрагмент токена. Возвращает
     итоговую полную строку ответа (накопленную). Кидает RuntimeError, если fallback
     не сконфигурирован, или прокидывает исключение клиента OpenAI при сетевой ошибке.
+    Перед запросом обновляет каталог Composer/Grok с GET /v1/models (TTL);
+    при ошибке ответа сбрасывает кэш и тянет список заново.
     """
+    await chat_cursor_refresh_live_catalog()
+    try:
+        return await _stream_chat_via_cursor_inner(
+            messages,
+            on_delta=on_delta,
+            model=model,
+        )
+    except Exception:
+        await chat_cursor_refresh_live_catalog(force=True)
+        raise
+
+
+async def _stream_chat_via_cursor_inner(
+    messages: list[dict[str, str]],
+    *,
+    on_delta,
+    model: str | None = None,
+) -> str:
     client = await _cursor_openai_client()
     primary = chat_resolve_cursor_model(model)
     models_to_try = chat_cursor_model_try_chain(primary)

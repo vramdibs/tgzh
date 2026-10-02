@@ -569,6 +569,38 @@ def _normalize_chat_messages(req: ChatStreamRequest) -> list[dict]:
     return [{"role": "system", "content": system_text}, *history]
 
 
+def _http_exception_from_chat_fail(exc: BaseException) -> HTTPException:
+    """400/502 от Cursor-bridge, не пустой 200."""
+    status_code = 502
+    raw_status = getattr(exc, "status_code", None)
+    if isinstance(raw_status, int) and 400 <= raw_status <= 599:
+        status_code = raw_status
+    detail = ""
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        detail = str(body.get("detail") or body.get("error") or "")
+    elif isinstance(body, str):
+        detail = body
+    if not detail:
+        resp = getattr(exc, "response", None)
+        if resp is not None:
+            parsed: object | None = None
+            try:
+                parsed = resp.json()
+            except Exception:
+                parsed = None
+            if isinstance(parsed, dict):
+                detail = str(parsed.get("detail") or parsed.get("message") or "")
+            if not detail:
+                try:
+                    detail = (resp.text or "")[:500]
+                except Exception:
+                    detail = ""
+    if not detail:
+        detail = str(exc)[:500] or "chat backend failed"
+    return HTTPException(status_code=status_code, detail=detail[:500])
+
+
 @app.post("/chat/stream")
 async def chat_stream(req: ChatStreamRequest):
     """Стрим chat-ответа Cursor-bridge как **plain text** (поток токенов).
@@ -603,6 +635,7 @@ async def chat_stream(req: ChatStreamRequest):
     t0 = time.perf_counter()
     reset_completion_usage()
 
+    fail: dict[str, BaseException] = {}
     queue: asyncio.Queue[bytes | None] = asyncio.Queue()
 
     async def on_delta(piece: str) -> None:
@@ -625,15 +658,34 @@ async def chat_stream(req: ChatStreamRequest):
             _record_llm_spend(kind="chat", user_id=_form_telegram_user_id(req.user_id))
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as e:
             logger.exception("chat stream failed user_id=%s", req.user_id)
+            fail["exc"] = e
         finally:
             await queue.put(None)
 
     task = asyncio.create_task(runner())
+    try:
+        first = await queue.get()
+    except asyncio.CancelledError:
+        if not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await task
+        raise
+    if first is None:
+        if "exc" in fail:
+            raise _http_exception_from_chat_fail(fail["exc"])
+
+        async def _empty():
+            if False:
+                yield b""
+
+        return StreamingResponse(_empty(), media_type="text/plain; charset=utf-8")
 
     async def gen():
         try:
+            yield first
             while True:
                 item = await queue.get()
                 if item is None:

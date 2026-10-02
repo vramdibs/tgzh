@@ -6,10 +6,12 @@ import asyncio
 import os
 import tempfile
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
+from openai import APIStatusError
 
 import ai_checker
 import server as _server_mod
@@ -18,6 +20,7 @@ from server import (
     ChatMessageContentPart,
     ChatStreamRequest,
     _normalize_chat_messages,
+    app,
 )
 
 
@@ -309,7 +312,7 @@ def test_chat_cursor_default_catalog_includes_current_grok(monkeypatch: pytest.M
     assert slugs == [
         "composer-2.5",
         "cursor-grok-4.6-low",
-        "cursor-grok-4.7-low",
+        "grok-4.7-low",
     ]
     labels = [label for _, label in ai_checker.chat_cursor_model_catalog()]
     assert labels == ["Composer 2.5", "Grok 4.6", "Grok 4.7"]
@@ -317,8 +320,68 @@ def test_chat_cursor_default_catalog_includes_current_grok(monkeypatch: pytest.M
 
 def test_chat_cursor_pretty_label() -> None:
     assert ai_checker.chat_cursor_model_pretty_label("cursor-grok-4.7-low") == "Grok 4.7"
+    assert ai_checker.chat_cursor_model_pretty_label("grok-4.7-low") == "Grok 4.7"
     assert ai_checker.chat_cursor_model_pretty_label("grok-4.6") == "Grok 4.6"
     assert ai_checker.chat_cursor_model_pretty_label("cursor-grok-4.8-low") == "Grok 4.8"
+    assert ai_checker.chat_cursor_model_pretty_label("grok-5-low") == "Grok 5"
+    assert ai_checker.chat_cursor_model_pretty_label("grok-5.5-low") == "Grok 5.5"
+
+
+def test_chat_canonical_grok_low_prefix_by_version() -> None:
+    assert ai_checker.chat_canonical_cursor_model("cursor-grok-4.6-low") == "cursor-grok-4.6-low"
+    assert ai_checker.chat_canonical_cursor_model("grok-4.6-low") == "cursor-grok-4.6-low"
+    assert ai_checker.chat_canonical_cursor_model("cursor-grok-4.7-low") == "grok-4.7-low"
+    assert ai_checker.chat_canonical_cursor_model("cursor-grok-4.8-low") == "grok-4.8-low"
+    assert ai_checker.chat_canonical_cursor_model("grok-4.8-low") == "grok-4.8-low"
+    assert ai_checker.chat_canonical_cursor_model("cursor-grok-5.0-low") == "grok-5.0-low"
+    assert ai_checker.chat_canonical_cursor_model("cursor-grok-5-low") == "grok-5-low"
+    assert ai_checker.chat_canonical_cursor_model("grok-5.5-low") == "grok-5.5-low"
+    assert ai_checker.chat_canonical_cursor_model("composer-2.5") == "composer-2.5"
+
+
+def test_chat_resolve_keeps_grok_xy_low_outside_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CHAT_CURSOR_MODELS", "composer-2.5")
+    ai_checker._CHAT_LIVE_CATALOG = None
+    assert ai_checker.chat_resolve_cursor_model("cursor-grok-4.8-low") == "grok-4.8-low"
+    assert ai_checker.chat_resolve_cursor_model("cursor-grok-4.7-low") == "grok-4.7-low"
+    assert ai_checker.chat_resolve_cursor_model("grok-4.7-low") == "grok-4.7-low"
+    assert ai_checker.chat_resolve_cursor_model("grok-4.8-low") == "grok-4.8-low"
+    assert ai_checker.chat_resolve_cursor_model("grok-5-low") == "grok-5-low"
+    assert ai_checker.chat_resolve_cursor_model("cursor-grok-5.5-low") == "grok-5.5-low"
+    assert ai_checker.chat_resolve_cursor_model("cursor-grok-4.6-low") == "cursor-grok-4.6-low"
+    assert ai_checker.chat_resolve_cursor_model("cursor-grok-4.7-high") == "composer-2.5"
+    assert ai_checker.chat_resolve_cursor_model("grok-4.7") == "composer-2.5"
+    assert ai_checker.chat_cursor_grok_low_slug("cursor-grok-4.7-low")
+    assert ai_checker.chat_cursor_grok_low_slug("grok-4.7-low")
+    assert ai_checker.chat_cursor_grok_low_slug("grok-5-low")
+    assert not ai_checker.chat_cursor_grok_low_slug("cursor-grok-4.7-high")
+    assert not ai_checker.chat_cursor_grok_low_slug("grok-4.7-high")
+
+
+def test_chat_stream_bridge_400_is_not_empty_200(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _boom(*_a: object, **_k: object) -> str:
+        resp = MagicMock()
+        resp.status_code = 400
+        resp.text = "model 'cursor-grok-4.7-low' is not in BRIDGE_OPENAI_ALLOWED_MODELS"
+        resp.json.return_value = {
+            "detail": "model 'cursor-grok-4.7-low' is not in BRIDGE_OPENAI_ALLOWED_MODELS",
+        }
+        raise APIStatusError(
+            message="Bad Request",
+            response=resp,
+            body={"detail": "model 'cursor-grok-4.7-low' is not in BRIDGE_OPENAI_ALLOWED_MODELS"},
+        )
+
+    monkeypatch.setattr("server.stream_chat_via_cursor", _boom)
+    client = TestClient(app)
+    r = client.post(
+        "/chat/stream",
+        json={"user_id": 1, "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert r.status_code == 400
+    assert "BRIDGE_OPENAI_ALLOWED_MODELS" in r.text
 
 
 @pytest.mark.asyncio
@@ -331,38 +394,25 @@ async def test_chat_cursor_live_catalog_replaces_builtin(
     ai_checker._CHAT_LIVE_CATALOG = None
     ai_checker._CHAT_LIVE_CATALOG_AT = 0.0
 
-    class _Model:
-        def __init__(self, id: str) -> None:
-            self.id = id
-
-    class _Listing:
-        data = [
-            _Model("composer-2.5"),
-            _Model("composer-2.5-fast"),
-            _Model("cursor-grok-4.7-low"),
-            _Model("gpt-5"),
+    async def _ids(*, force: bool = False) -> list[str]:
+        return [
+            "composer-2.5",
+            "composer-2.5-fast",
+            "cursor-grok-4.7-low",
+            "gpt-5",
         ]
 
-    class _Client:
-        class models:
-            @staticmethod
-            async def list() -> _Listing:
-                return _Listing()
-
-    async def _client() -> _Client:
-        return _Client()
-
     monkeypatch.setattr(ai_checker, "_fallback_ready", lambda: True)
-    monkeypatch.setattr(ai_checker, "_cursor_openai_client", _client)
+    monkeypatch.setattr(ai_checker, "_fetch_live_cursor_model_ids", _ids)
     await ai_checker.chat_cursor_refresh_live_catalog(force=True)
     slugs = [slug for slug, _ in ai_checker.chat_cursor_model_catalog()]
-    assert slugs == ["composer-2.5", "cursor-grok-4.7-low"]
+    assert slugs == ["composer-2.5", "grok-4.7-low"]
     assert "cursor-grok-4.6-low" not in slugs
 
-    async def _boom() -> None:
+    async def _boom(*, force: bool = False) -> list[str]:
         raise RuntimeError("bridge down")
 
-    monkeypatch.setattr(ai_checker, "_cursor_openai_client", _boom)
+    monkeypatch.setattr(ai_checker, "_fetch_live_cursor_model_ids", _boom)
     await ai_checker.chat_cursor_refresh_live_catalog(force=True)
     slugs_after = [slug for slug, _ in ai_checker.chat_cursor_model_catalog()]
     assert slugs_after == slugs
@@ -374,6 +424,7 @@ async def test_stream_chat_model_fallback_on_unavailable(
 ) -> None:
     monkeypatch.setenv("VLLM_FALLBACK_ENABLE", "1")
     monkeypatch.setenv("VLLM_FALLBACK_BASE_URL", "http://bridge:8787/v1")
+    monkeypatch.setattr(ai_checker, "chat_cursor_refresh_live_catalog", AsyncMock())
 
     calls: list[str] = []
     from openai import APIStatusError
@@ -405,4 +456,56 @@ async def test_stream_chat_model_fallback_on_unavailable(
         )
     assert out == "ok"
     assert calls == ["composer-2.5", "cursor-grok-4.6-low"]
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_refreshes_catalog_on_call_and_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VLLM_FALLBACK_ENABLE", "1")
+    monkeypatch.setenv("VLLM_FALLBACK_BASE_URL", "http://bridge:8787/v1")
+    flags: list[bool] = []
+
+    async def _refresh(*, force: bool = False) -> None:
+        flags.append(force)
+
+    async def _ok(client, model, messages, *, on_delta):
+        await on_delta("ok")
+        return "ok"
+
+    monkeypatch.setattr(ai_checker, "chat_cursor_refresh_live_catalog", _refresh)
+    with (
+        patch(
+            "ai_checker._cursor_openai_client",
+            AsyncMock(return_value=MagicMock()),
+        ),
+        patch("ai_checker._stream_chat_model_once", side_effect=_ok),
+    ):
+        out = await ai_checker.stream_chat_via_cursor(
+            [{"role": "user", "content": "hi"}],
+            on_delta=AsyncMock(),
+            model="composer-2.5",
+        )
+    assert out == "ok"
+    assert flags == [False]
+
+    flags.clear()
+
+    async def _boom(*_a, **_k):
+        raise RuntimeError("cursor down")
+
+    with (
+        patch(
+            "ai_checker._cursor_openai_client",
+            AsyncMock(return_value=MagicMock()),
+        ),
+        patch("ai_checker._stream_chat_model_once", side_effect=_boom),
+    ):
+        with pytest.raises(RuntimeError, match="cursor down"):
+            await ai_checker.stream_chat_via_cursor(
+                [{"role": "user", "content": "hi"}],
+                on_delta=AsyncMock(),
+                model="composer-2.5",
+            )
+    assert flags == [False, True]
 
