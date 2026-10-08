@@ -18,15 +18,17 @@ def _flatten(markup) -> list[tuple[str, str]]:
 
 
 def test_chat_menu_active_contains_expected_buttons() -> None:
-    flat = _flatten(bot._chat_menu_keyboard(active=True))
+    markup = bot._chat_menu_keyboard(active=True)
+    assert markup is not None
+    flat = _flatten(markup)
     callbacks = [c for _, c in flat]
-    assert "chat:new" in callbacks
     assert "chat:list" in callbacks
-    assert "chat:purge" in callbacks
     assert "chat:model" in callbacks
     assert "chat:imagine" in callbacks
-    assert "chat:logout" in callbacks
-    assert "chat:back" in callbacks
+    assert "chat:purge" not in callbacks
+    assert "chat:new" not in callbacks
+    assert "chat:logout" not in callbacks
+    assert "chat:back" not in callbacks
     # Долговременная память удалена — её кнопок в меню быть не должно.
     assert not any(c.startswith("chat:mem_") for c in callbacks)
     # Лимит проброшен в подпись (10 на пользователя по умолчанию).
@@ -45,9 +47,8 @@ def test_chat_model_keyboard_lists_available_composer_grok(
     assert labels == ["Composer 2.5 ✓", "Grok 4.6", "Grok 4.7"]
 
 
-def test_chat_menu_inactive_only_back_button() -> None:
-    flat = _flatten(bot._chat_menu_keyboard(active=False))
-    assert flat == [("Вернуться к проверке ДЗ", "chat:back")]
+def test_chat_menu_inactive_has_no_buttons() -> None:
+    assert bot._chat_menu_keyboard(active=False) is None
 
 
 def test_chat_dialog_list_keyboard_includes_open_buttons_and_back() -> None:
@@ -63,6 +64,7 @@ def test_chat_dialog_list_keyboard_includes_open_buttons_and_back() -> None:
     callbacks = [c for _, c in flat]
     assert "chat:open:1" in callbacks
     assert "chat:open:2" in callbacks
+    assert "chat:purge" in callbacks
     assert callbacks[-1] == "chat:menu"
 
 

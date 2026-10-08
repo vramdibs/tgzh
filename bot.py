@@ -1822,38 +1822,22 @@ def _chat_menu_keyboard(
     active: bool,
     *,
     model_slug: str | None = None,
-) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    if active:
-        rows.append(
-            [InlineKeyboardButton("Новый диалог", callback_data="chat:new")],
-        )
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    f"Мои чаты ({user_storage.CHAT_DIALOG_HISTORY_LIMIT} последних)",
-                    callback_data="chat:list",
-                ),
-            ],
-        )
-        rows.append(
-            [InlineKeyboardButton("Мои чаты — очистить", callback_data="chat:purge")],
-        )
-        model_label = ai_checker.chat_cursor_model_label(
-            model_slug or ai_checker.chat_cursor_model_default(),
-        )
-        rows.append(
-            [InlineKeyboardButton(f"Модель: {model_label}", callback_data="chat:model")],
-        )
-        rows.append(
-            [InlineKeyboardButton("Сгенерировать фото", callback_data="chat:imagine")],
-        )
-        rows.append(
-            [InlineKeyboardButton("Выйти из чата", callback_data="chat:logout")],
-        )
-    rows.append(
-        [InlineKeyboardButton("Вернуться к проверке ДЗ", callback_data="chat:back")],
+) -> InlineKeyboardMarkup | None:
+    if not active:
+        return None
+    model_label = ai_checker.chat_cursor_model_label(
+        model_slug or ai_checker.chat_cursor_model_default(),
     )
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                f"Мои чаты ({user_storage.CHAT_DIALOG_HISTORY_LIMIT} последних)",
+                callback_data="chat:list",
+            ),
+        ],
+        [InlineKeyboardButton(f"Модель: {model_label}", callback_data="chat:model")],
+        [InlineKeyboardButton("Сгенерировать фото", callback_data="chat:imagine")],
+    ]
     return InlineKeyboardMarkup(rows)
 
 
@@ -1927,9 +1911,18 @@ def _chat_dialog_list_keyboard(
             [InlineKeyboardButton(label, callback_data=f"chat:open:{d.dialog_id}")],
         )
     rows.append(
+        [InlineKeyboardButton("Мои чаты — очистить", callback_data="chat:purge")],
+    )
+    rows.append(
         [InlineKeyboardButton("Назад в меню чата", callback_data="chat:menu")],
     )
     return InlineKeyboardMarkup(rows)
+
+
+def _chat_dialog_list_empty_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Назад в меню чата", callback_data="chat:menu")]],
+    )
 
 
 def _format_chat_dialog_when(updated_at_iso: str) -> str:
@@ -1962,28 +1955,20 @@ async def _send_chat_menu(
         user_id,
     )
     active = until is not None
+    model_slug = await asyncio.to_thread(
+        user_storage.chat_model_get, USER_DB_PATH, user_id,
+    )
     if active:
-        body = (
-            "<b>ИИ-ассистент Cursor.</b> Можно задавать вопросы прямо здесь — "
-            "ответ приходит потоково. История текущего диалога живёт в памяти бота; "
-            "прошлые диалоги (до "
-            f"{user_storage.CHAT_DIALOG_HISTORY_LIMIT}) доступны через «Мои чаты».\n\n"
-            f"{_chat_session_status_html(until)}"
-        )
+        model_label = ai_checker.chat_cursor_model_label(model_slug)
+        body = f"Модель: <b>{_h(model_label)}</b> (reasoning Low, без Fast)."
     else:
         body = (
             "<b>ИИ-ассистент Cursor.</b> Доступ закрыт паролем. "
             "Введи пароль одним сообщением, чтобы открыть диалог "
             f"на {user_storage.CHAT_SESSION_TTL_DAYS} суток."
         )
-    if extra_html:
-        body = body + "\n\n" + extra_html
-    model_slug = await asyncio.to_thread(
-        user_storage.chat_model_get, USER_DB_PATH, user_id,
-    )
-    if active:
-        model_label = ai_checker.chat_cursor_model_label(model_slug)
-        body = body + f"\n\nМодель: <b>{_h(model_label)}</b> (reasoning Low, без Fast)."
+        if extra_html:
+            body = body + "\n\n" + extra_html
     await bot.send_message(
         chat_id,
         body,
@@ -2139,7 +2124,7 @@ async def _handle_chat_callback(
                 await query.edit_message_text(
                     "Сохранённых диалогов пока нет — начни любую переписку, "
                     "и она появится здесь.",
-                    reply_markup=_chat_menu_keyboard_for_user(True, user_id),
+                    reply_markup=_chat_dialog_list_empty_keyboard(),
                     parse_mode=ParseMode.HTML,
                 )
             return
