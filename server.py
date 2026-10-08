@@ -9,13 +9,14 @@ from contextlib import asynccontextmanager, suppress
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 load_dotenv()
 
 from logging_config import clip_check_log_body, setup_logging
 from pydantic import BaseModel, Field
 
+import image_gen
 import preocr_client
 import tgzh_metrics
 from motok_jwt import HubJwtError, verify_homework_jwt
@@ -698,6 +699,61 @@ async def chat_stream(req: ChatStreamRequest):
                     await task
 
     return StreamingResponse(gen(), media_type="text/plain; charset=utf-8")
+
+
+class ImageGenerateRequest(BaseModel):
+    user_id: int = 0
+    prompt: str
+
+
+@app.post("/image/generate")
+async def image_generate(req: ImageGenerateRequest) -> Response:
+    """Сгенерировать одну картинку по текстовому промпту.
+
+    OpenAI-совместимый бэкенд (`IMAGE_GEN_*`). Возвращает PNG-байты (`image/png`).
+    Бот вызывает этот эндпоинт из `/chat` (`/imagine` или кнопка), пробрасывает
+    результат в Telegram через `send_photo`.
+    """
+    if not image_gen.is_image_gen_configured():
+        raise HTTPException(
+            503,
+            "image generation backend not configured (set IMAGE_GEN_BASE_URL/API_KEY)",
+        )
+    prompt = (req.prompt or "").strip()
+    if not prompt:
+        raise HTTPException(400, "prompt is empty")
+    if len(prompt) > image_gen.PROMPT_MAX_LEN:
+        raise HTTPException(400, f"prompt longer than {image_gen.PROMPT_MAX_LEN} chars")
+
+    t0 = time.perf_counter()
+    logger.info(
+        "image_generate start user_id=%s prompt_chars=%s model=%s size=%s",
+        req.user_id,
+        len(prompt),
+        image_gen.image_gen_model(),
+        image_gen.image_gen_size(),
+    )
+    try:
+        png_bytes = await image_gen.generate_image(prompt)
+    except image_gen.ImageGenBadPrompt as e:
+        raise HTTPException(400, str(e)) from e
+    except image_gen.ImageGenNotConfigured as e:
+        raise HTTPException(503, str(e)) from e
+    except asyncio.TimeoutError as e:
+        logger.warning("image_generate timeout user_id=%s", req.user_id)
+        raise HTTPException(504, "image generation timeout") from e
+    except Exception as e:
+        logger.exception("image_generate upstream failure user_id=%s", req.user_id)
+        raise HTTPException(502, f"image backend error: {e}") from e
+
+    elapsed = time.perf_counter() - t0
+    logger.info(
+        "image_generate done user_id=%s elapsed_s=%.2f bytes=%s",
+        req.user_id,
+        elapsed,
+        len(png_bytes),
+    )
+    return Response(content=png_bytes, media_type="image/png")
 
 
 @app.get("/health")

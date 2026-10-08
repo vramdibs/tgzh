@@ -17,8 +17,15 @@ def test_bot_commands_list_menu_descriptions() -> None:
     assert by_name["start"] == "Проверка по ГДЗ"
     assert by_name["shot"] == "Проверка по фото"
     assert by_name["chat"] == "Чат-бот ИИ"
+    assert by_name["imagine"] == "Сгенерировать фото"
     assert by_name["textbook"] == "Сменить класс или учебник"
-    assert [c.command for c in cmds] == ["start", "shot", "chat", "textbook"]
+    assert [c.command for c in cmds] == [
+        "start",
+        "shot",
+        "chat",
+        "imagine",
+        "textbook",
+    ]
 
 
 @pytest.mark.asyncio

@@ -166,6 +166,35 @@ def test_photo_check_requires_images(client: TestClient) -> None:
     assert r.status_code == 422
 
 
+def test_image_generate_returns_503_when_not_configured(client: TestClient) -> None:
+    r = client.post("/image/generate", json={"user_id": 1, "prompt": "cat"})
+    assert r.status_code == 503
+    assert "image generation backend not configured" in (r.json().get("detail") or "")
+
+
+def test_image_generate_rejects_empty_prompt(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    r = client.post("/image/generate", json={"user_id": 1, "prompt": "   "})
+    assert r.status_code == 400
+
+
+def test_image_generate_rejects_too_long_prompt(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    import image_gen
+
+    r = client.post(
+        "/image/generate",
+        json={"user_id": 1, "prompt": "a" * (image_gen.PROMPT_MAX_LEN + 1)},
+    )
+    assert r.status_code == 400
+
+
 def test_photo_check_disabled(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
     monkeypatch.setenv("PHOTO_CHECK_ENABLE", "0")
     jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 100

@@ -60,6 +60,11 @@ def _clear_env_for_unit_tests(monkeypatch: pytest.MonkeyPatch) -> None:
         # из юнитов; тесты, которым preocr нужен, включают переменную сами или мокают
         # `preocr_client.fetch_preocr_block`.
         "PREOCR_URL",
+        "IMAGE_GEN_BASE_URL",
+        "IMAGE_GEN_API_KEY",
+        "IMAGE_GEN_MODEL",
+        "IMAGE_GEN_SIZE",
+        "IMAGE_GEN_TIMEOUT_SEC",
         "CHAT_SYSTEM_PROMPT",
         # STT_* — у нас опциональный STT для голосовых; в юнит-тестах не должны
         # случайно стучаться в реальный Whisper-эндпоинт через dev-`.env`.

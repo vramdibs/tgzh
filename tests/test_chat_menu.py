@@ -24,6 +24,7 @@ def test_chat_menu_active_contains_expected_buttons() -> None:
     assert "chat:list" in callbacks
     assert "chat:purge" in callbacks
     assert "chat:model" in callbacks
+    assert "chat:imagine" in callbacks
     assert "chat:logout" in callbacks
     assert "chat:back" in callbacks
     # Долговременная память удалена — её кнопок в меню быть не должно.

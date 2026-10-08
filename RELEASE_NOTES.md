@@ -4,6 +4,8 @@
 
 ### Added
 
+- **Генерация изображений в `/chat`**: кнопка **«Сгенерировать фото»**, команда **`/imagine`** (в меню Telegram под **`/chat`**), эндпоинт **`POST /image/generate`**, модуль **`image_gen.py`**, env **`IMAGE_GEN_*`**. Пример промпта в подсказке и кнопка **«Сгенерировать по примеру»** (`chat:imagine:example`)
+
 - **Учет LLM в `/stats` и Grafana**: запросы, токены (вход/выход) и уникальные люди. Таблицы **`bot_llm_usage_by_year`**, **`bot_llm_user_year`** (миграция Alembic **`015_bot_llm_usage`**). Метрики Prometheus **`tgzh_llm_requests_total`**, **`tgzh_llm_tokens_total`**, **`tgzh_llm_users`**. Дашборд **`grafana/dashboards/tgzh-overview.json`**, UID **`tgzh-overview`**
 
 - **`/shot` - проверка по снимкам без OCR и ГДЗ** (в меню под `/start`; API `POST /photo/check`): модуль **`photo_check.py`**. Multimodal Composer → Grok (bridge) или Qwen VL. Env **`PHOTO_CHECK_*`**, **`BOT_PHOTO_CHECK_TIMEOUT_SEC`**. Тесты - **`tests/test_photo_check.py`**, **`tests/test_photo_bot.py`**, **`tests/test_server.py`**
