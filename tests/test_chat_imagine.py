@@ -243,7 +243,16 @@ def test_chat_menu_keyboard_inactive_has_no_imagine() -> None:
     assert "chat:imagine" not in callbacks
 
 
-def test_chat_imagine_wait_keyboard_includes_example_button() -> None:
+def test_chat_imagine_choice_keyboard_has_example_and_custom() -> None:
+    kb = bot._chat_imagine_choice_keyboard()
+    flat = [b for row in kb.inline_keyboard for b in row]
+    callbacks = [b.callback_data for b in flat]
+    assert "chat:imagine:example" in callbacks
+    assert "chat:imagine:custom" in callbacks
+    assert "chat:menu" in callbacks
+
+
+def test_chat_imagine_wait_keyboard_includes_example_and_back() -> None:
     kb = bot._chat_imagine_wait_keyboard(1)
     flat = [b for row in kb.inline_keyboard for b in row]
     callbacks = [b.callback_data for b in flat]

@@ -1857,27 +1857,55 @@ def _chat_menu_keyboard(
     return InlineKeyboardMarkup(rows)
 
 
+def _chat_imagine_choice_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "По примеру (купе поезда)",
+                    callback_data="chat:imagine:example",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "Свой промпт",
+                    callback_data="chat:imagine:custom",
+                ),
+            ],
+            [InlineKeyboardButton("Назад в меню чата", callback_data="chat:menu")],
+        ],
+    )
+
+
+def _chat_imagine_choice_help_html() -> str:
+    return (
+        "<b>Сгенерировать фото</b>\n\n"
+        "Выбери вариант:\n"
+        "• <b>По примеру</b> — готовый промпт (юноша в купе поезда, пейзаж за окном)\n"
+        "• <b>Свой промпт</b> — опишешь картинку одним сообщением "
+        f"(до {image_gen.PROMPT_MAX_LEN} символов)\n\n"
+        "Команда <code>/imagine</code> без текста открывает это же меню."
+    )
+
+
 def _chat_imagine_wait_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    menu = _chat_menu_keyboard_for_user(True, user_id)
     rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
-                "Сгенерировать по примеру",
+                "По примеру (купе поезда)",
                 callback_data="chat:imagine:example",
             ),
         ],
+        [InlineKeyboardButton("Назад к выбору", callback_data="chat:imagine")],
     ]
-    rows.extend(menu.inline_keyboard)
+    rows.extend(_chat_menu_keyboard_for_user(True, user_id).inline_keyboard)
     return InlineKeyboardMarkup(rows)
 
 
-def _chat_imagine_prompt_help_html() -> str:
-    example = _h(_CHAT_IMAGINE_EXAMPLE_PROMPT)
+def _chat_imagine_custom_prompt_help_html() -> str:
     return (
-        "<b>Опиши, что нарисовать</b> — пришли промпт одним сообщением "
-        f"(до {image_gen.PROMPT_MAX_LEN} символов). "
-        "Команда <code>/imagine</code> работает так же.\n\n"
-        f"<b>Пример промпта:</b>\n<code>{example}</code>"
+        "<b>Свой промпт</b> — пришли описание картинки одним сообщением "
+        f"(до {image_gen.PROMPT_MAX_LEN} символов)."
     )
 
 
@@ -2199,6 +2227,19 @@ async def _handle_chat_callback(
                 prompt=_CHAT_IMAGINE_EXAMPLE_PROMPT,
             )
             return
+        if sub == "custom":
+            if not _is_image_gen_enabled():
+                await _answer_query_once(query, "Генерация изображений не настроена.")
+                return
+            context.user_data[_CHAT_IMG_PROMPT_WAIT] = True
+            await _answer_query_once(query, "Жду описание картинки.")
+            with suppress(BadRequest, Exception):
+                await query.edit_message_text(
+                    _chat_imagine_custom_prompt_help_html(),
+                    reply_markup=_chat_imagine_wait_keyboard(user_id),
+                    parse_mode=ParseMode.HTML,
+                )
+            return
         if not _is_image_gen_enabled():
             await _answer_query_once(query, "Генерация изображений не настроена.")
             with suppress(BadRequest, Exception):
@@ -2210,12 +2251,12 @@ async def _handle_chat_callback(
                     parse_mode=ParseMode.HTML,
                 )
             return
-        context.user_data[_CHAT_IMG_PROMPT_WAIT] = True
-        await _answer_query_once(query, "Опиши, что нарисовать.")
+        context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
+        await _answer_query_once(query, "Выбери вариант генерации.")
         with suppress(BadRequest, Exception):
             await query.edit_message_text(
-                _chat_imagine_prompt_help_html(),
-                reply_markup=_chat_imagine_wait_keyboard(user_id),
+                _chat_imagine_choice_help_html(),
+                reply_markup=_chat_imagine_choice_keyboard(),
                 parse_mode=ParseMode.HTML,
             )
         return
@@ -4223,10 +4264,10 @@ async def imagine_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     parts = raw.split(maxsplit=1)
     prompt = parts[1].strip() if len(parts) > 1 else ""
     if not prompt:
-        context.user_data[_CHAT_IMG_PROMPT_WAIT] = True
+        context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
         await update.message.reply_text(
-            _chat_imagine_prompt_help_html(),
-            reply_markup=_chat_imagine_wait_keyboard(user_id),
+            _chat_imagine_choice_help_html(),
+            reply_markup=_chat_imagine_choice_keyboard(),
             parse_mode=ParseMode.HTML,
         )
         return
