@@ -5,6 +5,7 @@
 ### Added
 
 - **Генерация изображений в `/chat`**: кнопка **«Сгенерировать фото»**, команда **`/imagine`** (в меню Telegram под **`/chat`**), эндпоинт **`POST /image/generate`**, модуль **`image_gen.py`**, env **`IMAGE_GEN_*`**. Пример промпта в подсказке и кнопка **«Сгенерировать по примеру»** (`chat:imagine:example`)
+- **Интеграция images с cursor-bridge**: в **`docs/integration.md`** описан контракт **`POST /v1/images/generations`** на bridge (Composer); **`IMAGE_GEN_*`** может указывать на тот же URL, что fallback LLM
 
 - **Учет LLM в `/stats` и Grafana**: запросы, токены (вход/выход) и уникальные люди. Таблицы **`bot_llm_usage_by_year`**, **`bot_llm_user_year`** (миграция Alembic **`015_bot_llm_usage`**). Метрики Prometheus **`tgzh_llm_requests_total`**, **`tgzh_llm_tokens_total`**, **`tgzh_llm_users`**. Дашборд **`grafana/dashboards/tgzh-overview.json`**, UID **`tgzh-overview`**
 

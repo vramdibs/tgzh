@@ -102,8 +102,36 @@ VLLM_FALLBACK_MODEL=composer-2.5
 | `CURSOR_AGENT_BIN` | Путь к бинарнику (`cursor-agent` / `agent`) |
 | `CURSOR_OPENAI_WORKSPACE` | Sandbox для OpenAI-эндпоинта (default `/tmp/cursor-openai-sandbox`) |
 | `BRIDGE_PORT` | Порт HTTP (default 8787) |
+| `BRIDGE_IMAGE_CURSOR_MODEL` | Модель Composer для `POST /v1/images/generations` (для `model=auto` в tgzh) |
+| `BRIDGE_IMAGE_TIMEOUT_SEC` | Таймаут одной генерации картинки (default 180) |
+| `BRIDGE_IMAGE_ALLOWED_MODELS` | Allowlist поля `model` для images (default `auto,composer-2,composer-2.5`) |
 
 После смены `CURSOR_API_KEY`: `systemctl --user restart discourse-cursor-bridge`.
+
+### Генерация изображений (`/v1/images/generations`)
+
+tgzh `/imagine` и кнопка «Сгенерировать фото» вызывают `POST /image/generate` на сервере, тот - OpenAI `POST /v1/images/generations` на bridge (не отдельный OpenAI API key на стороне tgzh).
+
+На стороне tgzh (`.env`):
+
+```env
+IMAGE_GEN_BASE_URL=http://host.docker.internal:8787/v1
+IMAGE_GEN_API_KEY=<тот же VLLM_FALLBACK_API_KEY / BRIDGE_OPENAI_API_KEY>
+IMAGE_GEN_MODEL=auto
+IMAGE_GEN_SIZE=1024x1024
+IMAGE_GEN_TIMEOUT_SEC=180
+```
+
+На bridge картинка создается через headless `cursor-agent` и инструмент GenerateImage (ADR-009 в репозитории bridge). Ответ - `data[0].b64_json`.
+
+Smoke:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8787/v1/images/generations \
+  -H "Authorization: Bearer $BRIDGE_OPENAI_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"auto","prompt":"a red circle","size":"1024x1024"}'
+```
 
 ### Ограничения bridge
 
