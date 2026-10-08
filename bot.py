@@ -2026,6 +2026,15 @@ def _activate_chat_session_ram(context: ContextTypes.DEFAULT_TYPE, *, fresh: boo
         context.user_data.pop(_CHAT_DIALOG_ID, None)
 
 
+async def _ensure_chat_session_for_user(
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+) -> None:
+    """UPSERT сессии /chat в БД и RAM без отдельного приветственного сообщения."""
+    await asyncio.to_thread(user_storage.chat_session_login, USER_DB_PATH, user_id)
+    _activate_chat_session_ram(context, fresh=False)
+
+
 async def _try_chat_password_from_text(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -4239,30 +4248,14 @@ async def _handle_chat_imagine_request(
 
 
 async def imagine_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """`/imagine <prompt>` — сгенерировать картинку (только в активном /chat)."""
+    """`/imagine` — меню или генерация; сессию /chat поднимаем сами, без /chat вручную."""
     if not update.message or not update.effective_user or not update.effective_chat:
+        return
+    if await _reply_if_blocked_cmd(update, context):
         return
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
-    if not context.user_data.get(_CHAT_ACTIVE):
-        await update.message.reply_text(
-            "Команда /imagine доступна только из активного /chat.",
-        )
-        return
-    until = await asyncio.to_thread(
-        user_storage.chat_session_active_until,
-        USER_DB_PATH,
-        user_id,
-    )
-    if until is None:
-        context.user_data.pop(_CHAT_ACTIVE, None)
-        context.user_data.pop(_CHAT_HISTORY, None)
-        context.user_data.pop(_CHAT_DIALOG_ID, None)
-        context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
-        await update.message.reply_text(
-            "Сессия чата истекла. Открой её заново через /chat.",
-        )
-        return
+    await _ensure_chat_session_for_user(context, user_id)
     raw = (update.message.text or "").strip()
     parts = raw.split(maxsplit=1)
     prompt = parts[1].strip() if len(parts) > 1 else ""

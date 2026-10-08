@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import bot
 import image_gen
@@ -67,9 +67,21 @@ class _FakeMessage:
         self.replies.append(text)
 
 
+class _FakeUser:
+    def __init__(self, user_id: int = 42) -> None:
+        self.id = user_id
+
+
+class _FakeChat:
+    def __init__(self, chat_id: int = 100) -> None:
+        self.id = chat_id
+
+
 class _FakeUpdate:
     def __init__(self, text: str = "") -> None:
         self.message = _FakeMessage(text)
+        self.effective_user = _FakeUser()
+        self.effective_chat = _FakeChat()
 
 
 def test_is_image_gen_enabled_reflects_env(
@@ -270,3 +282,20 @@ def test_chat_imagine_choice_help_shows_copyable_example_prompt() -> None:
     assert "<pre>" in html
     assert "купе поезда" in html
     assert bot._CHAT_IMAGINE_EXAMPLE_PROMPT.split()[0] in html
+
+
+def test_imagine_cmd_without_active_chat_opens_choice_menu(monkeypatch) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    ctx = _FakeContext()
+    assert bot._CHAT_ACTIVE not in ctx.user_data
+    update = _FakeUpdate("/imagine")
+    with (
+        patch("bot._reply_if_blocked_cmd", new=AsyncMock(return_value=False)),
+        patch("bot.user_storage.chat_session_login", lambda *a, **k: None),
+    ):
+        asyncio.run(bot.imagine_cmd(update, ctx))
+    assert ctx.user_data.get(bot._CHAT_ACTIVE) is True
+    assert update.message.replies
+    assert "Сгенерировать фото" in update.message.replies[0]
+    assert not any("только из активного" in r for r in update.message.replies)
