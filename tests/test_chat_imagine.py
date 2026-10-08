@@ -263,3 +263,10 @@ def test_chat_imagine_wait_keyboard_includes_example_and_back() -> None:
 def test_chat_imagine_example_prompt_constant_non_empty() -> None:
     assert len(bot._CHAT_IMAGINE_EXAMPLE_PROMPT) > 50
     assert "поезд" in bot._CHAT_IMAGINE_EXAMPLE_PROMPT.lower()
+
+
+def test_chat_imagine_choice_help_shows_copyable_example_prompt() -> None:
+    html = bot._chat_imagine_choice_help_html()
+    assert "<pre>" in html
+    assert "купе поезда" in html
+    assert bot._CHAT_IMAGINE_EXAMPLE_PROMPT.split()[0] in html

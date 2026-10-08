@@ -1878,12 +1878,15 @@ def _chat_imagine_choice_keyboard() -> InlineKeyboardMarkup:
 
 
 def _chat_imagine_choice_help_html() -> str:
+    example = _h(_CHAT_IMAGINE_EXAMPLE_PROMPT)
     return (
         "<b>Сгенерировать фото</b>\n\n"
         "Выбери вариант:\n"
-        "• <b>По примеру</b> — готовый промпт (юноша в купе поезда, пейзаж за окном)\n"
+        "• <b>По примеру</b> — кнопка ниже сразу запустит генерацию\n"
         "• <b>Свой промпт</b> — опишешь картинку одним сообщением "
         f"(до {image_gen.PROMPT_MAX_LEN} символов)\n\n"
+        "<b>Текст примера</b> (можно скопировать):\n"
+        f"<pre>{example}</pre>\n"
         "Команда <code>/imagine</code> без текста открывает это же меню."
     )
 
