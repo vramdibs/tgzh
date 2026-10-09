@@ -22,6 +22,19 @@ def test_extract_plain_text() -> None:
     assert "тариф" in out
 
 
+def test_pdf_quality_weak_tariff_fragments() -> None:
+    weak = "700, 200, 69, 199, 229, 2,50, 500, 326, 150"
+    strong = (
+        "Тариф МТС Super: абонплата 700 руб, 500 минут, 50 ГБ интернета, "
+        "расшифровка звонков в приложении."
+    )
+    assert chat_documents.pdf_text_quality_score(weak) < chat_documents.pdf_text_quality_score(
+        strong,
+    )
+    assert chat_documents.pdf_text_looks_weak(weak)
+    assert not chat_documents.pdf_text_looks_weak(strong)
+
+
 def test_compose_two_files_with_markers() -> None:
     files = [
         chat_documents.ChatFileExtract("a.pdf", "тариф A"),

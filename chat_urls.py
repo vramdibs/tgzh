@@ -199,12 +199,20 @@ async def fetch_url_text(
         data = resp.content or b""
         if len(data) > max_b:
             data = data[:max_b]
-        text = await asyncio.to_thread(
-            _response_to_text,
-            data,
-            resp.headers.get("content-type"),
-            final_url,
+        ct_hdr = resp.headers.get("content-type")
+        ct = (ct_hdr or "").split(";")[0].strip().lower()
+        is_pdf = ct == "application/pdf" or final_url.lower().rstrip("/").endswith(
+            ".pdf",
         )
+        if is_pdf:
+            text = await chat_documents.extract_pdf_text_for_chat(data)
+        else:
+            text = await asyncio.to_thread(
+                _response_to_text,
+                data,
+                ct_hdr,
+                final_url,
+            )
         cap = chat_url_extract_max_chars_per_url()
         truncated = len(text) > cap
         body = text[: cap - 1] + "…" if truncated else text

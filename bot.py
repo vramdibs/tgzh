@@ -4720,8 +4720,7 @@ async def _chat_sources_flush_with_instruction(
                 "Можно PDF или текст (.txt, .html, .md).",
             )
             return True
-        text = await asyncio.to_thread(
-            chat_documents.extract_chat_document_text,
+        text = await chat_documents.extract_chat_document_text_for_chat(
             data,
             mime,
             filename,
