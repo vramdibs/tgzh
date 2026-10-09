@@ -124,6 +124,8 @@ IMAGE_GEN_TIMEOUT_SEC=180
 
 На bridge картинка создается через headless `cursor-agent` и инструмент GenerateImage (ADR-009 в репозитории bridge). Ответ - `data[0].b64_json`.
 
+**Перерисовка фото в стиле эталона** (кнопка в `/imagine`): в теле JSON дополнительно `source_image_b64` (и опционально `style_reference_b64` от tgzh-server). Пустой `prompt` допустим; подпись к фото Telegram уходит в `prompt` как уточнение. На bridge эталон по умолчанию - `assets/imagine_style_reference.png` (`BRIDGE_IMAGE_STYLE_REFERENCE_PATH`).
+
 Smoke:
 
 ```bash

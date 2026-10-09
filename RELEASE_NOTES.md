@@ -4,6 +4,8 @@
 
 ### Added
 
+- **Перерисовка фото в стиле примера (`/imagine`)**: кнопка **«Перерисовать фото в стиле примера»** — пользователь присылает фото; bridge/cursor-agent переносит живописный стиль эталона без копирования сюжета купе. API: `POST /image/generate` с `mode=style_redraw`, `source_image_b64`; env **`IMAGE_GEN_STYLE_REFERENCE_PATH`**
+
 - **Генерация изображений в `/chat`**: кнопка **«Сгенерировать фото»**, команда **`/imagine`** (в меню Telegram под **`/chat`**), эндпоинт **`POST /image/generate`**, модуль **`image_gen.py`**, env **`IMAGE_GEN_*`**. Пример промпта в подсказке и кнопка **«Сгенерировать по примеру»** (`chat:imagine:example`)
 - **Интеграция images с cursor-bridge**: в **`docs/integration.md`** описан контракт **`POST /v1/images/generations`** на bridge (Composer); **`IMAGE_GEN_*`** может указывать на тот же URL, что fallback LLM
 - **Выбор промпта для фото в `/chat`**: после «Сгенерировать фото» или `/imagine` без текста - кнопки **По примеру (купе поезда)** и **Свой промпт**; в режиме своего промпта - «Назад к выбору»

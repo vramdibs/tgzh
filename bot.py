@@ -6,6 +6,7 @@ Telegram-бот для проверки домашних заданий (мат�
 from __future__ import annotations
 
 import asyncio
+import base64
 import hmac
 import html
 import io
@@ -316,7 +317,16 @@ _CHAT_DIALOG_ID = "chat_dialog_id"
 # Кнопка «Сгенерировать фото» переводит чат в режим ожидания одного текстового
 # промпта (следующее сообщение уходит в image API, не в Cursor).
 _CHAT_IMG_PROMPT_WAIT = "chat_img_prompt_wait"
+# Ожидание одного фото для перерисовки в стиле эталона (кнопка «Перерисовать фото…»).
+_CHAT_IMAGINE_STYLE_PHOTO_WAIT = "chat_imagine_style_photo_wait"
 _TG_PHOTO_CAPTION_MAX_LEN = 1024
+
+
+def _clear_chat_imagine_waits(context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
+    context.user_data.pop(_CHAT_IMAGINE_STYLE_PHOTO_WAIT, None)
+
+
 _CHAT_IMAGINE_EXAMPLE_PROMPT = (
     "Цифровая иллюстрация в мягком живописном стиле: юноша в темно-синей "
     "толстовке сидит на нижней полке в купе поезда, смотрит в окно на "
@@ -1856,6 +1866,12 @@ def _chat_imagine_choice_keyboard() -> InlineKeyboardMarkup:
                     callback_data="chat:imagine:custom",
                 ),
             ],
+            [
+                InlineKeyboardButton(
+                    "Перерисовать фото в стиле примера",
+                    callback_data="chat:imagine:style_photo",
+                ),
+            ],
             [InlineKeyboardButton("Назад в меню чата", callback_data="chat:menu")],
         ],
     )
@@ -1868,7 +1884,10 @@ def _chat_imagine_choice_help_html() -> str:
         "Выбери вариант:\n"
         "• <b>По примеру</b> — кнопка ниже сразу запустит генерацию\n"
         "• <b>Свой промпт</b> — опишешь картинку одним сообщением "
-        f"(до {image_gen.PROMPT_MAX_LEN} символов)\n\n"
+        f"(до {image_gen.PROMPT_MAX_LEN} символов)\n"
+        "• <b>Перерисовать фото в стиле примера</b> — пришли своё фото; "
+        "стиль как у живописного эталона (без копирования сюжета купе). "
+        "Подпись к фото — по желанию\n\n"
         "<b>Текст примера</b> (можно скопировать):\n"
         f"<pre>{example}</pre>\n"
         "Команда <code>/imagine</code> без текста открывает это же меню."
@@ -1893,6 +1912,24 @@ def _chat_imagine_custom_prompt_help_html() -> str:
     return (
         "<b>Свой промпт</b> — пришли описание картинки одним сообщением "
         f"(до {image_gen.PROMPT_MAX_LEN} символов)."
+    )
+
+
+def _chat_imagine_style_photo_wait_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton("Назад к выбору", callback_data="chat:imagine")],
+    ]
+    rows.extend(_chat_menu_keyboard_for_user(True, user_id).inline_keyboard)
+    return InlineKeyboardMarkup(rows)
+
+
+def _chat_imagine_style_photo_help_html() -> str:
+    return (
+        "<b>Перерисовать фото в стиле примера</b>\n\n"
+        "Пришли <b>одно фото</b> — бот перерисует его в мягком живописном стиле "
+        "(как эталон в меню генерации), сохранив твой сюжет. "
+        "Сцену купе и персонажей из эталона копировать не будет.\n\n"
+        "Подпись к фото (caption) — опциональное уточнение для генерации."
     )
 
 
@@ -2002,7 +2039,7 @@ def _activate_chat_session_ram(context: ContextTypes.DEFAULT_TYPE, *, fresh: boo
     """RAM-флаги активной /chat-сессии. `fresh=True` — новый вход, чистим историю."""
     _photo_check_clear(context)
     context.user_data.pop(_CHAT_PW_WAIT, None)
-    context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
+    _clear_chat_imagine_waits(context)
     context.user_data.pop(_AWAIT_TEXT_ANSWER, None)
     context.user_data.pop(_AWAIT_PHOTO_ANSWER, None)
     context.user_data[_CHAT_ACTIVE] = True
@@ -2082,7 +2119,7 @@ async def _handle_chat_callback(
         context.user_data.pop(_CHAT_HISTORY, None)
         context.user_data.pop(_CHAT_BUSY, None)
         context.user_data.pop(_CHAT_DIALOG_ID, None)
-        context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
+        _clear_chat_imagine_waits(context)
         await _answer_query_once(query, "Сессия закрыта.")
         with suppress(BadRequest, Exception):
             await query.edit_message_text("Сессия /chat закрыта. Открой заново через /chat.")
@@ -2092,7 +2129,7 @@ async def _handle_chat_callback(
         # чтобы следующий ответ Cursor создал новую запись.
         context.user_data.pop(_CHAT_HISTORY, None)
         context.user_data.pop(_CHAT_DIALOG_ID, None)
-        context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
+        _clear_chat_imagine_waits(context)
         await _answer_query_once(query, "Начат новый диалог.")
         await _send_chat_menu(
             context.bot,
@@ -2228,12 +2265,29 @@ async def _handle_chat_callback(
             if not _is_image_gen_enabled():
                 await _answer_query_once(query, "Генерация изображений не настроена.")
                 return
+            context.user_data.pop(_CHAT_IMAGINE_STYLE_PHOTO_WAIT, None)
             context.user_data[_CHAT_IMG_PROMPT_WAIT] = True
             await _answer_query_once(query, "Жду описание картинки.")
             with suppress(BadRequest, Exception):
                 await query.edit_message_text(
                     _chat_imagine_custom_prompt_help_html(),
                     reply_markup=_chat_imagine_wait_keyboard(user_id),
+                    parse_mode=ParseMode.HTML,
+                )
+            return
+        if sub == "style_photo":
+            if not _is_image_gen_enabled():
+                await _answer_query_once(query, "Генерация изображений не настроена.")
+                return
+            await asyncio.to_thread(user_storage.chat_session_login, USER_DB_PATH, user_id)
+            _activate_chat_session_ram(context, fresh=False)
+            context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
+            context.user_data[_CHAT_IMAGINE_STYLE_PHOTO_WAIT] = True
+            await _answer_query_once(query, "Жду фото для перерисовки.")
+            with suppress(BadRequest, Exception):
+                await query.edit_message_text(
+                    _chat_imagine_style_photo_help_html(),
+                    reply_markup=_chat_imagine_style_photo_wait_keyboard(user_id),
                     parse_mode=ParseMode.HTML,
                 )
             return
@@ -2248,7 +2302,7 @@ async def _handle_chat_callback(
                     parse_mode=ParseMode.HTML,
                 )
             return
-        context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
+        _clear_chat_imagine_waits(context)
         await _answer_query_once(query, "Выбери вариант генерации.")
         with suppress(BadRequest, Exception):
             await query.edit_message_text(
@@ -2313,7 +2367,7 @@ async def chat_logout_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     context.user_data.pop(_CHAT_HISTORY, None)
     context.user_data.pop(_CHAT_BUSY, None)
     context.user_data.pop(_CHAT_DIALOG_ID, None)
-    context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
+    _clear_chat_imagine_waits(context)
     msg = "Сессия /chat закрыта." if existed else "Сессии /chat не было."
     await update.message.reply_text(msg)
 
@@ -3593,7 +3647,7 @@ async def handle_homework_text(update: Update, context: ContextTypes.DEFAULT_TYP
                 context.user_data.pop(_CHAT_ACTIVE, None)
                 context.user_data.pop(_CHAT_HISTORY, None)
                 context.user_data.pop(_CHAT_DIALOG_ID, None)
-                context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
+                _clear_chat_imagine_waits(context)
                 await update.message.reply_text(
                     "Сессия чата истекла. Открой её заново через /chat.",
                 )
@@ -4113,6 +4167,32 @@ async def _request_image_from_server(*, user_id: int, prompt: str) -> bytes:
         return r.content
 
 
+async def _request_image_style_redraw_from_server(
+    *,
+    user_id: int,
+    source_jpeg: bytes,
+    notes: str,
+) -> bytes:
+    """POST `/image/generate` mode=style_redraw -> PNG-байты."""
+    url = f"{SERVER_URL.rstrip('/')}/image/generate"
+    timeout_s = max(60.0, image_gen.image_gen_timeout_sec() + 30.0)
+    payload = {
+        "user_id": user_id,
+        "mode": "style_redraw",
+        "prompt": (notes or "").strip(),
+        "source_image_b64": base64.b64encode(source_jpeg).decode("ascii"),
+    }
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(timeout_s),
+        transport=async_http_transport_ipv4_lookup(),
+    ) as client:
+        r = await client.post(url, json=payload)
+        if r.status_code != 200:
+            body = r.text or ""
+            raise RuntimeError(f"server {r.status_code}: {body[:300]}")
+        return r.content
+
+
 async def _handle_chat_imagine_request(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -4122,7 +4202,7 @@ async def _handle_chat_imagine_request(
     prompt: str,
 ) -> None:
     """Сгенерировать одну картинку и отправить как Telegram-фото."""
-    context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
+    _clear_chat_imagine_waits(context)
     msg = update.message
     if msg is None:
         return
@@ -4232,6 +4312,130 @@ async def _handle_chat_imagine_request(
         context.user_data.pop(_CHAT_BUSY, None)
 
 
+async def _handle_chat_imagine_style_redraw(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user_id: int,
+    chat_id: int,
+    source_jpeg: bytes,
+    notes: str,
+) -> None:
+    """Перерисовать присланное фото в стиле эталона и отправить как Telegram-фото."""
+    _clear_chat_imagine_waits(context)
+    msg = update.message
+    if msg is None:
+        return
+
+    async def _reply(text: str) -> None:
+        await msg.reply_text(text)
+
+    notes_clean = (notes or "").strip()
+    if len(notes_clean) > image_gen.PROMPT_MAX_LEN:
+        await _reply(
+            f"Подпись слишком длинная (лимит {image_gen.PROMPT_MAX_LEN} символов).",
+        )
+        return
+    if not _is_image_gen_enabled():
+        await _reply(
+            "Генерация изображений не настроена: задайте IMAGE_GEN_BASE_URL "
+            "и IMAGE_GEN_API_KEY в .env.",
+        )
+        return
+    if context.user_data.get(_CHAT_BUSY):
+        await _reply("Подожди, чат ещё печатает предыдущий ответ.")
+        return
+
+    context.user_data[_CHAT_BUSY] = True
+    placeholder = None
+    hist_notes = notes_clean or "без подписи"
+    try:
+        with suppress(Exception):
+            await context.bot.send_chat_action(chat_id, ChatAction.UPLOAD_PHOTO)
+        with suppress(Exception):
+            placeholder = await context.bot.send_message(
+                chat_id,
+                "Перерисовываю фото в стиле примера… Это может занять до пары минут.",
+            )
+        logger.info(
+            "chat imagine style_redraw user_id=%s source_bytes=%s notes_chars=%s",
+            user_id,
+            len(source_jpeg),
+            len(notes_clean),
+        )
+        try:
+            png_bytes = await _request_image_style_redraw_from_server(
+                user_id=user_id,
+                source_jpeg=source_jpeg,
+                notes=notes_clean,
+            )
+        except Exception as e:
+            logger.exception("chat imagine style_redraw failed user_id=%s", user_id)
+            err_text = f"Не удалось перерисовать фото: {e}"
+            if placeholder is not None:
+                with suppress(BadRequest, Exception):
+                    await context.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=placeholder.message_id,
+                        text=err_text[:4096],
+                    )
+            else:
+                with suppress(Exception):
+                    await _reply(err_text[:4096])
+            return
+
+        if placeholder is not None:
+            with suppress(BadRequest, Exception):
+                await context.bot.delete_message(
+                    chat_id=chat_id,
+                    message_id=placeholder.message_id,
+                )
+        cap = notes_clean or "Перерисовка в стиле примера"
+        if len(cap) > _TG_PHOTO_CAPTION_MAX_LEN:
+            cap = cap[: _TG_PHOTO_CAPTION_MAX_LEN - 1] + "…"
+        try:
+            await context.bot.send_photo(chat_id, photo=png_bytes, caption=cap)
+        except Exception:
+            logger.exception("chat imagine style_redraw send_photo failed user_id=%s", user_id)
+            with suppress(Exception):
+                await _reply(
+                    "Картинка готова, но Telegram отверг отправку. Попробуй другое фото.",
+                )
+            return
+
+        history: list[dict[str, str]] = list(context.user_data.get(_CHAT_HISTORY) or [])
+        history.append(
+            {"role": "user", "content": f"[/imagine style] [фото: {hist_notes}]"},
+        )
+        history.append(
+            {
+                "role": "assistant",
+                "content": f"[перерисовано фото в стиле примера: {hist_notes}]",
+            },
+        )
+        if len(history) > _CHAT_HISTORY_RUNTIME_CAP:
+            history = history[-_CHAT_HISTORY_RUNTIME_CAP:]
+        context.user_data[_CHAT_HISTORY] = history
+
+        dialog_id = context.user_data.get(_CHAT_DIALOG_ID)
+        try:
+            saved_id = await asyncio.to_thread(
+                user_storage.chat_dialog_upsert,
+                USER_DB_PATH,
+                user_id,
+                dialog_id if isinstance(dialog_id, int) else None,
+                history,
+            )
+        except Exception:
+            logger.exception("chat dialog upsert (imagine style) failed user_id=%s", user_id)
+        else:
+            if saved_id and not dialog_id:
+                context.user_data[_CHAT_DIALOG_ID] = saved_id
+        await _send_chat_menu(context.bot, chat_id, user_id=user_id)
+    finally:
+        context.user_data.pop(_CHAT_BUSY, None)
+
+
 async def imagine_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """`/imagine` — меню или генерация; сессию /chat поднимаем сами, без /chat вручную."""
     if not update.message or not update.effective_user or not update.effective_chat:
@@ -4245,7 +4449,7 @@ async def imagine_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     parts = raw.split(maxsplit=1)
     prompt = parts[1].strip() if len(parts) > 1 else ""
     if not prompt:
-        context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
+        _clear_chat_imagine_waits(context)
         await update.message.reply_text(
             _chat_imagine_choice_help_html(),
             reply_markup=_chat_imagine_choice_keyboard(),
@@ -6439,6 +6643,58 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             media_group_id=msg_pc.media_group_id,
         )
         return
+    if context.user_data.get(_CHAT_IMAGINE_STYLE_PHOTO_WAIT):
+        if context.user_data.get(_CHAT_ACTIVE) is None:
+            until_style = await asyncio.to_thread(
+                user_storage.chat_session_active_until,
+                USER_DB_PATH,
+                user_id,
+            )
+            if until_style is not None:
+                context.user_data[_CHAT_ACTIVE] = True
+        if not context.user_data.get(_CHAT_ACTIVE):
+            _clear_chat_imagine_waits(context)
+            flow_note(
+                context,
+                await update.message.reply_text(
+                    "Сначала открой /chat или /imagine и выбери перерисовку в стиле примера.",
+                ),
+            )
+            return
+        if not update.message.photo:
+            flow_note(
+                context,
+                await update.message.reply_text(
+                    "Жду одно фото. Подпись к снимку — по желанию.",
+                ),
+            )
+            return
+        photo_st = update.message.photo[-1]
+        chat_id_st = update.effective_chat.id
+        try:
+            tg_file = await context.bot.get_file(photo_st.file_id)
+            raw_bytes = await tg_file.download_as_bytearray()
+            source_jpeg = await asyncio.to_thread(
+                photo_prepare.prepare_photo_for_upload,
+                bytes(raw_bytes),
+            )
+        except Exception as e:
+            logger.exception("imagine style photo download user_id=%s", user_id)
+            flow_note(
+                context,
+                await update.message.reply_text(f"Не удалось загрузить фото: {e}"),
+            )
+            return
+        caption = (update.message.caption or "").strip()
+        await _handle_chat_imagine_style_redraw(
+            update,
+            context,
+            user_id=user_id,
+            chat_id=chat_id_st,
+            source_jpeg=source_jpeg,
+            notes=caption,
+        )
+        return
     # Приоритет: если пользователь только что нажал «Отправить фото» в режиме
     # проверки ДЗ — фото идёт в проверку, а НЕ в /chat. Иначе фото-ответ к ДЗ
     # уходило бы в чат-бот (см. ниже про ленивое «оживание» chat-сессии из БД)
@@ -6878,7 +7134,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         context.user_data.pop(_CHAT_HISTORY, None)
         context.user_data.pop(_CHAT_BUSY, None)
         context.user_data.pop(_CHAT_DIALOG_ID, None)
-        context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
+        _clear_chat_imagine_waits(context)
         await update.message.reply_text(
             "Сессия чата истекла. Открой её заново через /chat.",
         )

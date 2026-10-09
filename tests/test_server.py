@@ -195,6 +195,47 @@ def test_image_generate_rejects_too_long_prompt(
     assert r.status_code == 400
 
 
+def test_image_generate_style_redraw_requires_source(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    r = client.post(
+        "/image/generate",
+        json={"user_id": 1, "mode": "style_redraw", "prompt": ""},
+    )
+    assert r.status_code == 400
+
+
+def test_image_generate_style_redraw_ok(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient,
+) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    import base64
+
+    import image_gen
+
+    async def _fake_style(source_bytes: bytes, extra_prompt: str = "") -> bytes:  # noqa: ARG001
+        assert source_bytes == b"jpeg-bytes"
+        assert extra_prompt == "evening"
+        return b"png-out"
+
+    monkeypatch.setattr(image_gen, "generate_image_style_redraw", _fake_style)
+    b64 = base64.b64encode(b"jpeg-bytes").decode("ascii")
+    r = client.post(
+        "/image/generate",
+        json={
+            "user_id": 1,
+            "mode": "style_redraw",
+            "prompt": "evening",
+            "source_image_b64": b64,
+        },
+    )
+    assert r.status_code == 200
+    assert r.content == b"png-out"
+
+
 def test_photo_check_disabled(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
     monkeypatch.setenv("PHOTO_CHECK_ENABLE", "0")
     jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 100

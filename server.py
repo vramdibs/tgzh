@@ -703,12 +703,14 @@ async def chat_stream(req: ChatStreamRequest):
 
 class ImageGenerateRequest(BaseModel):
     user_id: int = 0
-    prompt: str
+    prompt: str = ""
+    mode: str = "prompt"
+    source_image_b64: str | None = None
 
 
 @app.post("/image/generate")
 async def image_generate(req: ImageGenerateRequest) -> Response:
-    """Сгенерировать одну картинку по текстовому промпту.
+    """Сгенерировать одну картинку по промпту или перерисовать фото в стиле эталона.
 
     OpenAI-совместимый бэкенд (`IMAGE_GEN_*`). Возвращает PNG-байты (`image/png`).
     Бот вызывает этот эндпоинт из `/chat` (`/imagine` или кнопка), пробрасывает
@@ -719,37 +721,63 @@ async def image_generate(req: ImageGenerateRequest) -> Response:
             503,
             "image generation backend not configured (set IMAGE_GEN_BASE_URL/API_KEY)",
         )
+    mode = (req.mode or "prompt").strip().lower()
+    if mode not in ("prompt", "style_redraw"):
+        raise HTTPException(400, "mode must be prompt or style_redraw")
+
     prompt = (req.prompt or "").strip()
-    if not prompt:
-        raise HTTPException(400, "prompt is empty")
     if len(prompt) > image_gen.PROMPT_MAX_LEN:
         raise HTTPException(400, f"prompt longer than {image_gen.PROMPT_MAX_LEN} chars")
 
     t0 = time.perf_counter()
-    logger.info(
-        "image_generate start user_id=%s prompt_chars=%s model=%s size=%s",
-        req.user_id,
-        len(prompt),
-        image_gen.image_gen_model(),
-        image_gen.image_gen_size(),
-    )
     try:
-        png_bytes = await image_gen.generate_image(prompt)
+        if mode == "style_redraw":
+            if not (req.source_image_b64 or "").strip():
+                raise HTTPException(400, "source_image_b64 is required for style_redraw")
+            logger.info(
+                "image_generate style_redraw start user_id=%s notes_chars=%s model=%s",
+                req.user_id,
+                len(prompt),
+                image_gen.image_gen_model(),
+            )
+            source_bytes = image_gen.decode_source_image_b64(req.source_image_b64)
+            png_bytes = await image_gen.generate_image_style_redraw(
+                source_bytes,
+                extra_prompt=prompt,
+            )
+        else:
+            if not prompt:
+                raise HTTPException(400, "prompt is empty")
+            logger.info(
+                "image_generate start user_id=%s prompt_chars=%s model=%s size=%s",
+                req.user_id,
+                len(prompt),
+                image_gen.image_gen_model(),
+                image_gen.image_gen_size(),
+            )
+            png_bytes = await image_gen.generate_image(prompt)
     except image_gen.ImageGenBadPrompt as e:
         raise HTTPException(400, str(e)) from e
+    except image_gen.ImageGenBadSource as e:
+        raise HTTPException(400, str(e)) from e
+    except image_gen.ImageGenStyleReferenceMissing as e:
+        raise HTTPException(503, str(e)) from e
     except image_gen.ImageGenNotConfigured as e:
         raise HTTPException(503, str(e)) from e
     except asyncio.TimeoutError as e:
         logger.warning("image_generate timeout user_id=%s", req.user_id)
         raise HTTPException(504, "image generation timeout") from e
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("image_generate upstream failure user_id=%s", req.user_id)
         raise HTTPException(502, f"image backend error: {e}") from e
 
     elapsed = time.perf_counter() - t0
     logger.info(
-        "image_generate done user_id=%s elapsed_s=%.2f bytes=%s",
+        "image_generate done user_id=%s mode=%s elapsed_s=%.2f bytes=%s",
         req.user_id,
+        mode,
         elapsed,
         len(png_bytes),
     )

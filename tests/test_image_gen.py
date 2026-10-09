@@ -156,6 +156,49 @@ def test_generate_image_raises_on_empty_response(
             asyncio.run(image_gen.generate_image("x"))
 
 
+def test_generate_image_style_redraw_posts_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    style_file = tmp_path / "style.png"
+    style_file.write_bytes(b"style-ref")
+    monkeypatch.setenv("IMAGE_GEN_STYLE_REFERENCE_PATH", str(style_file))
+    captured: dict = {}
+
+    class FakeHttpxClient:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args, **kwargs):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            captured["url"] = url
+            captured["json"] = json
+            captured["headers"] = headers
+            return SimpleNamespace(
+                status_code=200,
+                text="",
+                json=lambda: {"data": [{"b64_json": base64.b64encode(b"out-png").decode()}]},
+            )
+
+    with patch("httpx.AsyncClient", FakeHttpxClient):
+        out = asyncio.run(
+            image_gen.generate_image_style_redraw(b"photo", extra_prompt="notes"),
+        )
+
+    assert out == b"out-png"
+    assert captured["url"] == "https://api.example/v1/images/generations"
+    assert captured["json"]["source_image_b64"]
+    assert captured["json"]["style_reference_b64"]
+    assert captured["json"]["prompt"] == "notes"
+
+
 def test_generate_image_propagates_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

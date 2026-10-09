@@ -258,6 +258,7 @@ def test_chat_imagine_choice_keyboard_has_example_and_custom() -> None:
     callbacks = [b.callback_data for b in flat]
     assert "chat:imagine:example" in callbacks
     assert "chat:imagine:custom" in callbacks
+    assert "chat:imagine:style_photo" in callbacks
     assert "chat:menu" in callbacks
 
 
@@ -279,6 +280,39 @@ def test_chat_imagine_choice_help_shows_copyable_example_prompt() -> None:
     assert "<pre>" in html
     assert "купе поезда" in html
     assert bot._CHAT_IMAGINE_EXAMPLE_PROMPT.split()[0] in html
+
+
+def test_handle_chat_imagine_style_redraw_calls_server(monkeypatch) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    update = _FakeUpdate()
+    ctx = _FakeContext()
+    captured: dict = {}
+
+    async def _fake_style(**kwargs):
+        captured.update(kwargs)
+        return b"png-out"
+
+    with (
+        patch.object(bot, "_request_image_style_redraw_from_server", side_effect=_fake_style),
+        patch.object(bot, "_send_chat_menu", new=AsyncMock()),
+        patch.object(bot.user_storage, "chat_dialog_upsert", lambda *a, **k: None),
+    ):
+        asyncio.run(
+            bot._handle_chat_imagine_style_redraw(
+                update,
+                ctx,
+                user_id=42,
+                chat_id=100,
+                source_jpeg=b"jpeg",
+                notes="evening",
+            ),
+        )
+
+    assert captured["source_jpeg"] == b"jpeg"
+    assert captured["notes"] == "evening"
+    assert ctx.bot.sent_photos
+    assert bot._CHAT_IMAGINE_STYLE_PHOTO_WAIT not in ctx.user_data
 
 
 def test_imagine_cmd_without_active_chat_opens_choice_menu(monkeypatch) -> None:
