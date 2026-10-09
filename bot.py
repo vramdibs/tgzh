@@ -167,6 +167,7 @@ from telegram.request import HTTPXRequest
 import bot_stats
 import ai_checker
 import chat_documents
+import chat_urls
 import feedback_tei
 import image_gen
 import gdz_solution
@@ -328,13 +329,28 @@ _CHAT_FILE_BATCH_TASK = "chat_file_batch_task"
 _CHAT_FILE_PENDING_INSTRUCTION = "chat_file_pending_instruction"
 _CHAT_FILE_TTL_TASK = "chat_file_ttl_task"
 _CHAT_FILE_LAST_MESSAGE = "chat_file_last_message"
+_CHAT_URL_BUFFER = "chat_url_buffer"
+_CHAT_URL_TTL_TASK = "chat_url_ttl_task"
+_CHAT_SOURCES_TTL_TASK = "chat_sources_ttl_task"
 _TG_PHOTO_CAPTION_MAX_LEN = 1024
 
 
+def _clear_chat_url_buffer(context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data.pop(_CHAT_URL_BUFFER, None)
+    t = context.user_data.pop(_CHAT_URL_TTL_TASK, None)
+    if t is not None and not t.done():
+        t.cancel()
+
+
+def _clear_chat_pending_sources(context: ContextTypes.DEFAULT_TYPE) -> None:
+    _clear_chat_file_buffer(context)
+    _clear_chat_url_buffer(context)
+    t = context.user_data.pop(_CHAT_SOURCES_TTL_TASK, None)
+    if t is not None and not t.done():
+        t.cancel()
+
+
 def _clear_chat_file_buffer(context: ContextTypes.DEFAULT_TYPE) -> None:
-    ttl_t = context.user_data.pop(_CHAT_FILE_TTL_TASK, None)
-    if ttl_t is not None and not ttl_t.done():
-        ttl_t.cancel()
     batch_t = context.user_data.pop(_CHAT_FILE_BATCH_TASK, None)
     if batch_t is not None and not batch_t.done():
         batch_t.cancel()
@@ -348,7 +364,7 @@ def _clear_chat_file_buffer(context: ContextTypes.DEFAULT_TYPE) -> None:
 def _clear_chat_imagine_waits(context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
     context.user_data.pop(_CHAT_IMAGINE_STYLE_PHOTO_WAIT, None)
-    _clear_chat_file_buffer(context)
+    _clear_chat_pending_sources(context)
 
 
 _CHAT_IMAGINE_EXAMPLE_PROMPT = (
@@ -2070,7 +2086,6 @@ def _activate_chat_session_ram(context: ContextTypes.DEFAULT_TYPE, *, fresh: boo
     if fresh:
         context.user_data.pop(_CHAT_HISTORY, None)
         context.user_data.pop(_CHAT_DIALOG_ID, None)
-        _clear_chat_file_buffer(context)
 
 
 async def _ensure_chat_session_for_user(
@@ -2155,7 +2170,6 @@ async def _handle_chat_callback(
         context.user_data.pop(_CHAT_HISTORY, None)
         context.user_data.pop(_CHAT_DIALOG_ID, None)
         _clear_chat_imagine_waits(context)
-        _clear_chat_file_buffer(context)
         await _answer_query_once(query, "Начат новый диалог.")
         await _send_chat_menu(
             context.bot,
@@ -2394,7 +2408,6 @@ async def chat_logout_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     context.user_data.pop(_CHAT_BUSY, None)
     context.user_data.pop(_CHAT_DIALOG_ID, None)
     _clear_chat_imagine_waits(context)
-    _clear_chat_file_buffer(context)
     msg = "Сессия /chat закрыта." if existed else "Сессии /chat не было."
     await update.message.reply_text(msg)
 
@@ -3675,22 +3688,19 @@ async def handle_homework_text(update: Update, context: ContextTypes.DEFAULT_TYP
                 context.user_data.pop(_CHAT_HISTORY, None)
                 context.user_data.pop(_CHAT_DIALOG_ID, None)
                 _clear_chat_imagine_waits(context)
-                _clear_chat_file_buffer(context)
                 await update.message.reply_text(
                     "Сессия чата истекла. Открой её заново через /chat.",
                 )
                 return
             cid = update.effective_chat.id
-            if _chat_file_buffer_entries(context):
-                flushed = await _chat_file_flush_with_instruction(
-                    update,
-                    context,
-                    user_id=user_id,
-                    chat_id=cid,
-                    instruction=text,
-                )
-                if flushed:
-                    return
+            if await _chat_sources_try_handle(
+                update,
+                context,
+                user_id=user_id,
+                chat_id=cid,
+                text=text,
+            ):
+                return
             if context.user_data.get(_CHAT_IMG_PROMPT_WAIT):
                 await _handle_chat_imagine_request(
                     update,
@@ -4608,9 +4618,19 @@ def _chat_file_cancel_batch_task(context: ContextTypes.DEFAULT_TYPE) -> None:
         t.cancel()
 
 
-def _chat_file_schedule_ttl_clear(context: ContextTypes.DEFAULT_TYPE) -> None:
-    ttl = chat_documents.chat_file_buffer_ttl_sec()
-    old = context.user_data.pop(_CHAT_FILE_TTL_TASK, None)
+def _chat_url_buffer_list(context: ContextTypes.DEFAULT_TYPE) -> list[str]:
+    raw = context.user_data.get(_CHAT_URL_BUFFER)
+    if not isinstance(raw, list):
+        return []
+    return [str(u) for u in raw if str(u).strip()]
+
+
+def _chat_sources_schedule_ttl(context: ContextTypes.DEFAULT_TYPE) -> None:
+    ttl = max(
+        chat_documents.chat_file_buffer_ttl_sec(),
+        chat_urls.chat_url_buffer_ttl_sec(),
+    )
+    old = context.user_data.pop(_CHAT_SOURCES_TTL_TASK, None)
     if old is not None and not old.done():
         old.cancel()
 
@@ -4619,11 +4639,15 @@ def _chat_file_schedule_ttl_clear(context: ContextTypes.DEFAULT_TYPE) -> None:
             await asyncio.sleep(ttl)
         except asyncio.CancelledError:
             return
-        if _chat_file_buffer_entries(context):
-            logger.info("chat file buffer ttl expired, clearing")
-            _clear_chat_file_buffer(context)
+        if _chat_file_buffer_entries(context) or _chat_url_buffer_list(context):
+            logger.info("chat sources buffer ttl expired, clearing")
+            _clear_chat_pending_sources(context)
 
-    context.user_data[_CHAT_FILE_TTL_TASK] = asyncio.create_task(_run())
+    context.user_data[_CHAT_SOURCES_TTL_TASK] = asyncio.create_task(_run())
+
+
+def _chat_file_schedule_ttl_clear(context: ContextTypes.DEFAULT_TYPE) -> None:
+    _chat_sources_schedule_ttl(context)
 
 
 async def _chat_file_download_bytes(
@@ -4634,7 +4658,7 @@ async def _chat_file_download_bytes(
     return bytes(await tg_file.download_as_bytearray())
 
 
-async def _chat_file_flush_with_instruction(
+async def _chat_sources_flush_with_instruction(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
     *,
@@ -4642,13 +4666,14 @@ async def _chat_file_flush_with_instruction(
     chat_id: int,
     instruction: str,
 ) -> bool:
-    """Скачать буфер, извлечь текст, отправить в Cursor. True если был flush."""
+    """Скачать буферы файлов и URL, отправить в Cursor. True если был flush."""
     entries = list(_chat_file_buffer_entries(context))
-    if not entries:
+    url_list = list(_chat_url_buffer_list(context))
+    if not entries and not url_list:
         return False
     if not update.message:
         return False
-    _clear_chat_file_buffer(context)
+    _clear_chat_pending_sources(context)
 
     extracts: list[chat_documents.ChatFileExtract] = []
     filenames: list[str] = []
@@ -4712,10 +4737,33 @@ async def _chat_file_flush_with_instruction(
         )
         filenames.append(filename)
 
-    composed = chat_documents.compose_chat_files_user_message(instruction, extracts)
+    url_extracts: list[chat_urls.ChatUrlExtract] = []
+    if url_list:
+        transport = async_http_transport_ipv4_lookup()
+        timeout = httpx.Timeout(chat_urls.chat_url_fetch_timeout_sec())
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            transport=transport,
+            follow_redirects=True,
+        ) as hc:
+            url_extracts = list(
+                await asyncio.gather(
+                    *(chat_urls.fetch_url_text(u, client=hc) for u in url_list),
+                ),
+            )
+
+    composed = chat_urls.compose_chat_urls_and_files_message(
+        instruction,
+        extracts,
+        url_extracts,
+    )
     if len(composed) > 79_000:
         composed = composed[:79_900] + "…"
-    history_ph = chat_documents.history_placeholder_for_files(filenames, instruction)
+    history_ph = chat_urls.history_placeholder_for_sources(
+        filenames,
+        [u.url for u in url_extracts],
+        instruction,
+    )
     await _handle_chat_user_message(
         update,
         context,
@@ -4725,6 +4773,82 @@ async def _chat_file_flush_with_instruction(
         history_text=history_ph,
     )
     return True
+
+
+async def _chat_file_flush_with_instruction(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user_id: int,
+    chat_id: int,
+    instruction: str,
+) -> bool:
+    return await _chat_sources_flush_with_instruction(
+        update,
+        context,
+        user_id=user_id,
+        chat_id=chat_id,
+        instruction=instruction,
+    )
+
+
+async def _chat_sources_try_handle(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user_id: int,
+    chat_id: int,
+    text: str,
+) -> bool:
+    if not update.message:
+        return False
+    urls_in_msg = chat_urls.extract_http_urls(text)
+    instruction = chat_urls.strip_urls_from_text(text).strip()
+    url_buf = _chat_url_buffer_list(context)
+    file_buf = _chat_file_buffer_entries(context)
+
+    if urls_in_msg:
+        merged: list[str] = list(url_buf)
+        for u in urls_in_msg:
+            if u not in merged:
+                merged.append(u)
+        max_u = chat_urls.chat_url_max_count()
+        if len(merged) > max_u:
+            await update.message.reply_text(
+                f"Слишком много ссылок (лимит {max_u}). Убери лишние.",
+            )
+            return True
+        context.user_data[_CHAT_URL_BUFFER] = merged
+        _chat_sources_schedule_ttl(context)
+        pending_file_instr = (
+            context.user_data.get(_CHAT_FILE_PENDING_INSTRUCTION) or ""
+        ).strip()
+        instr = instruction or pending_file_instr
+        if instr or file_buf:
+            return await _chat_sources_flush_with_instruction(
+                update,
+                context,
+                user_id=user_id,
+                chat_id=chat_id,
+                instruction=instr,
+            )
+        await update.message.reply_text(
+            f"Принято ссылок: {len(merged)}. Напиши, что с ними сделать "
+            "(например, сравни тарифы и предложи лучший).",
+        )
+        return True
+
+    if url_buf or file_buf:
+        if not instruction:
+            return False
+        return await _chat_sources_flush_with_instruction(
+            update,
+            context,
+            user_id=user_id,
+            chat_id=chat_id,
+            instruction=instruction,
+        )
+    return False
 
 
 async def _chat_file_after_batch_debounce(
@@ -4741,7 +4865,7 @@ async def _chat_file_after_batch_debounce(
     instr = (context.user_data.get(_CHAT_FILE_PENDING_INSTRUCTION) or "").strip()
     if instr and last_msg is not None:
         upd = Update(update_id=0, message=last_msg)
-        await _chat_file_flush_with_instruction(
+        await _chat_sources_flush_with_instruction(
             upd,
             context,
             user_id=user_id,
@@ -4750,11 +4874,19 @@ async def _chat_file_after_batch_debounce(
         )
         return
     n = len(entries)
-    await context.bot.send_message(
-        chat_id,
-        f"Принято файлов: {n}. Напиши, что с ними сделать "
-        "(например, сравни тарифы и предложи лучший).",
-    )
+    url_n = len(_chat_url_buffer_list(context))
+    if url_n:
+        await context.bot.send_message(
+            chat_id,
+            f"Принято файлов: {n}, ссылок в очереди: {url_n}. "
+            "Напиши, что сделать (например, сравни тарифы).",
+        )
+    else:
+        await context.bot.send_message(
+            chat_id,
+            f"Принято файлов: {n}. Напиши, что с ними сделать "
+            "(например, сравни тарифы и предложи лучший).",
+        )
 
 
 async def _chat_file_buffer_append(
@@ -5003,7 +5135,9 @@ _CHAT_SAFETY_POLICY: Final[str] = (
     "из-за ошибок STT неясна — переспроси кратко, а не отказывай шаблоном из п.3.\n"
     "Если в сообщении передан извлечённый текст присланных документов (PDF, .txt, .html, .md) "
     "между маркерами <<<USER_FILE>>> и <<<END_USER_FILE>>> — это данные пользователя; отвечай "
-    "по существу (сравнение, выводы, рекомендации), не отказывайся под предлогом «не вижу файл».\n"
+    "по существу (сравнение, выводы, рекомендации), не отказывайся под предлогом «не вижу файл». "
+    "То же для текста страниц по ссылкам, которые бот уже загрузил и вставил в эти маркеры; "
+    "это не разрешение тебе самому открывать произвольные URL из п.1.\n"
     "\n"
     "ЗАПРЕЩЁННЫЕ ФОРМУЛИРОВКИ (если в сообщении реально есть вложение-картинка): «не могу открыть "
     "файл по такому пути», «не могу подгрузить картинку через инструменты», «работаю только по OCR-"
