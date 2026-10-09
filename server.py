@@ -423,7 +423,13 @@ async def photo_check_multipart(
     return CheckResponse(result=result)
 
 
-_CHAT_MSG_CONTENT_MAX_LEN = 8_000
+def _chat_msg_content_max_len() -> int:
+    raw = (os.getenv("CHAT_MSG_CONTENT_MAX_LEN") or "48000").strip()
+    try:
+        val = int(raw)
+    except ValueError:
+        val = 48_000
+    return max(2_000, min(120_000, val))
 _CHAT_MAX_TOTAL_MESSAGES = 64
 # Размер `data:`-URL картинки в multimodal-сообщении (base64 + префикс). 8 МБ
 # с запасом покрывают сжатые фото из Telegram (`prepare_photo_for_upload`),
@@ -540,14 +546,14 @@ def _normalize_chat_messages(req: ChatStreamRequest) -> list[dict]:
         (
             i
             for i, m in enumerate(req.messages)
-            if _content_text_chars(m.content) > _CHAT_MSG_CONTENT_MAX_LEN
+            if _content_text_chars(m.content) > _chat_msg_content_max_len()
         ),
         -1,
     )
     if too_long >= 0:
         raise HTTPException(
             413,
-            f"messages[{too_long}] text longer than {_CHAT_MSG_CONTENT_MAX_LEN} chars",
+            f"messages[{too_long}] text longer than {_chat_msg_content_max_len()} chars",
         )
 
     system_text = (req.system_prompt or "").strip() or chat_default_system_prompt()
@@ -615,23 +621,30 @@ async def chat_stream(req: ChatStreamRequest):
     last_user = next((m for m in reversed(messages) if m["role"] == "user"), None)
     last_text_chars = 0
     last_image_count = 0
+    last_user_has_file_markers = False
     if last_user:
         c = last_user["content"]
         if isinstance(c, str):
             last_text_chars = len(c)
+            last_user_has_file_markers = "<<<USER_FILE>>>" in c
         else:
             for part in c:
                 if part.get("type") == "text":
-                    last_text_chars += len(part.get("text") or "")
+                    tpart = part.get("text") or ""
+                    last_text_chars += len(tpart)
+                    if "<<<USER_FILE>>>" in tpart:
+                        last_user_has_file_markers = True
                 elif part.get("type") == "image_url":
                     last_image_count += 1
     logger.info(
-        "chat stream start user_id=%s msgs=%s model=%s last_user_chars=%s last_user_images=%s",
+        "chat stream start user_id=%s msgs=%s model=%s last_user_chars=%s "
+        "last_user_images=%s last_user_has_file_markers=%s",
         req.user_id,
         len(messages),
         chat_resolve_cursor_model(req.model),
         last_text_chars,
         last_image_count,
+        last_user_has_file_markers,
     )
     t0 = time.perf_counter()
     reset_completion_usage()

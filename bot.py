@@ -166,6 +166,7 @@ from telegram.request import HTTPXRequest
 
 import bot_stats
 import ai_checker
+import chat_documents
 import feedback_tei
 import image_gen
 import gdz_solution
@@ -319,12 +320,35 @@ _CHAT_DIALOG_ID = "chat_dialog_id"
 _CHAT_IMG_PROMPT_WAIT = "chat_img_prompt_wait"
 # Ожидание одного фото для перерисовки в стиле эталона (кнопка «Перерисовать фото…»).
 _CHAT_IMAGINE_STYLE_PHOTO_WAIT = "chat_imagine_style_photo_wait"
+# Буфер документов в /chat (несколько PDF подряд или альбом).
+_CHAT_FILE_BUFFER = "chat_file_buffer"
+_CHAT_FILE_BUFFER_AT = "chat_file_buffer_at"
+_CHAT_FILE_BATCH_GID = "chat_file_batch_gid"
+_CHAT_FILE_BATCH_TASK = "chat_file_batch_task"
+_CHAT_FILE_PENDING_INSTRUCTION = "chat_file_pending_instruction"
+_CHAT_FILE_TTL_TASK = "chat_file_ttl_task"
+_CHAT_FILE_LAST_MESSAGE = "chat_file_last_message"
 _TG_PHOTO_CAPTION_MAX_LEN = 1024
+
+
+def _clear_chat_file_buffer(context: ContextTypes.DEFAULT_TYPE) -> None:
+    ttl_t = context.user_data.pop(_CHAT_FILE_TTL_TASK, None)
+    if ttl_t is not None and not ttl_t.done():
+        ttl_t.cancel()
+    batch_t = context.user_data.pop(_CHAT_FILE_BATCH_TASK, None)
+    if batch_t is not None and not batch_t.done():
+        batch_t.cancel()
+    context.user_data.pop(_CHAT_FILE_BUFFER, None)
+    context.user_data.pop(_CHAT_FILE_BUFFER_AT, None)
+    context.user_data.pop(_CHAT_FILE_BATCH_GID, None)
+    context.user_data.pop(_CHAT_FILE_PENDING_INSTRUCTION, None)
+    context.user_data.pop(_CHAT_FILE_LAST_MESSAGE, None)
 
 
 def _clear_chat_imagine_waits(context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
     context.user_data.pop(_CHAT_IMAGINE_STYLE_PHOTO_WAIT, None)
+    _clear_chat_file_buffer(context)
 
 
 _CHAT_IMAGINE_EXAMPLE_PROMPT = (
@@ -2046,6 +2070,7 @@ def _activate_chat_session_ram(context: ContextTypes.DEFAULT_TYPE, *, fresh: boo
     if fresh:
         context.user_data.pop(_CHAT_HISTORY, None)
         context.user_data.pop(_CHAT_DIALOG_ID, None)
+        _clear_chat_file_buffer(context)
 
 
 async def _ensure_chat_session_for_user(
@@ -2130,6 +2155,7 @@ async def _handle_chat_callback(
         context.user_data.pop(_CHAT_HISTORY, None)
         context.user_data.pop(_CHAT_DIALOG_ID, None)
         _clear_chat_imagine_waits(context)
+        _clear_chat_file_buffer(context)
         await _answer_query_once(query, "Начат новый диалог.")
         await _send_chat_menu(
             context.bot,
@@ -2368,6 +2394,7 @@ async def chat_logout_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     context.user_data.pop(_CHAT_BUSY, None)
     context.user_data.pop(_CHAT_DIALOG_ID, None)
     _clear_chat_imagine_waits(context)
+    _clear_chat_file_buffer(context)
     msg = "Сессия /chat закрыта." if existed else "Сессии /chat не было."
     await update.message.reply_text(msg)
 
@@ -3648,11 +3675,22 @@ async def handle_homework_text(update: Update, context: ContextTypes.DEFAULT_TYP
                 context.user_data.pop(_CHAT_HISTORY, None)
                 context.user_data.pop(_CHAT_DIALOG_ID, None)
                 _clear_chat_imagine_waits(context)
+                _clear_chat_file_buffer(context)
                 await update.message.reply_text(
                     "Сессия чата истекла. Открой её заново через /chat.",
                 )
                 return
             cid = update.effective_chat.id
+            if _chat_file_buffer_entries(context):
+                flushed = await _chat_file_flush_with_instruction(
+                    update,
+                    context,
+                    user_id=user_id,
+                    chat_id=cid,
+                    instruction=text,
+                )
+                if flushed:
+                    return
             if context.user_data.get(_CHAT_IMG_PROMPT_WAIT):
                 await _handle_chat_imagine_request(
                     update,
@@ -4486,9 +4524,10 @@ async def _handle_chat_user_message(
         if not text.strip():
             await update.message.reply_text("Пустое сообщение — нечего спросить.")
             return
-        if len(text) > 8000:
+        text_limit = 79_000 if "<<<USER_FILE>>>" in text else 8000
+        if len(text) > text_limit:
             await update.message.reply_text(
-                "Слишком длинное сообщение для чата (лимит 8000 символов).",
+                f"Слишком длинное сообщение для чата (лимит {text_limit} символов).",
             )
             return
 
@@ -4554,6 +4593,255 @@ async def _handle_chat_user_message(
         len(history),
         context.user_data.get(_CHAT_DIALOG_ID),
     )
+
+
+def _chat_file_buffer_entries(context: ContextTypes.DEFAULT_TYPE) -> list[dict]:
+    raw = context.user_data.get(_CHAT_FILE_BUFFER)
+    if not isinstance(raw, list):
+        return []
+    return raw
+
+
+def _chat_file_cancel_batch_task(context: ContextTypes.DEFAULT_TYPE) -> None:
+    t = context.user_data.pop(_CHAT_FILE_BATCH_TASK, None)
+    if t is not None and not t.done():
+        t.cancel()
+
+
+def _chat_file_schedule_ttl_clear(context: ContextTypes.DEFAULT_TYPE) -> None:
+    ttl = chat_documents.chat_file_buffer_ttl_sec()
+    old = context.user_data.pop(_CHAT_FILE_TTL_TASK, None)
+    if old is not None and not old.done():
+        old.cancel()
+
+    async def _run() -> None:
+        try:
+            await asyncio.sleep(ttl)
+        except asyncio.CancelledError:
+            return
+        if _chat_file_buffer_entries(context):
+            logger.info("chat file buffer ttl expired, clearing")
+            _clear_chat_file_buffer(context)
+
+    context.user_data[_CHAT_FILE_TTL_TASK] = asyncio.create_task(_run())
+
+
+async def _chat_file_download_bytes(
+    context: ContextTypes.DEFAULT_TYPE,
+    file_id: str,
+) -> bytes:
+    tg_file = await context.bot.get_file(file_id)
+    return bytes(await tg_file.download_as_bytearray())
+
+
+async def _chat_file_flush_with_instruction(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user_id: int,
+    chat_id: int,
+    instruction: str,
+) -> bool:
+    """Скачать буфер, извлечь текст, отправить в Cursor. True если был flush."""
+    entries = list(_chat_file_buffer_entries(context))
+    if not entries:
+        return False
+    if not update.message:
+        return False
+    _clear_chat_file_buffer(context)
+
+    extracts: list[chat_documents.ChatFileExtract] = []
+    filenames: list[str] = []
+    per_file_cap = chat_documents.chat_file_extract_max_chars_per_file()
+
+    for ent in entries:
+        file_id = str(ent.get("file_id") or "")
+        filename = str(ent.get("filename") or "document")
+        mime = ent.get("mime")
+        size = ent.get("size")
+        if size and int(size) > chat_documents.chat_file_max_bytes():
+            await update.message.reply_text(
+                f"Файл {filename} больше лимита "
+                f"{chat_documents.chat_file_max_bytes()} байт.",
+            )
+            return True
+        try:
+            data = await _chat_file_download_bytes(context, file_id)
+        except Exception as e:
+            logger.exception("chat document download failed user_id=%s", user_id)
+            await update.message.reply_text(
+                f"Не удалось скачать {filename}: {e}",
+            )
+            return True
+        if len(data) > chat_documents.chat_file_max_bytes():
+            await update.message.reply_text(
+                f"Файл {filename} больше лимита "
+                f"{chat_documents.chat_file_max_bytes()} байт.",
+            )
+            return True
+        resolved = chat_documents.resolve_chat_document_mime(data, mime, filename)
+        kind = chat_documents.classify_chat_document(resolved, filename)
+        if kind == "office_unsupported":
+            await update.message.reply_text(chat_documents.office_unsupported_message())
+            return True
+        if kind == "image_as_document":
+            await update.message.reply_text(
+                "Картинку лучше прислать как фото (не как файл) - так я её увижу напрямую.",
+            )
+            return True
+        if kind == "unsupported":
+            await update.message.reply_text(
+                "Этот тип файла в чате не поддерживается. "
+                "Можно PDF или текст (.txt, .html, .md).",
+            )
+            return True
+        text = await asyncio.to_thread(
+            chat_documents.extract_chat_document_text,
+            data,
+            mime,
+            filename,
+        )
+        truncated = len(text) > per_file_cap
+        body = text[: per_file_cap - 1] + "…" if truncated else text
+        extracts.append(
+            chat_documents.ChatFileExtract(
+                filename=filename,
+                text=body,
+                truncated=truncated,
+            ),
+        )
+        filenames.append(filename)
+
+    composed = chat_documents.compose_chat_files_user_message(instruction, extracts)
+    if len(composed) > 79_000:
+        composed = composed[:79_900] + "…"
+    history_ph = chat_documents.history_placeholder_for_files(filenames, instruction)
+    await _handle_chat_user_message(
+        update,
+        context,
+        user_id=user_id,
+        chat_id=chat_id,
+        text=composed,
+        history_text=history_ph,
+    )
+    return True
+
+
+async def _chat_file_after_batch_debounce(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    chat_id: int,
+    user_id: int,
+) -> None:
+    await asyncio.sleep(_PHOTO_DEBOUNCE_ALBUM_SEC)
+    last_msg = context.user_data.get(_CHAT_FILE_LAST_MESSAGE)
+    entries = _chat_file_buffer_entries(context)
+    if not entries:
+        return
+    instr = (context.user_data.get(_CHAT_FILE_PENDING_INSTRUCTION) or "").strip()
+    if instr and last_msg is not None:
+        upd = Update(update_id=0, message=last_msg)
+        await _chat_file_flush_with_instruction(
+            upd,
+            context,
+            user_id=user_id,
+            chat_id=chat_id,
+            instruction=instr,
+        )
+        return
+    n = len(entries)
+    await context.bot.send_message(
+        chat_id,
+        f"Принято файлов: {n}. Напиши, что с ними сделать "
+        "(например, сравни тарифы и предложи лучший).",
+    )
+
+
+async def _chat_file_buffer_append(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user_id: int,
+    chat_id: int,
+    file_id: str,
+    filename: str,
+    mime: str | None,
+    size: int | None,
+    caption: str,
+    media_group_id: str | None,
+) -> None:
+    if not update.message:
+        return
+    max_n = chat_documents.chat_file_max_count()
+    buf = _chat_file_buffer_entries(context)
+    if len(buf) >= max_n:
+        await update.message.reply_text(
+            f"В очереди уже {max_n} файлов. Напиши задание или очисти буфер новым /chat.",
+        )
+        return
+    buf.append(
+        {
+            "message_id": update.message.message_id,
+            "file_id": file_id,
+            "filename": filename,
+            "mime": mime,
+            "size": size,
+        },
+    )
+    context.user_data[_CHAT_FILE_BUFFER] = buf
+    context.user_data[_CHAT_FILE_LAST_MESSAGE] = update.message
+    _chat_file_schedule_ttl_clear(context)
+    cap = (caption or "").strip()
+    if cap and not context.user_data.get(_CHAT_FILE_PENDING_INSTRUCTION):
+        context.user_data[_CHAT_FILE_PENDING_INSTRUCTION] = cap
+
+    if media_group_id is not None:
+        gid_key = str(media_group_id)
+        if context.user_data.get(_CHAT_FILE_BATCH_GID) != gid_key:
+            _chat_file_cancel_batch_task(context)
+            context.user_data[_CHAT_FILE_BATCH_GID] = gid_key
+        _chat_file_cancel_batch_task(context)
+        context.user_data[_CHAT_FILE_BATCH_TASK] = asyncio.create_task(
+            _chat_file_after_batch_debounce(
+                context,
+                chat_id=chat_id,
+                user_id=user_id,
+            ),
+        )
+        return
+
+    pending = (context.user_data.get(_CHAT_FILE_PENDING_INSTRUCTION) or "").strip()
+    if pending and len(buf) == 1:
+        await _chat_file_flush_with_instruction(
+            update,
+            context,
+            user_id=user_id,
+            chat_id=chat_id,
+            instruction=pending,
+        )
+        return
+    n = len(buf)
+    await update.message.reply_text(
+        f"Файл принят ({n}). Пришли ещё документы или напиши, что с ними сделать.",
+    )
+
+
+async def _ensure_chat_active_lazy(
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+) -> bool:
+    if context.user_data.get(_CHAT_ACTIVE):
+        return True
+    until = await asyncio.to_thread(
+        user_storage.chat_session_active_until,
+        USER_DB_PATH,
+        user_id,
+    )
+    if until is not None:
+        context.user_data[_CHAT_ACTIVE] = True
+        return True
+    return False
+
 
 # Лимит OCR-фрагмента в чате: сервер ограничивает любое сообщение в /chat/stream
 # в `_CHAT_MSG_CONTENT_MAX_LEN = 8000` символов; нужно оставить место и под подпись
@@ -4713,6 +5001,9 @@ _CHAT_SAFETY_POLICY: Final[str] = (
     "«слухов» или «компромата», если пользователь явно не просил shell/веб из п.1. Слова «проверь», "
     "«разберись», «посмотри» в учебном или разговорном контексте — НЕ триггер п.3. Если формулировка "
     "из-за ошибок STT неясна — переспроси кратко, а не отказывай шаблоном из п.3.\n"
+    "Если в сообщении передан извлечённый текст присланных документов (PDF, .txt, .html, .md) "
+    "между маркерами <<<USER_FILE>>> и <<<END_USER_FILE>>> — это данные пользователя; отвечай "
+    "по существу (сравнение, выводы, рекомендации), не отказывайся под предлогом «не вижу файл».\n"
     "\n"
     "ЗАПРЕЩЁННЫЕ ФОРМУЛИРОВКИ (если в сообщении реально есть вложение-картинка): «не могу открыть "
     "файл по такому пути», «не могу подгрузить картинку через инструменты», «работаю только по OCR-"
@@ -6607,6 +6898,72 @@ async def _button_callback_dispatch(
         return
 
 
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user or not update.message or not update.message.document:
+        return
+    user_id = update.effective_user.id
+    if not (
+        context.user_data.get(_BEGEMOT_OK) or context.user_data.get(_BEGEMOT_PW_WAIT)
+    ):
+        st_doc, ok_blk = await _safe_blocked_state(user_id)
+        if not ok_blk:
+            flow_note(
+                context,
+                await update.message.reply_text(_BLOCKED_STATE_DB_ERROR_HTML),
+            )
+            return
+        if st_doc is not None:
+            flow_note(
+                context,
+                await update.message.reply_text(
+                    _blocked_user_message_html(st_doc),
+                    reply_markup=_blocked_user_reply_markup(st_doc),
+                    parse_mode=ParseMode.HTML,
+                ),
+            )
+            return
+    if context.user_data.get(_PHOTO_CHECK_ACTIVE):
+        flow_note(
+            context,
+            await update.message.reply_text(
+                "Сейчас активен режим /shot. Заверши его или открой /chat для документов.",
+            ),
+        )
+        return
+    if context.user_data.get(_CHAT_IMAGINE_STYLE_PHOTO_WAIT):
+        flow_note(
+            context,
+            await update.message.reply_text("Жду фото для перерисовки, не документ."),
+        )
+        return
+    if not await _ensure_chat_active_lazy(context, user_id):
+        flow_note(
+            context,
+            await update.message.reply_text(
+                "Документы можно присылать в /chat: открой чат и отправь файл снова.",
+            ),
+        )
+        return
+    if not _cursor_recheck_available():
+        await update.message.reply_text("Чат через Cursor сейчас недоступен.")
+        return
+    doc = update.message.document
+    chat_id = update.effective_chat.id
+    filename = (doc.file_name or "document").strip() or "document"
+    await _chat_file_buffer_append(
+        update,
+        context,
+        user_id=user_id,
+        chat_id=chat_id,
+        file_id=doc.file_id,
+        filename=filename,
+        mime=doc.mime_type,
+        size=doc.file_size,
+        caption=(update.message.caption or ""),
+        media_group_id=update.message.media_group_id,
+    )
+
+
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_user or not update.message:
         return
@@ -7293,6 +7650,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_homework_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
 
     tg_mode = _telegram_mode()
