@@ -10,6 +10,7 @@
 ### Fixed
 
 - **PDF в `/chat` с «битым» текстовым слоем**: PyMuPDF вместо одного `pypdf`, при обрывках цифр без подписей - OCR страниц через **`PREOCR_URL`** (`CHAT_PDF_OCR_FALLBACK`, `CHAT_PDF_OCR_MAX_PAGES`)
+- **PDF МТС с табличной вёрсткой**: сжатие пробельного «пустого» текста перед лимитом **`CHAT_FILE_EXTRACT_MAX_CHARS_PER_FILE`** (раньше в Cursor уходили первые 12k пробелов и одни цифры)
 
 - **Перерисовка фото в стиле примера (`/imagine`)**: кнопка **«Перерисовать фото в стиле примера»** — пользователь присылает фото; bridge/cursor-agent переносит живописный стиль эталона без копирования сюжета купе. API: `POST /image/generate` с `mode=style_redraw`, `source_image_b64`; env **`IMAGE_GEN_STYLE_REFERENCE_PATH`**
 

@@ -137,9 +137,31 @@ def chat_pdf_ocr_max_pages() -> int:
     return _int_env("CHAT_PDF_OCR_MAX_PAGES", 6, 1, 20)
 
 
+def normalize_pdf_extracted_text(text: str) -> str:
+    """Убрать «пустую» вёрстку PDF (тысячи пробелов между колонками таблицы)."""
+    if not text:
+        return ""
+    t = text.replace("\xa0", " ")
+    t = re.sub(r"[ \t]+", " ", t)
+    lines: list[str] = []
+    for line in t.splitlines():
+        line = line.strip()
+        if line:
+            lines.append(line)
+    if lines:
+        return "\n".join(lines)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def pdf_extract_space_pad_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    return text.count(" ") / max(len(text), 1)
+
+
 def pdf_text_quality_score(text: str) -> float:
     """Чем выше, тем больше похоже на нормальный текст тарифа/статьи, а не на обрывки цифр."""
-    t = (text or "").strip()
+    t = normalize_pdf_extracted_text(text)
     if not t:
         return 0.0
     n = len(t)
@@ -159,6 +181,9 @@ def pdf_text_quality_score(text: str) -> float:
 
 
 def pdf_text_looks_weak(text: str) -> bool:
+    raw = text or ""
+    if pdf_extract_space_pad_ratio(raw) > 0.75 and len(normalize_pdf_extracted_text(raw)) < 400:
+        return True
     return pdf_text_quality_score(text) < 6.0
 
 
@@ -201,13 +226,56 @@ def _extract_pdf_text_pymupdf(data: bytes) -> str:
     return "\n\n".join(parts).strip()
 
 
+def _extract_pdf_text_pymupdf_words(data: bytes) -> str:
+    try:
+        import fitz
+    except ImportError:
+        return ""
+    try:
+        doc = fitz.open(stream=data, filetype="pdf")
+    except Exception:
+        return ""
+    parts: list[str] = []
+    try:
+        for page in doc:
+            try:
+                words = page.get_text("words") or []
+            except Exception:
+                words = []
+            if not words:
+                continue
+            words.sort(key=lambda w: (round(w[1] / 4), w[0]))
+            parts.append(" ".join(str(w[4]) for w in words))
+    finally:
+        doc.close()
+    return "\n\n".join(parts).strip()
+
+
+def _pick_best_pdf_raw(*candidates: str) -> str:
+    best_raw = ""
+    best_key = (-1.0, -1.0, -1)
+    for raw in candidates:
+        if not raw or not raw.strip():
+            continue
+        norm = normalize_pdf_extracted_text(raw)
+        key = (
+            pdf_text_quality_score(norm),
+            -pdf_extract_space_pad_ratio(raw),
+            len(norm),
+        )
+        if key > best_key:
+            best_key = key
+            best_raw = raw
+    return best_raw
+
+
 def extract_pdf_text(data: bytes) -> str:
     """Лучший из pypdf и PyMuPDF (маркетинговые PDF часто ломают только один движок)."""
     a = _extract_pdf_text_pypdf(data)
     b = _extract_pdf_text_pymupdf(data)
-    if pdf_text_quality_score(b) > pdf_text_quality_score(a):
-        return b if b else a
-    return a if a else b
+    c = _extract_pdf_text_pymupdf_words(data)
+    raw = _pick_best_pdf_raw(a, b, c)
+    return normalize_pdf_extracted_text(raw)
 
 
 def _extract_pdf_text(data: bytes) -> str:
@@ -258,14 +326,15 @@ async def extract_pdf_text_for_chat(data: bytes) -> str:
     if not pdf_text_looks_weak(base):
         return base
     ocr = await _pdf_preocr_text(data)
-    if ocr and pdf_text_quality_score(ocr) > pdf_text_quality_score(base):
+    ocr_norm = normalize_pdf_extracted_text(ocr)
+    if ocr_norm and pdf_text_quality_score(ocr_norm) > pdf_text_quality_score(base):
         logger.info(
             "chat pdf used preocr fallback pages_cap=%s base_score=%.1f ocr_score=%.1f",
             chat_pdf_ocr_max_pages(),
             pdf_text_quality_score(base),
-            pdf_text_quality_score(ocr),
+            pdf_text_quality_score(ocr_norm),
         )
-        return ocr
+        return ocr_norm
     return base
 
 

@@ -22,6 +22,14 @@ def test_extract_plain_text() -> None:
     assert "тариф" in out
 
 
+def test_normalize_pdf_strips_layout_padding() -> None:
+    padded = "8-800\n" + (" " * 8000) + "СуперПлата 700,00"
+    norm = chat_documents.normalize_pdf_extracted_text(padded)
+    assert "СуперПлата" in norm
+    assert len(norm) < 200
+    assert chat_documents.pdf_text_looks_weak(padded)
+
+
 def test_pdf_quality_weak_tariff_fragments() -> None:
     weak = "700, 200, 69, 199, 229, 2,50, 500, 326, 150"
     strong = (
