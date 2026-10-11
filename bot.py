@@ -367,6 +367,51 @@ def _clear_chat_imagine_waits(context: ContextTypes.DEFAULT_TYPE) -> None:
     _clear_chat_pending_sources(context)
 
 
+def _strip_imagine_command_prefix(text: str) -> str:
+    t = (text or "").strip()
+    if t.lower().startswith("/imagine"):
+        rest = t[len("/imagine") :].strip()
+        return rest or t
+    return t
+
+
+def _chat_history_has_recent_imagine(history: list[dict[str, str]] | None) -> bool:
+    for m in (history or [])[-8:]:
+        c = str(m.get("content") or "")
+        if "[/imagine]" in c or "[сгенерировано фото" in c or "[перерисовано фото" in c:
+            return True
+    return False
+
+
+def _text_likely_imagine_prompt(text: str) -> bool:
+    """Промпт для image API, а не обычный вопрос в чат (эвристика)."""
+    t = _strip_imagine_command_prefix(text).strip()
+    if not t:
+        return False
+    if t.lower().startswith("/imagine"):
+        return True
+    if len(t) < 100:
+        return False
+    low = t.lower()
+    if "цифровая иллюстрация" in low and ("купе" in low or "поезд" in low):
+        return True
+    if "painterly" in low and "render" in low:
+        return True
+    return False
+
+
+def _should_route_chat_text_to_imagine(
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+) -> bool:
+    if not _is_image_gen_enabled():
+        return False
+    if context.user_data.get(_CHAT_IMG_PROMPT_WAIT):
+        return True
+    history = list(context.user_data.get(_CHAT_HISTORY) or [])
+    return _text_likely_imagine_prompt(text) and _chat_history_has_recent_imagine(history)
+
+
 _CHAT_IMAGINE_EXAMPLE_PROMPT = (
     "Цифровая иллюстрация в мягком живописном стиле: юноша в темно-синей "
     "толстовке сидит на нижней полке в купе поезда, смотрит в окно на "
@@ -3701,13 +3746,13 @@ async def handle_homework_text(update: Update, context: ContextTypes.DEFAULT_TYP
                 text=text,
             ):
                 return
-            if context.user_data.get(_CHAT_IMG_PROMPT_WAIT):
+            if _should_route_chat_text_to_imagine(context, text):
                 await _handle_chat_imagine_request(
                     update,
                     context,
                     user_id=user_id,
                     chat_id=cid,
-                    prompt=text,
+                    prompt=_strip_imagine_command_prefix(text),
                 )
                 return
             await _handle_chat_user_message(
@@ -4250,7 +4295,8 @@ async def _handle_chat_imagine_request(
     prompt: str,
 ) -> None:
     """Сгенерировать одну картинку и отправить как Telegram-фото."""
-    _clear_chat_imagine_waits(context)
+    was_awaiting_custom_prompt = bool(context.user_data.get(_CHAT_IMG_PROMPT_WAIT))
+    context.user_data.pop(_CHAT_IMAGINE_STYLE_PHOTO_WAIT, None)
     msg = update.message
     if msg is None:
         return
@@ -4263,14 +4309,19 @@ async def _handle_chat_imagine_request(
         return
     p = (prompt or "").strip()
     if not p:
+        if was_awaiting_custom_prompt:
+            context.user_data[_CHAT_IMG_PROMPT_WAIT] = True
         await _reply("Пустой промпт — нечего генерировать.")
         return
     if len(p) > image_gen.PROMPT_MAX_LEN:
+        if was_awaiting_custom_prompt:
+            context.user_data[_CHAT_IMG_PROMPT_WAIT] = True
         await _reply(
             f"Промпт слишком длинный (лимит {image_gen.PROMPT_MAX_LEN} символов).",
         )
         return
     if not _is_image_gen_enabled():
+        _clear_chat_imagine_waits(context)
         await _reply(
             "Генерация изображений не настроена: задайте IMAGE_GEN_BASE_URL "
             "и IMAGE_GEN_API_KEY в .env.",
@@ -4308,6 +4359,8 @@ async def _handle_chat_imagine_request(
             else:
                 with suppress(Exception):
                     await _reply(err_text[:4096])
+            if was_awaiting_custom_prompt:
+                context.user_data[_CHAT_IMG_PROMPT_WAIT] = True
             return
 
         if placeholder is not None:
@@ -4330,8 +4383,11 @@ async def _handle_chat_imagine_request(
                     "Картинка сгенерирована, но Telegram отверг отправку. "
                     "Попробуй другой промпт.",
                 )
+            if was_awaiting_custom_prompt:
+                context.user_data[_CHAT_IMG_PROMPT_WAIT] = True
             return
 
+        _clear_chat_imagine_waits(context)
         history: list[dict[str, str]] = list(context.user_data.get(_CHAT_HISTORY) or [])
         history.append({"role": "user", "content": f"[/imagine] {p}"})
         history.append(
