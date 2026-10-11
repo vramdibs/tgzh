@@ -50,6 +50,37 @@ _MAX_SUMMARIZE_PARTS = 16
 _MAX_SUMMARIZE_PART_LEN = 16_000
 _MAX_QUIP_EXCERPT_LEN = 8_000
 
+_image_gen_slot: asyncio.Semaphore | None = None
+
+
+def _image_gen_max_concurrent() -> int:
+    raw = (os.getenv("IMAGE_GEN_MAX_CONCURRENT") or "1").strip()
+    try:
+        return max(1, min(4, int(raw)))
+    except ValueError:
+        return 1
+
+
+def _get_image_gen_sem() -> asyncio.Semaphore:
+    global _image_gen_slot
+    if _image_gen_slot is None:
+        _image_gen_slot = asyncio.Semaphore(_image_gen_max_concurrent())
+    return _image_gen_slot
+
+
+async def _acquire_image_gen_slot() -> None:
+    sem = _get_image_gen_sem()
+    if _image_gen_max_concurrent() == 1:
+        try:
+            await asyncio.wait_for(sem.acquire(), timeout=0.1)
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                429,
+                "image generation already in progress; retry in a minute",
+            ) from None
+    else:
+        await sem.acquire()
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -743,6 +774,7 @@ async def image_generate(req: ImageGenerateRequest) -> Response:
     if len(prompt) > image_gen.PROMPT_MAX_LEN:
         raise HTTPException(400, f"prompt longer than {image_gen.PROMPT_MAX_LEN} chars")
 
+    await _acquire_image_gen_slot()
     reset_completion_usage()
     t0 = time.perf_counter()
     try:
@@ -787,6 +819,8 @@ async def image_generate(req: ImageGenerateRequest) -> Response:
     except Exception as e:
         logger.exception("image_generate upstream failure user_id=%s", req.user_id)
         raise HTTPException(502, f"image backend error: {e}") from e
+    finally:
+        _get_image_gen_sem().release()
 
     elapsed = time.perf_counter() - t0
     logger.info(
