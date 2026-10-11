@@ -126,7 +126,7 @@ IMAGE_GEN_TIMEOUT_SEC=180
 
 Один **`cursor-agent`** на хост (глобальная очередь в bridge): не запускать параллельно `/imagine` и тяжёлый `/chat` на bridge. На **tgzh-server** по умолчанию **`IMAGE_GEN_MAX_CONCURRENT=1`** - второй запрос `/image/generate` получает **429**, а не встаёт в очередь на минуты. Unit bridge: **`TimeoutStopSec=30`** (см. `deploy/discourse-cursor-bridge.service` в репозитории bridge).
 
-**Перерисовка фото в стиле эталона** (кнопка в `/imagine`): в теле JSON дополнительно `source_image_b64` (и опционально `style_reference_b64` от tgzh-server). Пустой `prompt` допустим; подпись к фото Telegram уходит в `prompt` как уточнение. На bridge эталон по умолчанию - `assets/imagine_style_reference.png` (`BRIDGE_IMAGE_STYLE_REFERENCE_PATH`).
+**Перерисовка фото в стиле эталона** (кнопка в `/imagine`): в теле JSON дополнительно `source_image_b64` (и опционально `style_reference_b64` от tgzh-server). Подпись к фото Telegram уходит в `prompt` как уточнение; если подписи нет, **tgzh-server** подставляет короткий дефолтный `prompt` (bridge требует min_length=1) На bridge эталон по умолчанию - `assets/imagine_style_reference.png` (`BRIDGE_IMAGE_STYLE_REFERENCE_PATH`).
 
 Smoke:
 

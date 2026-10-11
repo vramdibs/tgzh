@@ -226,6 +226,41 @@ def test_generate_image_style_redraw_posts_json(
     assert captured["json"]["prompt"] == "notes"
 
 
+def test_generate_image_style_redraw_empty_notes_uses_default_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    style_file = tmp_path / "style.png"
+    style_file.write_bytes(b"style-ref")
+    monkeypatch.setenv("IMAGE_GEN_STYLE_REFERENCE_PATH", str(style_file))
+    captured: dict = {}
+
+    class FakeHttpxClient:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args, **kwargs):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            captured["json"] = json
+            return SimpleNamespace(
+                status_code=200,
+                text="",
+                json=lambda: {"data": [{"b64_json": base64.b64encode(b"x").decode()}]},
+            )
+
+    with patch("httpx.AsyncClient", FakeHttpxClient):
+        asyncio.run(image_gen.generate_image_style_redraw(b"photo", extra_prompt=""))
+
+    assert captured["json"]["prompt"] == image_gen.STYLE_REDRAW_DEFAULT_PROMPT
+
+
 def test_generate_image_propagates_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -36,6 +36,10 @@ _TIMEOUT_LO: Final[float] = 10.0
 _TIMEOUT_HI: Final[float] = 600.0
 _MAX_SOURCE_IMAGE_BYTES: Final[int] = 8 * 1024 * 1024
 _DEFAULT_STYLE_REFERENCE_PATH: Final[str] = "/app/static/imagine/style_reference.png"
+# Bridge OpenAI-совместимый API требует prompt min_length=1 даже для style_redraw.
+STYLE_REDRAW_DEFAULT_PROMPT: Final[str] = (
+    "Перерисуй фото в живописном стиле эталона, сохрани сюжет и объекты на снимке."
+)
 
 
 def _strip_env(name: str) -> str:
@@ -306,6 +310,7 @@ async def generate_image_style_redraw(
     """Перерисовать исходное фото в стиле эталона (bridge style_redraw)."""
     src = _validate_source_bytes(source_bytes)
     notes = _validate_optional_notes(extra_prompt)
+    api_prompt = notes or STYLE_REDRAW_DEFAULT_PROMPT
     if not is_image_gen_configured():
         raise ImageGenNotConfigured(
             "image generation backend not configured (IMAGE_GEN_BASE_URL/API_KEY)",
@@ -316,18 +321,19 @@ async def generate_image_style_redraw(
     timeout = image_gen_timeout_sec()
     payload = {
         "model": model,
-        "prompt": notes,
+        "prompt": api_prompt,
         "n": 1,
         "size": size,
         "source_image_b64": base64.b64encode(src).decode("ascii"),
         "style_reference_b64": base64.b64encode(style_bytes).decode("ascii"),
     }
     logger.info(
-        "image_gen style_redraw model=%s size=%s source_bytes=%s notes_chars=%s",
+        "image_gen style_redraw model=%s size=%s source_bytes=%s notes_chars=%s api_prompt_chars=%s",
         model,
         size,
         len(src),
         len(notes),
+        len(api_prompt),
     )
     return await asyncio.wait_for(
         _post_images_generations_json(payload),

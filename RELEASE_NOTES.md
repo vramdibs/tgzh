@@ -14,6 +14,7 @@
 - **Очередь `/image/generate`**: по умолчанию одна генерация на `tgzh-server` (`IMAGE_GEN_MAX_CONCURRENT=1`); параллельный запрос - **429** вместо зависания на bridge
 - **`/imagine` vs чат**: после ошибки генерации снова ждём промпт (флаг «Свой промпт»); длинный промпт-иллюстрация после истории `[/imagine]` уходит в image API, а не в Cursor; чат не имитирует «Готово, картинка сгенерирована»
 - **Prometheus `/metrics` на `tgzh-server` в Docker:** `tgzh_metrics.maybe_start_http_server()` в FastAPI lifespan (раньше только при `python server.py`, не при `uvicorn server:app`)
+- **Перерисовка без подписи**: `style_redraw` без текста к фото больше не шлет пустой `prompt` на bridge (422 `string_too_short`); подставляется дефолтная инструкция в **`image_gen`**
 - **PDF в `/chat` с «битым» текстовым слоем**: PyMuPDF вместо одного `pypdf`, при обрывках цифр без подписей - OCR страниц через **`PREOCR_URL`** (`CHAT_PDF_OCR_FALLBACK`, `CHAT_PDF_OCR_MAX_PAGES`)
 - **PDF МТС с табличной вёрсткой**: сжатие пробельного «пустого» текста перед лимитом **`CHAT_FILE_EXTRACT_MAX_CHARS_PER_FILE`** (раньше в Cursor уходили первые 12k пробелов и одни цифры)
 
