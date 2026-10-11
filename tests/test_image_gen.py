@@ -261,6 +261,43 @@ def test_generate_image_style_redraw_empty_notes_uses_default_prompt(
     assert captured["json"]["prompt"] == image_gen.STYLE_REDRAW_DEFAULT_PROMPT
 
 
+def test_generate_image_edit_posts_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    captured: dict = {}
+
+    class FakeHttpxClient:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args, **kwargs):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            captured["json"] = json
+            return SimpleNamespace(
+                status_code=200,
+                text="",
+                json=lambda: {"data": [{"b64_json": base64.b64encode(b"out").decode()}]},
+            )
+
+    with patch("httpx.AsyncClient", FakeHttpxClient):
+        out = asyncio.run(
+            image_gen.generate_image_edit(b"photo", instruction="убери провода"),
+        )
+
+    assert out == b"out"
+    assert captured["json"]["image_edit"] is True
+    assert captured["json"]["source_image_b64"]
+    assert "style_reference_b64" not in captured["json"]
+    assert captured["json"]["prompt"] == "убери провода"
+
+
 def test_generate_image_propagates_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

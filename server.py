@@ -767,8 +767,8 @@ async def image_generate(req: ImageGenerateRequest) -> Response:
             "image generation backend not configured (set IMAGE_GEN_BASE_URL/API_KEY)",
         )
     mode = (req.mode or "prompt").strip().lower()
-    if mode not in ("prompt", "style_redraw"):
-        raise HTTPException(400, "mode must be prompt or style_redraw")
+    if mode not in ("prompt", "style_redraw", "image_edit"):
+        raise HTTPException(400, "mode must be prompt, style_redraw, or image_edit")
 
     prompt = (req.prompt or "").strip()
     if len(prompt) > image_gen.PROMPT_MAX_LEN:
@@ -791,6 +791,20 @@ async def image_generate(req: ImageGenerateRequest) -> Response:
             png_bytes = await image_gen.generate_image_style_redraw(
                 source_bytes,
                 extra_prompt=prompt,
+            )
+        elif mode == "image_edit":
+            if not (req.source_image_b64 or "").strip():
+                raise HTTPException(400, "source_image_b64 is required for image_edit")
+            logger.info(
+                "image_generate image_edit start user_id=%s instruction_chars=%s model=%s",
+                req.user_id,
+                len(prompt),
+                image_gen.image_gen_model(),
+            )
+            source_bytes = image_gen.decode_source_image_b64(req.source_image_b64)
+            png_bytes = await image_gen.generate_image_edit(
+                source_bytes,
+                instruction=prompt,
             )
         else:
             if not prompt:

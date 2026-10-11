@@ -16,6 +16,7 @@
 - **Prometheus `/metrics` на `tgzh-server` в Docker:** `tgzh_metrics.maybe_start_http_server()` в FastAPI lifespan (раньше только при `python server.py`, не при `uvicorn server:app`)
 - **Перерисовка без подписи**: `style_redraw` без текста к фото больше не шлет пустой `prompt` на bridge (422 `string_too_short`); подставляется дефолтная инструкция в **`image_gen`**
 - **Перерисовка «в стиле примера»**: bridge снова принимает `source_image_b64` / `style_reference_b64` и отдает агенту пути SOURCE_IMAGE и STYLE_REFERENCE (раньше поля игнорировались - получалась случайная картинка, не твое фото)
+- **Правки фото после генерации**: в сессии `/imagine` текст вроде «убери провода» идет в `image_edit` по последней картинке, без повторной загрузки и без ответа Cursor-чата
 - **PDF в `/chat` с «битым» текстовым слоем**: PyMuPDF вместо одного `pypdf`, при обрывках цифр без подписей - OCR страниц через **`PREOCR_URL`** (`CHAT_PDF_OCR_FALLBACK`, `CHAT_PDF_OCR_MAX_PAGES`)
 - **PDF МТС с табличной вёрсткой**: сжатие пробельного «пустого» текста перед лимитом **`CHAT_FILE_EXTRACT_MAX_CHARS_PER_FILE`** (раньше в Cursor уходили первые 12k пробелов и одни цифры)
 

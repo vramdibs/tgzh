@@ -40,6 +40,9 @@ _DEFAULT_STYLE_REFERENCE_PATH: Final[str] = "/app/static/imagine/style_reference
 STYLE_REDRAW_DEFAULT_PROMPT: Final[str] = (
     "Перерисуй фото в живописном стиле эталона, сохрани сюжет и объекты на снимке."
 )
+IMAGE_EDIT_DEFAULT_PROMPT: Final[str] = (
+    "Внеси правки по инструкции пользователя, остальное на фото не меняй."
+)
 
 
 def _strip_env(name: str) -> str:
@@ -301,6 +304,42 @@ async def generate_image(prompt: str) -> bytes:
 
     record_image_gen_usage(resp, prompt=p, includes_source_image=False)
     return await _parse_images_response(resp)
+
+
+async def generate_image_edit(
+    source_bytes: bytes,
+    instruction: str = "",
+) -> bytes:
+    """Правка исходного фото по текстовой инструкции (bridge image_edit)."""
+    src = _validate_source_bytes(source_bytes)
+    notes = _validate_optional_notes(instruction)
+    api_prompt = notes or IMAGE_EDIT_DEFAULT_PROMPT
+    if not is_image_gen_configured():
+        raise ImageGenNotConfigured(
+            "image generation backend not configured (IMAGE_GEN_BASE_URL/API_KEY)",
+        )
+    model = image_gen_model()
+    size = image_gen_size()
+    timeout = image_gen_timeout_sec()
+    payload = {
+        "model": model,
+        "prompt": api_prompt,
+        "n": 1,
+        "size": size,
+        "source_image_b64": base64.b64encode(src).decode("ascii"),
+        "image_edit": True,
+    }
+    logger.info(
+        "image_gen image_edit model=%s size=%s source_bytes=%s instruction_chars=%s",
+        model,
+        size,
+        len(src),
+        len(notes),
+    )
+    return await asyncio.wait_for(
+        _post_images_generations_json(payload),
+        timeout=timeout,
+    )
 
 
 async def generate_image_style_redraw(

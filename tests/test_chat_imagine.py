@@ -315,6 +315,59 @@ def test_handle_chat_imagine_style_redraw_calls_server(monkeypatch) -> None:
     assert bot._CHAT_IMAGINE_STYLE_PHOTO_WAIT not in ctx.user_data
 
 
+def test_should_route_chat_text_to_imagine_edit_after_last_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    ctx = _FakeContext()
+    ctx.user_data[bot._CHAT_IMAGINE_SESSION] = True
+    ctx.user_data[bot._CHAT_IMAGINE_LAST_PNG] = b"png"
+    ctx.user_data[bot._CHAT_HISTORY] = [
+        {"role": "assistant", "content": "[перерисовано фото в стиле примера: x]"},
+    ]
+    assert bot._should_route_chat_text_to_imagine_edit(
+        ctx,
+        "А можешь с фото убрать провода?",
+    )
+    assert not bot._should_route_chat_text_to_imagine_edit(
+        ctx,
+        "Что такое интеграл?",
+    )
+
+
+def test_handle_chat_imagine_edit_calls_server(monkeypatch) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    ctx = _FakeContext()
+    ctx.user_data[bot._CHAT_IMAGINE_LAST_PNG] = b"last"
+    update = _FakeUpdate("убери провода")
+    captured: dict = {}
+
+    async def _fake_edit(**kwargs):
+        captured.update(kwargs)
+        return b"edited"
+
+    with (
+        patch.object(bot, "_request_image_edit_from_server", side_effect=_fake_edit),
+        patch.object(bot, "_send_chat_menu", new=AsyncMock()),
+    ):
+        asyncio.run(
+            bot._handle_chat_imagine_edit(
+                update,
+                ctx,
+                user_id=1,
+                chat_id=1,
+                instruction="убери провода",
+            ),
+        )
+
+    assert captured["source_png"] == b"last"
+    assert captured["instruction"] == "убери провода"
+    assert ctx.bot.sent_photos
+    assert ctx.user_data[bot._CHAT_IMAGINE_LAST_PNG] == b"edited"
+
+
 def test_imagine_cmd_without_active_chat_opens_choice_menu(monkeypatch) -> None:
     monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
     monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")

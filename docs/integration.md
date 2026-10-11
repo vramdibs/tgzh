@@ -128,6 +128,8 @@ IMAGE_GEN_TIMEOUT_SEC=180
 
 **Перерисовка фото в стиле эталона** (кнопка в `/imagine`): в теле JSON дополнительно `source_image_b64` (и опционально `style_reference_b64` от tgzh-server). Подпись к фото Telegram уходит в `prompt` как уточнение; если подписи нет, **tgzh-server** подставляет короткий дефолтный `prompt` (bridge требует min_length=1) На bridge эталон по умолчанию - `assets/imagine_style_reference.png` (`BRIDGE_IMAGE_STYLE_REFERENCE_PATH`).
 
+**Правка последней картинки текстом** (после генерации/перерисовки в `/imagine`): бот шлет `POST /image/generate` с `mode=image_edit` и тем же `source_image_b64` (последний результат в RAM-сессии). На bridge - `image_edit: true` в `POST /v1/images/generations`, без эталона стиля.
+
 Smoke:
 
 ```bash

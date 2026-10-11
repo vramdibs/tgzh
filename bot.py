@@ -321,6 +321,10 @@ _CHAT_DIALOG_ID = "chat_dialog_id"
 _CHAT_IMG_PROMPT_WAIT = "chat_img_prompt_wait"
 # Ожидание одного фото для перерисовки в стиле эталона (кнопка «Перерисовать фото…»).
 _CHAT_IMAGINE_STYLE_PHOTO_WAIT = "chat_imagine_style_photo_wait"
+# После генерации/перерисовки: правки текстом идут в image API, не в Cursor-чат.
+_CHAT_IMAGINE_SESSION = "chat_imagine_session"
+_CHAT_IMAGINE_LAST_PNG = "chat_imagine_last_png"
+_CHAT_IMAGINE_LAST_PNG_MAX_BYTES = 6 * 1024 * 1024
 # Буфер документов в /chat (несколько PDF подряд или альбом).
 _CHAT_FILE_BUFFER = "chat_file_buffer"
 _CHAT_FILE_BUFFER_AT = "chat_file_buffer_at"
@@ -367,6 +371,32 @@ def _clear_chat_imagine_waits(context: ContextTypes.DEFAULT_TYPE) -> None:
     _clear_chat_pending_sources(context)
 
 
+def _clear_chat_imagine_session(context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data.pop(_CHAT_IMAGINE_SESSION, None)
+    context.user_data.pop(_CHAT_IMAGINE_LAST_PNG, None)
+
+
+def _activate_chat_imagine_session(context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data[_CHAT_IMAGINE_SESSION] = True
+
+
+def _remember_chat_imagine_image(
+    context: ContextTypes.DEFAULT_TYPE,
+    png_bytes: bytes,
+) -> None:
+    if not png_bytes or len(png_bytes) > _CHAT_IMAGINE_LAST_PNG_MAX_BYTES:
+        return
+    context.user_data[_CHAT_IMAGINE_LAST_PNG] = png_bytes
+    context.user_data[_CHAT_IMAGINE_SESSION] = True
+
+
+def _chat_imagine_last_png(context: ContextTypes.DEFAULT_TYPE) -> bytes | None:
+    data = context.user_data.get(_CHAT_IMAGINE_LAST_PNG)
+    if isinstance(data, (bytes, bytearray)) and data:
+        return bytes(data)
+    return None
+
+
 def _strip_imagine_command_prefix(text: str) -> str:
     t = (text or "").strip()
     if t.lower().startswith("/imagine"):
@@ -378,7 +408,12 @@ def _strip_imagine_command_prefix(text: str) -> str:
 def _chat_history_has_recent_imagine(history: list[dict[str, str]] | None) -> bool:
     for m in (history or [])[-8:]:
         c = str(m.get("content") or "")
-        if "[/imagine]" in c or "[сгенерировано фото" in c or "[перерисовано фото" in c:
+        if (
+            "[/imagine]" in c
+            or "[сгенерировано фото" in c
+            or "[перерисовано фото" in c
+            or "[отредактировано фото" in c
+        ):
             return True
     return False
 
@@ -410,6 +445,56 @@ def _should_route_chat_text_to_imagine(
         return True
     history = list(context.user_data.get(_CHAT_HISTORY) or [])
     return _text_likely_imagine_prompt(text) and _chat_history_has_recent_imagine(history)
+
+
+def _text_looks_like_chat_question(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    starters = (
+        "что такое",
+        "что значит",
+        "объясни",
+        "расскажи",
+        "почему ",
+        "как работает",
+        "помоги с задач",
+        "реши ",
+        "вычисли",
+        "найди производную",
+    )
+    return any(t.startswith(s) for s in starters)
+
+
+def _should_route_chat_text_to_imagine_edit(
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+) -> bool:
+    if not _is_image_gen_enabled():
+        return False
+    if context.user_data.get(_CHAT_IMG_PROMPT_WAIT):
+        return False
+    if context.user_data.get(_CHAT_IMAGINE_STYLE_PHOTO_WAIT):
+        return False
+    if _chat_imagine_last_png(context) is None:
+        return False
+    if not (
+        context.user_data.get(_CHAT_IMAGINE_SESSION)
+        or _chat_history_has_recent_imagine(
+            list(context.user_data.get(_CHAT_HISTORY) or []),
+        )
+    ):
+        return False
+    t = (text or "").strip()
+    if not t or t.startswith("/"):
+        return False
+    if _text_likely_imagine_prompt(t):
+        return False
+    if _text_looks_like_chat_question(t):
+        return False
+    if len(t) > image_gen.PROMPT_MAX_LEN:
+        return False
+    return True
 
 
 _CHAT_IMAGINE_EXAMPLE_PROMPT = (
@@ -2014,7 +2099,9 @@ def _chat_imagine_style_photo_help_html() -> str:
         "Пришли <b>одно фото</b> — бот перерисует его в мягком живописном стиле "
         "(как эталон в меню генерации), сохранив твой сюжет. "
         "Сцену купе и персонажей из эталона копировать не будет.\n\n"
-        "Подпись к фото (caption) — опциональное уточнение для генерации."
+        "Подпись к фото (caption) — опциональное уточнение для генерации.\n\n"
+        "После результата можно править картинку текстом (например «убери провода») "
+        "без повторной загрузки фото."
     )
 
 
@@ -2205,6 +2292,7 @@ async def _handle_chat_callback(
         context.user_data.pop(_CHAT_BUSY, None)
         context.user_data.pop(_CHAT_DIALOG_ID, None)
         _clear_chat_imagine_waits(context)
+        _clear_chat_imagine_session(context)
         await _answer_query_once(query, "Сессия закрыта.")
         with suppress(BadRequest, Exception):
             await query.edit_message_text("Сессия /chat закрыта. Открой заново через /chat.")
@@ -2215,6 +2303,7 @@ async def _handle_chat_callback(
         context.user_data.pop(_CHAT_HISTORY, None)
         context.user_data.pop(_CHAT_DIALOG_ID, None)
         _clear_chat_imagine_waits(context)
+        _clear_chat_imagine_session(context)
         await _answer_query_once(query, "Начат новый диалог.")
         await _send_chat_menu(
             context.bot,
@@ -2388,6 +2477,7 @@ async def _handle_chat_callback(
                 )
             return
         _clear_chat_imagine_waits(context)
+        _activate_chat_imagine_session(context)
         await _answer_query_once(query, "Выбери вариант генерации.")
         with suppress(BadRequest, Exception):
             await query.edit_message_text(
@@ -3755,6 +3845,15 @@ async def handle_homework_text(update: Update, context: ContextTypes.DEFAULT_TYP
                     prompt=_strip_imagine_command_prefix(text),
                 )
                 return
+            if _should_route_chat_text_to_imagine_edit(context, text):
+                await _handle_chat_imagine_edit(
+                    update,
+                    context,
+                    user_id=user_id,
+                    chat_id=cid,
+                    instruction=text.strip(),
+                )
+                return
             await _handle_chat_user_message(
                 update,
                 context,
@@ -4260,6 +4359,32 @@ async def _request_image_from_server(*, user_id: int, prompt: str) -> bytes:
         return r.content
 
 
+async def _request_image_edit_from_server(
+    *,
+    user_id: int,
+    source_png: bytes,
+    instruction: str,
+) -> bytes:
+    """POST `/image/generate` mode=image_edit -> PNG-байты."""
+    url = f"{SERVER_URL.rstrip('/')}/image/generate"
+    timeout_s = max(60.0, image_gen.image_gen_timeout_sec() + 30.0)
+    payload = {
+        "user_id": user_id,
+        "mode": "image_edit",
+        "prompt": (instruction or "").strip(),
+        "source_image_b64": base64.b64encode(source_png).decode("ascii"),
+    }
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(timeout_s),
+        transport=async_http_transport_ipv4_lookup(),
+    ) as client:
+        r = await client.post(url, json=payload)
+        if r.status_code != 200:
+            body = r.text or ""
+            raise RuntimeError(f"server {r.status_code}: {body[:300]}")
+        return r.content
+
+
 async def _request_image_style_redraw_from_server(
     *,
     user_id: int,
@@ -4387,6 +4512,7 @@ async def _handle_chat_imagine_request(
                 context.user_data[_CHAT_IMG_PROMPT_WAIT] = True
             return
 
+        _remember_chat_imagine_image(context, png_bytes)
         _clear_chat_imagine_waits(context)
         history: list[dict[str, str]] = list(context.user_data.get(_CHAT_HISTORY) or [])
         history.append({"role": "user", "content": f"[/imagine] {p}"})
@@ -4507,6 +4633,7 @@ async def _handle_chat_imagine_style_redraw(
                 )
             return
 
+        _remember_chat_imagine_image(context, png_bytes)
         history: list[dict[str, str]] = list(context.user_data.get(_CHAT_HISTORY) or [])
         history.append(
             {"role": "user", "content": f"[/imagine style] [фото: {hist_notes}]"},
@@ -4540,6 +4667,132 @@ async def _handle_chat_imagine_style_redraw(
         context.user_data.pop(_CHAT_BUSY, None)
 
 
+async def _handle_chat_imagine_edit(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user_id: int,
+    chat_id: int,
+    instruction: str,
+) -> None:
+    """Правка последней картинки из режима генерации (без повторной загрузки)."""
+    msg = update.message
+    if msg is None:
+        return
+
+    async def _reply(text: str) -> None:
+        await msg.reply_text(text)
+
+    src = _chat_imagine_last_png(context)
+    if src is None:
+        await _reply(
+            "Нет последней картинки для правки. Сначала сгенерируй или перерисуй фото.",
+        )
+        return
+    instr = (instruction or "").strip()
+    if not instr:
+        await _reply("Напиши, что изменить на последней картинке.")
+        return
+    if len(instr) > image_gen.PROMPT_MAX_LEN:
+        await _reply(
+            f"Инструкция слишком длинная (лимит {image_gen.PROMPT_MAX_LEN} символов).",
+        )
+        return
+    if not _is_image_gen_enabled():
+        await _reply(
+            "Генерация изображений не настроена: задайте IMAGE_GEN_BASE_URL "
+            "и IMAGE_GEN_API_KEY в .env.",
+        )
+        return
+    if context.user_data.get(_CHAT_BUSY):
+        await _reply("Подожди, чат ещё печатает предыдущий ответ.")
+        return
+
+    context.user_data[_CHAT_BUSY] = True
+    placeholder = None
+    try:
+        with suppress(Exception):
+            await context.bot.send_chat_action(chat_id, ChatAction.UPLOAD_PHOTO)
+        with suppress(Exception):
+            placeholder = await context.bot.send_message(
+                chat_id,
+                "Правлю последнюю картинку… Это может занять до пары минут.",
+            )
+        logger.info(
+            "chat imagine image_edit user_id=%s source_bytes=%s instruction_chars=%s",
+            user_id,
+            len(src),
+            len(instr),
+        )
+        try:
+            png_bytes = await _request_image_edit_from_server(
+                user_id=user_id,
+                source_png=src,
+                instruction=instr,
+            )
+        except Exception as e:
+            logger.exception("chat imagine image_edit failed user_id=%s", user_id)
+            err_text = f"Не удалось изменить картинку: {e}"
+            if placeholder is not None:
+                with suppress(BadRequest, Exception):
+                    await context.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=placeholder.message_id,
+                        text=err_text[:4096],
+                    )
+            else:
+                with suppress(Exception):
+                    await _reply(err_text[:4096])
+            return
+
+        if placeholder is not None:
+            with suppress(BadRequest, Exception):
+                await context.bot.delete_message(
+                    chat_id=chat_id,
+                    message_id=placeholder.message_id,
+                )
+        cap = instr
+        if len(cap) > _TG_PHOTO_CAPTION_MAX_LEN:
+            cap = cap[: _TG_PHOTO_CAPTION_MAX_LEN - 1] + "…"
+        try:
+            await context.bot.send_photo(chat_id, photo=png_bytes, caption=cap)
+        except Exception:
+            logger.exception("chat imagine image_edit send_photo failed user_id=%s", user_id)
+            with suppress(Exception):
+                await _reply(
+                    "Картинка готова, но Telegram отверг отправку. Попробуй короче инструкцию.",
+                )
+            return
+
+        _remember_chat_imagine_image(context, png_bytes)
+        history: list[dict[str, str]] = list(context.user_data.get(_CHAT_HISTORY) or [])
+        history.append({"role": "user", "content": f"[/imagine edit] {instr}"})
+        history.append(
+            {"role": "assistant", "content": f"[отредактировано фото: {instr}]"},
+        )
+        if len(history) > _CHAT_HISTORY_RUNTIME_CAP:
+            history = history[-_CHAT_HISTORY_RUNTIME_CAP:]
+        context.user_data[_CHAT_HISTORY] = history
+
+        dialog_id = context.user_data.get(_CHAT_DIALOG_ID)
+        try:
+            saved_id = await asyncio.to_thread(
+                user_storage.chat_dialog_upsert,
+                USER_DB_PATH,
+                user_id,
+                dialog_id if isinstance(dialog_id, int) else None,
+                history,
+            )
+        except Exception:
+            logger.exception("chat dialog upsert (imagine edit) failed user_id=%s", user_id)
+        else:
+            if saved_id and not dialog_id:
+                context.user_data[_CHAT_DIALOG_ID] = saved_id
+        await _send_chat_menu(context.bot, chat_id, user_id=user_id)
+    finally:
+        context.user_data.pop(_CHAT_BUSY, None)
+
+
 async def imagine_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """`/imagine` — меню или генерация; сессию /chat поднимаем сами, без /chat вручную."""
     if not update.message or not update.effective_user or not update.effective_chat:
@@ -4554,6 +4807,7 @@ async def imagine_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     prompt = parts[1].strip() if len(parts) > 1 else ""
     if not prompt:
         _clear_chat_imagine_waits(context)
+        _activate_chat_imagine_session(context)
         await update.message.reply_text(
             _chat_imagine_choice_help_html(),
             reply_markup=_chat_imagine_choice_keyboard(),
