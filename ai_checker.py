@@ -57,6 +57,27 @@ def take_completion_usage() -> CompletionUsage:
     return u
 
 
+def _usage_dict_to_completion(usage: dict[str, Any]) -> CompletionUsage:
+    """OpenAI chat, images и cursor-agent (camelCase) в одном месте."""
+    prompt = int(
+        usage.get("prompt_tokens")
+        or usage.get("input_tokens")
+        or usage.get("inputTokens")
+        or 0
+    )
+    completion = int(
+        usage.get("completion_tokens")
+        or usage.get("output_tokens")
+        or usage.get("outputTokens")
+        or 0
+    )
+    if prompt == 0 and completion == 0:
+        total = int(usage.get("total_tokens") or usage.get("totalTokens") or 0)
+        if total > 0:
+            completion = total
+    return CompletionUsage(prompt_tokens=max(0, prompt), completion_tokens=max(0, completion))
+
+
 def usage_from_openai(obj: Any) -> CompletionUsage:
     usage = getattr(obj, "usage", None)
     if usage is None and isinstance(obj, dict):
@@ -64,11 +85,23 @@ def usage_from_openai(obj: Any) -> CompletionUsage:
     if usage is None:
         return CompletionUsage()
     if isinstance(usage, dict):
-        prompt = int(usage.get("prompt_tokens") or 0)
-        completion = int(usage.get("completion_tokens") or 0)
-        return CompletionUsage(prompt_tokens=max(0, prompt), completion_tokens=max(0, completion))
-    prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
-    completion = int(getattr(usage, "completion_tokens", 0) or 0)
+        return _usage_dict_to_completion(usage)
+    prompt = int(
+        getattr(usage, "prompt_tokens", 0)
+        or getattr(usage, "input_tokens", 0)
+        or getattr(usage, "inputTokens", 0)
+        or 0
+    )
+    completion = int(
+        getattr(usage, "completion_tokens", 0)
+        or getattr(usage, "output_tokens", 0)
+        or getattr(usage, "outputTokens", 0)
+        or 0
+    )
+    if prompt == 0 and completion == 0:
+        total = int(getattr(usage, "total_tokens", 0) or getattr(usage, "totalTokens", 0) or 0)
+        if total > 0:
+            completion = total
     return CompletionUsage(prompt_tokens=max(0, prompt), completion_tokens=max(0, completion))
 
 

@@ -78,6 +78,13 @@ def test_usage_from_openai_object_and_dict() -> None:
     from_dict = ai_checker.usage_from_openai({"usage": {"prompt_tokens": 1, "completion_tokens": 2}})
     assert from_dict.prompt_tokens == 1
     assert from_dict.completion_tokens == 2
+    camel = ai_checker.usage_from_openai(
+        {"usage": {"inputTokens": 10, "outputTokens": 20}},
+    )
+    assert camel.prompt_tokens == 10
+    assert camel.completion_tokens == 20
+    total_only = ai_checker.usage_from_openai({"usage": {"total_tokens": 99}})
+    assert total_only.completion_tokens == 99
     ai_checker.add_completion_usage(_R())
     ai_checker.add_completion_usage({"usage": {"prompt_tokens": 4, "completion_tokens": 5}})
     taken = ai_checker.take_completion_usage()

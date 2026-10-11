@@ -23,6 +23,8 @@ from typing import Any, Final
 
 import httpx
 
+from ai_checker import CompletionUsage, add_completion_usage, usage_from_openai
+
 logger = logging.getLogger("tgzh.image_gen")
 
 
@@ -123,6 +125,58 @@ def _validate_source_bytes(source: bytes) -> bytes:
     return source
 
 
+def _env_positive_int(name: str, default: int) -> int:
+    raw = _strip_env(name)
+    if not raw:
+        return default
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return default
+
+
+def estimated_image_gen_usage(
+    prompt: str,
+    *,
+    includes_source_image: bool = False,
+) -> CompletionUsage:
+    """Оценка токенов, если бэкенд (bridge) не вернул `usage` в JSON."""
+    chars = len((prompt or "").strip())
+    chars_per_token = max(1, _env_positive_int("IMAGE_GEN_ESTIMATE_CHARS_PER_TOKEN", 4))
+    prompt_tokens = max(1, chars // chars_per_token) if chars else 1
+    if includes_source_image:
+        prompt_tokens += _env_positive_int("IMAGE_GEN_ESTIMATE_SOURCE_IMAGE_TOKENS", 2048)
+    completion_tokens = _env_positive_int("IMAGE_GEN_ESTIMATE_OUTPUT_TOKENS", 4096)
+    return CompletionUsage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
+
+
+def record_image_gen_usage(
+    response: Any | None,
+    *,
+    prompt: str,
+    includes_source_image: bool = False,
+) -> CompletionUsage:
+    """Учесть токены images API в contextvar для `_record_llm_spend` на server."""
+    extra = usage_from_openai(response) if response is not None else CompletionUsage()
+    if extra.prompt_tokens == 0 and extra.completion_tokens == 0:
+        extra = estimated_image_gen_usage(
+            prompt,
+            includes_source_image=includes_source_image,
+        )
+    add_completion_usage(
+        {
+            "usage": {
+                "prompt_tokens": extra.prompt_tokens,
+                "completion_tokens": extra.completion_tokens,
+            },
+        },
+    )
+    return extra
+
+
 def decode_source_image_b64(source_image_b64: str) -> bytes:
     raw = (source_image_b64 or "").strip()
     if not raw:
@@ -173,6 +227,11 @@ async def _post_images_generations_json(payload: dict[str, Any]) -> bytes:
         if r.status_code >= 400:
             raise RuntimeError(f"image backend {r.status_code}: {(r.text or '')[:300]}")
         body = r.json()
+    record_image_gen_usage(
+        body,
+        prompt=str(payload.get("prompt") or ""),
+        includes_source_image=bool(payload.get("source_image_b64")),
+    )
     data = body.get("data") or []
     if not data:
         raise RuntimeError("image backend returned empty data")
@@ -236,6 +295,7 @@ async def generate_image(prompt: str) -> bytes:
         timeout=timeout,
     )
 
+    record_image_gen_usage(resp, prompt=p, includes_source_image=False)
     return await _parse_images_response(resp)
 
 

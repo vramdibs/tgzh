@@ -209,7 +209,7 @@ def record_stt(*, outcome: str) -> None:
 
 
 _LLM_KINDS: frozenset[str] = frozenset(
-    {"check", "chat", "photo", "summarize", "quip", "other"}
+    {"check", "chat", "photo", "image_gen", "summarize", "quip", "other"}
 )
 
 

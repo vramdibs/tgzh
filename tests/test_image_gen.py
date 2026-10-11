@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
+import ai_checker
 import image_gen
 
 
@@ -78,10 +79,17 @@ def test_generate_image_returns_b64_decoded_bytes(
             self.kwargs = kwargs
             self.images = FakeImages()
 
-    with patch("openai.AsyncOpenAI", FakeClient):
-        out = asyncio.run(image_gen.generate_image("cat sitting on a fence"))
+    async def _run() -> tuple[bytes, ai_checker.CompletionUsage]:
+        ai_checker.reset_completion_usage()
+        with patch("openai.AsyncOpenAI", FakeClient):
+            out = await image_gen.generate_image("cat sitting on a fence")
+        return out, ai_checker.take_completion_usage()
+
+    out, usage = asyncio.run(_run())
 
     assert out == raw
+    assert usage.prompt_tokens >= 1
+    assert usage.completion_tokens >= 1
     assert captured["model"] == "gpt-image-1"
     assert captured["size"] == "1024x1024"
     assert captured["n"] == 1
@@ -154,6 +162,25 @@ def test_generate_image_raises_on_empty_response(
     with patch("openai.AsyncOpenAI", FakeClient):
         with pytest.raises(RuntimeError, match="empty data"):
             asyncio.run(image_gen.generate_image("x"))
+
+
+def test_record_image_gen_usage_uses_response_when_present() -> None:
+    ai_checker.reset_completion_usage()
+    image_gen.record_image_gen_usage(
+        {"usage": {"inputTokens": 5, "outputTokens": 15}},
+        prompt="x",
+    )
+    usage = ai_checker.take_completion_usage()
+    assert usage.prompt_tokens == 5
+    assert usage.completion_tokens == 15
+
+
+def test_estimated_image_gen_usage_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("IMAGE_GEN_ESTIMATE_OUTPUT_TOKENS", "100")
+    monkeypatch.setenv("IMAGE_GEN_ESTIMATE_SOURCE_IMAGE_TOKENS", "50")
+    u = image_gen.estimated_image_gen_usage("abcd", includes_source_image=True)
+    assert u.prompt_tokens == 1 + 50
+    assert u.completion_tokens == 100
 
 
 def test_generate_image_style_redraw_posts_json(

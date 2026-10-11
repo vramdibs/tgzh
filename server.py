@@ -53,6 +53,7 @@ _MAX_QUIP_EXCERPT_LEN = 8_000
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    tgzh_metrics.maybe_start_http_server()
     logger.info(
         "server startup host=0.0.0.0 port=%s AI_MOCK=%s",
         os.getenv("PORT", "8000"),
@@ -742,6 +743,7 @@ async def image_generate(req: ImageGenerateRequest) -> Response:
     if len(prompt) > image_gen.PROMPT_MAX_LEN:
         raise HTTPException(400, f"prompt longer than {image_gen.PROMPT_MAX_LEN} chars")
 
+    reset_completion_usage()
     t0 = time.perf_counter()
     try:
         if mode == "style_redraw":
@@ -794,6 +796,7 @@ async def image_generate(req: ImageGenerateRequest) -> Response:
         elapsed,
         len(png_bytes),
     )
+    _record_llm_spend(kind="image_gen", user_id=req.user_id)
     return Response(content=png_bytes, media_type="image/png")
 
 

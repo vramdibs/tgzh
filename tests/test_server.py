@@ -261,3 +261,59 @@ def test_photo_check_mock(monkeypatch: pytest.MonkeyPatch, client: TestClient) -
     assert "/photo" in r.json()["result"] or "mock" in r.json()["result"].lower()
 
 
+async def _fake_generate_image(prompt: str) -> bytes:
+    import image_gen
+
+    image_gen.record_image_gen_usage(None, prompt=prompt)
+    return b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+
+
+def test_image_generate_records_llm_spend(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> None:
+    import image_gen
+
+    monkeypatch.setattr(image_gen, "is_image_gen_configured", lambda: True)
+    monkeypatch.setattr(image_gen, "generate_image", _fake_generate_image)
+    recorded: list[dict] = []
+
+    def _capture(**kw: object) -> None:
+        recorded.append(dict(kw))
+
+    monkeypatch.setattr("server._record_llm_spend", _capture)
+    r = client.post(
+        "/image/generate",
+        json={"user_id": 42, "prompt": "тестовая картинка", "mode": "prompt"},
+    )
+    assert r.status_code == 200
+    assert r.headers.get("content-type", "").startswith("image/png")
+    assert recorded == [{"kind": "image_gen", "user_id": 42}]
+
+
+def test_image_generate_records_llm_token_usage_via_spend(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> None:
+    import image_gen
+
+    monkeypatch.setattr(image_gen, "is_image_gen_configured", lambda: True)
+    monkeypatch.setattr(image_gen, "generate_image", _fake_generate_image)
+    monkeypatch.setenv("AI_MOCK", "0")
+    monkeypatch.setenv("USER_DB_PATH", "/tmp/tgzh-test-llm-metrics.db")
+    spend_calls: list[dict] = []
+
+    def _spy(path: str, **kw: object) -> None:
+        spend_calls.append({"path": path, **kw})
+
+    monkeypatch.setattr("bot_stats.record_llm_spend", _spy)
+    r = client.post(
+        "/image/generate",
+        json={"user_id": 7, "prompt": "circle", "mode": "prompt"},
+    )
+    assert r.status_code == 200
+    assert spend_calls
+    last = spend_calls[-1]
+    assert last.get("kind") == "image_gen"
+    assert int(last.get("prompt_tokens") or 0) >= 1
+    assert int(last.get("completion_tokens") or 0) >= 1
+
+
