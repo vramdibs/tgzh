@@ -327,6 +327,8 @@ _CHAT_IMAGINE_LAST_PNG = "chat_imagine_last_png"
 _CHAT_IMAGINE_LAST_PNG_MAX_BYTES = 6 * 1024 * 1024
 # После успешной генерации - урезанное меню режима фото (auto_compact).
 _CHAT_IMAGINE_UI_COMPACT = "chat_imagine_ui_compact"
+_CHAT_IMAGINE_STYLE_REDRAW_PLACEHOLDER = "Перерисовываю фото, это займет пару минут..."
+_CHAT_IMAGINE_EDIT_PLACEHOLDER = "Правлю последнюю картинку, подождите..."
 # Буфер документов в /chat (несколько PDF подряд или альбом).
 _CHAT_FILE_BUFFER = "chat_file_buffer"
 _CHAT_FILE_BUFFER_AT = "chat_file_buffer_at"
@@ -4756,7 +4758,7 @@ async def _handle_chat_imagine_style_redraw(
         with suppress(Exception):
             placeholder = await context.bot.send_message(
                 chat_id,
-                "Перерисовываю фото, это займет пару минут...",
+                _CHAT_IMAGINE_STYLE_REDRAW_PLACEHOLDER,
             )
         logger.info(
             "chat imagine style_redraw user_id=%s source_bytes=%s notes_chars=%s",
@@ -4892,7 +4894,7 @@ async def _handle_chat_imagine_edit(
         with suppress(Exception):
             placeholder = await context.bot.send_message(
                 chat_id,
-                "Правлю последнюю картинку, подождите...",
+                _CHAT_IMAGINE_EDIT_PLACEHOLDER,
             )
         logger.info(
             "chat imagine image_edit user_id=%s source_bytes=%s instruction_chars=%s",

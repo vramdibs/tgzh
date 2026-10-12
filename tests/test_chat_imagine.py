@@ -277,6 +277,12 @@ def test_chat_imagine_example_prompt_constant_non_empty() -> None:
     assert "поезд" in bot._CHAT_IMAGINE_EXAMPLE_PROMPT.lower()
 
 
+def test_chat_imagine_status_placeholders() -> None:
+    assert bot._CHAT_IMAGINE_EDIT_PLACEHOLDER == "Правлю последнюю картинку, подождите..."
+    assert "пару минут" not in bot._CHAT_IMAGINE_EDIT_PLACEHOLDER
+    assert bot._CHAT_IMAGINE_STYLE_REDRAW_PLACEHOLDER.startswith("Перерисовываю фото")
+
+
 def test_chat_imagine_choice_help_shows_copyable_example_prompt() -> None:
     html = bot._chat_imagine_choice_help_html()
     assert "<pre>" in html
