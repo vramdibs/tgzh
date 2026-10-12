@@ -103,7 +103,8 @@ VLLM_FALLBACK_MODEL=composer-2.5
 | `CURSOR_OPENAI_WORKSPACE` | Sandbox для OpenAI-эндпоинта (default `/tmp/cursor-openai-sandbox`) |
 | `BRIDGE_PORT` | Порт HTTP (default 8787) |
 | `BRIDGE_IMAGE_CURSOR_MODEL` | Модель Composer для `POST /v1/images/generations` (для `model=auto` в tgzh) |
-| `BRIDGE_IMAGE_TIMEOUT_SEC` | Таймаут одной генерации картинки (default 180) |
+| `BRIDGE_IMAGE_TIMEOUT_SEC` | Таймаут одной генерации картинки (default 180; для `style_redraw` лучше 360+) |
+| `BRIDGE_IMAGE_LOCATE_TIMEOUT_SEC` | Ожидание PNG на диске после агента (default 90) |
 | `BRIDGE_IMAGE_ALLOWED_MODELS` | Allowlist поля `model` для images (default `auto,composer-2,composer-2.5`) |
 
 После смены `CURSOR_API_KEY`: `systemctl --user restart discourse-cursor-bridge`.
@@ -120,6 +121,8 @@ IMAGE_GEN_API_KEY=<тот же VLLM_FALLBACK_API_KEY / BRIDGE_OPENAI_API_KEY>
 IMAGE_GEN_MODEL=auto
 IMAGE_GEN_SIZE=1024x1024
 IMAGE_GEN_TIMEOUT_SEC=180
+# style_redraw/image_edit: >= BRIDGE_IMAGE_TIMEOUT_SEC + BRIDGE_IMAGE_LOCATE_TIMEOUT_SEC + запас
+IMAGE_GEN_MULTIPART_TIMEOUT_SEC=480
 ```
 
 На bridge картинка создается через headless `cursor-agent` и инструмент GenerateImage (ADR-009 в репозитории bridge). Ответ - `data[0].b64_json`.

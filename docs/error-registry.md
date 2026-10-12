@@ -127,3 +127,16 @@
 | **Причина** | Один таймаут на все режимы `/image/generate`; для multipart-режимов суммарное время bridge длиннее |
 | **Решение** | В **tgzh** `image_gen_multipart_timeout_sec()` (дефолт `IMAGE_GEN_TIMEOUT_SEC + 120`) для `style_redraw` и `image_edit`; бот ждет `+30` с через `image_gen_bot_client_timeout_sec(multipart=True)`. При необходимости явно **`IMAGE_GEN_MULTIPART_TIMEOUT_SEC`** (до 600) |
 | **Проверка** | Передеплой `tgzh-server`/`tgzh-bot`; повторить перерисовку; в логах `image_generate done` без 504 |
+
+---
+
+## INC-2026-10-12-03: перерисовка фото - `cursor-agent timed out` (502)
+
+| Поле | Значение |
+|------|----------|
+| **Дата** | 2026-10-12 |
+| **Симптом** | После «Перерисовываю фото…» через ~3 мин: `server 502` / `cursor-agent timed out` (или бот молчит, если сообщение об ошибке не дошло) |
+| **Диагностика** | Лог `tgzh-server`: `image backend 502: {"detail":"cursor-agent timed out"}`. Bridge убивает агент по **`BRIDGE_IMAGE_TIMEOUT_SEC`** (дефолт 180); multimodal `style_redraw` часто дольше |
+| **Причина** | Таймаут агента на bridge меньше реального времени GenerateImage + чтение SOURCE/STYLE |
+| **Решение** | На bridge **`BRIDGE_IMAGE_TIMEOUT_SEC=360`** (или выше, до 600); на tgzh **`IMAGE_GEN_MULTIPART_TIMEOUT_SEC`** не меньше суммы таймаутов bridge + locate (например 480 при 360+90); перезапуск bridge и `tgzh-server` |
+| **Проверка** | Повторить перерисовку; в логах bridge `images generate done`, в чате PNG |
