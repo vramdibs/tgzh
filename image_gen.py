@@ -32,6 +32,8 @@ PROMPT_MAX_LEN: Final[int] = 2_000
 _DEFAULT_MODEL: Final[str] = "gpt-image-1"
 _DEFAULT_SIZE: Final[str] = "1024x1024"
 _DEFAULT_TIMEOUT_SEC: Final[float] = 120.0
+# Запас под BRIDGE_IMAGE_LOCATE_TIMEOUT_SEC (до 90 с) после cursor-agent
+_MULTIPART_LOCATE_BUFFER_SEC: Final[float] = 120.0
 _TIMEOUT_LO: Final[float] = 10.0
 _TIMEOUT_HI: Final[float] = 600.0
 _MAX_SOURCE_IMAGE_BYTES: Final[int] = 8 * 1024 * 1024
@@ -88,6 +90,25 @@ def image_gen_timeout_sec() -> float:
     except ValueError:
         return _DEFAULT_TIMEOUT_SEC
     return max(_TIMEOUT_LO, min(_TIMEOUT_HI, v))
+
+
+def image_gen_multipart_timeout_sec() -> float:
+    """Таймаут для style_redraw / image_edit (агент bridge + поиск PNG на диске)."""
+    raw = _strip_env("IMAGE_GEN_MULTIPART_TIMEOUT_SEC")
+    if raw:
+        try:
+            v = float(raw)
+        except ValueError:
+            v = image_gen_timeout_sec() + _MULTIPART_LOCATE_BUFFER_SEC
+        return max(_TIMEOUT_LO, min(_TIMEOUT_HI, v))
+    base = image_gen_timeout_sec()
+    return max(_TIMEOUT_LO, min(_TIMEOUT_HI, base + _MULTIPART_LOCATE_BUFFER_SEC))
+
+
+def image_gen_bot_client_timeout_sec(*, multipart: bool = False) -> float:
+    """HTTP-таймаут бота на POST /image/generate (+ запас на сеть)."""
+    base = image_gen_multipart_timeout_sec() if multipart else image_gen_timeout_sec()
+    return max(60.0, base + 30.0)
 
 
 class ImageGenNotConfigured(RuntimeError):
@@ -233,14 +254,19 @@ async def _parse_images_response(resp: Any) -> bytes:
     raise RuntimeError("image backend returned neither b64_json nor url")
 
 
-async def _post_images_generations_json(payload: dict[str, Any]) -> bytes:
+async def _post_images_generations_json(
+    payload: dict[str, Any],
+    *,
+    timeout: float | None = None,
+) -> bytes:
     if not is_image_gen_configured():
         raise ImageGenNotConfigured(
             "image generation backend not configured (IMAGE_GEN_BASE_URL/API_KEY)",
         )
     base_url = _strip_env("IMAGE_GEN_BASE_URL").rstrip("/")
     api_key = _strip_env("IMAGE_GEN_API_KEY")
-    timeout = image_gen_timeout_sec()
+    if timeout is None:
+        timeout = image_gen_timeout_sec()
     url = f"{base_url}/images/generations"
     async with httpx.AsyncClient(timeout=timeout) as hc:
         r = await hc.post(
@@ -337,7 +363,7 @@ async def generate_image_edit(
         )
     model = image_gen_model()
     size = image_gen_size()
-    timeout = image_gen_timeout_sec()
+    timeout = image_gen_multipart_timeout_sec()
     payload = {
         "model": model,
         "prompt": api_prompt,
@@ -354,7 +380,7 @@ async def generate_image_edit(
         len(notes),
     )
     return await asyncio.wait_for(
-        _post_images_generations_json(payload),
+        _post_images_generations_json(payload, timeout=timeout),
         timeout=timeout,
     )
 
@@ -374,7 +400,7 @@ async def generate_image_style_redraw(
     style_bytes = load_style_reference_bytes()
     model = image_gen_model()
     size = image_gen_size()
-    timeout = image_gen_timeout_sec()
+    timeout = image_gen_multipart_timeout_sec()
     payload = {
         "model": model,
         "prompt": api_prompt,
@@ -392,6 +418,6 @@ async def generate_image_style_redraw(
         len(api_prompt),
     )
     return await asyncio.wait_for(
-        _post_images_generations_json(payload),
+        _post_images_generations_json(payload, timeout=timeout),
         timeout=timeout,
     )

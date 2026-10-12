@@ -65,6 +65,7 @@ def _clear_env_for_unit_tests(monkeypatch: pytest.MonkeyPatch) -> None:
         "IMAGE_GEN_MODEL",
         "IMAGE_GEN_SIZE",
         "IMAGE_GEN_TIMEOUT_SEC",
+        "IMAGE_GEN_MULTIPART_TIMEOUT_SEC",
         "CHAT_SYSTEM_PROMPT",
         # STT_* — у нас опциональный STT для голосовых; в юнит-тестах не должны
         # случайно стучаться в реальный Whisper-эндпоинт через dev-`.env`.

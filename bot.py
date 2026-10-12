@@ -4506,7 +4506,7 @@ def _is_image_gen_enabled() -> bool:
 async def _request_image_from_server(*, user_id: int, prompt: str) -> bytes:
     """POST `/image/generate` -> PNG-байты. Бросает RuntimeError при не-200."""
     url = f"{SERVER_URL.rstrip('/')}/image/generate"
-    timeout_s = max(60.0, image_gen.image_gen_timeout_sec() + 30.0)
+    timeout_s = image_gen.image_gen_bot_client_timeout_sec(multipart=False)
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(timeout_s),
         transport=async_http_transport_ipv4_lookup(),
@@ -4526,7 +4526,7 @@ async def _request_image_edit_from_server(
 ) -> bytes:
     """POST `/image/generate` mode=image_edit -> PNG-байты."""
     url = f"{SERVER_URL.rstrip('/')}/image/generate"
-    timeout_s = max(60.0, image_gen.image_gen_timeout_sec() + 30.0)
+    timeout_s = image_gen.image_gen_bot_client_timeout_sec(multipart=True)
     payload = {
         "user_id": user_id,
         "mode": "image_edit",
@@ -4552,7 +4552,7 @@ async def _request_image_style_redraw_from_server(
 ) -> bytes:
     """POST `/image/generate` mode=style_redraw -> PNG-байты."""
     url = f"{SERVER_URL.rstrip('/')}/image/generate"
-    timeout_s = max(60.0, image_gen.image_gen_timeout_sec() + 30.0)
+    timeout_s = image_gen.image_gen_bot_client_timeout_sec(multipart=True)
     payload = {
         "user_id": user_id,
         "mode": "style_redraw",

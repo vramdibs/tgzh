@@ -113,4 +113,17 @@
 | **Решение** | Обновить **discourse-cursor-bridge**: `run(..., exit_on_result=False)` для images, опрос `_wait_for_located_image` (env **`BRIDGE_IMAGE_LOCATE_TIMEOUT_SEC`**, дефолт 90), перезапуск bridge на хосте с `IMAGE_GEN_BASE_URL` |
 | **Проверка** | Повторить перерисовку фото; ответ с PNG в чате. При долгой генерации при необходимости увеличить **`BRIDGE_IMAGE_TIMEOUT_SEC`** и **`IMAGE_GEN_TIMEOUT_SEC`** |
 
-**Связанные env:** `BRIDGE_IMAGE_LOCATE_TIMEOUT_SEC`, `BRIDGE_IMAGE_LOCATE_POLL_SEC`, `BRIDGE_IMAGE_TIMEOUT_SEC`, `IMAGE_GEN_TIMEOUT_SEC`
+**Связанные env:** `BRIDGE_IMAGE_LOCATE_TIMEOUT_SEC`, `BRIDGE_IMAGE_LOCATE_POLL_SEC`, `BRIDGE_IMAGE_TIMEOUT_SEC`, `IMAGE_GEN_TIMEOUT_SEC`, `IMAGE_GEN_MULTIPART_TIMEOUT_SEC`
+
+---
+
+## INC-2026-10-12-02: перерисовка фото - `image generation timeout` (504)
+
+| Поле | Значение |
+|------|----------|
+| **Дата** | 2026-10-12 |
+| **Симптом** | «Перерисовать фото в стиле примера»: `server 504: {"detail":"image generation timeout"}` |
+| **Диагностика** | `tgzh-server` обрывает `asyncio.wait_for` на вызов bridge по **`IMAGE_GEN_TIMEOUT_SEC`** (часто 180), тогда как после фикса INC-2026-10-12-01 bridge может работать до **`BRIDGE_IMAGE_TIMEOUT_SEC`** + еще до **`BRIDGE_IMAGE_LOCATE_TIMEOUT_SEC`** (90) на поиск PNG |
+| **Причина** | Один таймаут на все режимы `/image/generate`; для multipart-режимов суммарное время bridge длиннее |
+| **Решение** | В **tgzh** `image_gen_multipart_timeout_sec()` (дефолт `IMAGE_GEN_TIMEOUT_SEC + 120`) для `style_redraw` и `image_edit`; бот ждет `+30` с через `image_gen_bot_client_timeout_sec(multipart=True)`. При необходимости явно **`IMAGE_GEN_MULTIPART_TIMEOUT_SEC`** (до 600) |
+| **Проверка** | Передеплой `tgzh-server`/`tgzh-bot`; повторить перерисовку; в логах `image_generate done` без 504 |

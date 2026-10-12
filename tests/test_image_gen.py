@@ -40,6 +40,18 @@ def test_image_gen_timeout_clamped(monkeypatch: pytest.MonkeyPatch) -> None:
     assert image_gen.image_gen_timeout_sec() == 120.0
 
 
+def test_image_gen_multipart_timeout_default_buffer(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("IMAGE_GEN_MULTIPART_TIMEOUT_SEC", raising=False)
+    monkeypatch.setenv("IMAGE_GEN_TIMEOUT_SEC", "180")
+    assert image_gen.image_gen_multipart_timeout_sec() == 300.0
+    assert image_gen.image_gen_bot_client_timeout_sec(multipart=True) == 330.0
+
+
+def test_image_gen_multipart_timeout_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("IMAGE_GEN_MULTIPART_TIMEOUT_SEC", "360")
+    assert image_gen.image_gen_multipart_timeout_sec() == 360.0
+
+
 def test_generate_image_raises_when_not_configured() -> None:
     with pytest.raises(image_gen.ImageGenNotConfigured):
         asyncio.run(image_gen.generate_image("cat"))
