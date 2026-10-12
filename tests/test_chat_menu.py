@@ -29,12 +29,30 @@ def test_chat_menu_active_contains_expected_buttons() -> None:
     assert "chat:new" not in callbacks
     assert "chat:logout" not in callbacks
     assert "chat:back" not in callbacks
-    # Долговременная память удалена — её кнопок в меню быть не должно.
     assert not any(c.startswith("chat:mem_") for c in callbacks)
-    # Лимит проброшен в подпись (10 на пользователя по умолчанию).
     list_label = next(t for t, c in flat if c == "chat:list")
     assert str(user_storage.CHAT_DIALOG_HISTORY_LIMIT) in list_label
     assert "Мои чаты" in list_label
+
+
+def test_chat_menu_imagine_photo_button_states() -> None:
+    ctx = type("C", (), {"user_data": {}})()
+    assert bot._imagine_photo_button_label(None) == "Сгенерировать фото"
+    ctx.user_data[bot._CHAT_IMAGINE_LAST_PNG] = b"x"
+    ctx.user_data[bot._CHAT_IMAGINE_SESSION] = True
+    label = bot._imagine_photo_button_label(ctx)
+    assert "правки текстом" in label
+    flat = _flatten(
+        bot._chat_menu_keyboard(active=True, imagine_photo_label=label),
+    )
+    assert any("правки" in t for t, _ in flat if _ == "chat:imagine")
+
+
+def test_chat_imagine_compact_keyboard_has_exit() -> None:
+    flat = _flatten(bot._chat_imagine_compact_keyboard())
+    callbacks = [c for _, c in flat]
+    assert "chat:imagine:exit" in callbacks
+    assert "chat:menu" in callbacks
 
 
 def test_chat_model_keyboard_lists_available_composer_grok(

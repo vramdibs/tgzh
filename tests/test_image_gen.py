@@ -261,6 +261,17 @@ def test_generate_image_style_redraw_empty_notes_uses_default_prompt(
     assert captured["json"]["prompt"] == image_gen.STYLE_REDRAW_DEFAULT_PROMPT
 
 
+def test_image_gen_user_facing_label_auto(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("IMAGE_GEN_MODEL", "auto")
+    monkeypatch.delenv("BRIDGE_IMAGE_CURSOR_MODEL", raising=False)
+    assert image_gen.image_gen_user_facing_label() == "Composer 2.5"
+
+
+def test_image_gen_user_facing_label_openai(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("IMAGE_GEN_MODEL", "gpt-image-1")
+    assert image_gen.image_gen_user_facing_label() == "OpenAI Images"
+
+
 def test_generate_image_edit_posts_json(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

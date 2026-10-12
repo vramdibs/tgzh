@@ -58,6 +58,23 @@ def image_gen_model() -> str:
     return _strip_env("IMAGE_GEN_MODEL") or _DEFAULT_MODEL
 
 
+def image_gen_user_facing_label() -> str:
+    """Подпись для пользователя: генерация фото не равна модели /chat (Grok)."""
+    slug = image_gen_model().lower()
+    if slug in ("auto", "default", ""):
+        bridge_model = (_strip_env("BRIDGE_IMAGE_CURSOR_MODEL") or "composer-2.5").strip()
+        if bridge_model.startswith("composer"):
+            ver = bridge_model.removeprefix("composer-").strip() or "2"
+            return f"Composer {ver}"
+        return bridge_model or "Composer"
+    if slug in ("gpt-image-1", "dall-e-3", "dall-e-2"):
+        return "OpenAI Images"
+    if slug.startswith("composer"):
+        ver = slug.removeprefix("composer-").strip() or "2"
+        return f"Composer {ver}"
+    return image_gen_model()
+
+
 def image_gen_size() -> str:
     return _strip_env("IMAGE_GEN_SIZE") or _DEFAULT_SIZE
 

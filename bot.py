@@ -325,6 +325,8 @@ _CHAT_IMAGINE_STYLE_PHOTO_WAIT = "chat_imagine_style_photo_wait"
 _CHAT_IMAGINE_SESSION = "chat_imagine_session"
 _CHAT_IMAGINE_LAST_PNG = "chat_imagine_last_png"
 _CHAT_IMAGINE_LAST_PNG_MAX_BYTES = 6 * 1024 * 1024
+# После успешной генерации - урезанное меню режима фото (auto_compact).
+_CHAT_IMAGINE_UI_COMPACT = "chat_imagine_ui_compact"
 # Буфер документов в /chat (несколько PDF подряд или альбом).
 _CHAT_FILE_BUFFER = "chat_file_buffer"
 _CHAT_FILE_BUFFER_AT = "chat_file_buffer_at"
@@ -374,6 +376,7 @@ def _clear_chat_imagine_waits(context: ContextTypes.DEFAULT_TYPE) -> None:
 def _clear_chat_imagine_session(context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop(_CHAT_IMAGINE_SESSION, None)
     context.user_data.pop(_CHAT_IMAGINE_LAST_PNG, None)
+    context.user_data.pop(_CHAT_IMAGINE_UI_COMPACT, None)
 
 
 def _activate_chat_imagine_session(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -478,12 +481,8 @@ def _should_route_chat_text_to_imagine_edit(
         return False
     if _chat_imagine_last_png(context) is None:
         return False
-    if not (
-        context.user_data.get(_CHAT_IMAGINE_SESSION)
-        or _chat_history_has_recent_imagine(
-            list(context.user_data.get(_CHAT_HISTORY) or []),
-        )
-    ):
+    history = list(context.user_data.get(_CHAT_HISTORY) or [])
+    if not _chat_history_has_recent_imagine(history):
         return False
     t = (text or "").strip()
     if not t or t.startswith("/"):
@@ -495,6 +494,56 @@ def _should_route_chat_text_to_imagine_edit(
     if len(t) > image_gen.PROMPT_MAX_LEN:
         return False
     return True
+
+
+def _text_looks_like_image_edit_request(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t or t.startswith("/"):
+        return False
+    edit_verbs = (
+        "убер",
+        "удали",
+        "убрать",
+        "удалить",
+        "исправ",
+        "поправ",
+        "замени",
+        "добав",
+        "перерис",
+        "сделай ярче",
+        "сделай темнее",
+        "remove ",
+        "erase ",
+    )
+    if any(v in t for v in edit_verbs):
+        return True
+    photo_refs = ("фото", "сним", "картин", "изображен", "на фото", "с фото")
+    return any(p in t for p in photo_refs) and len(t) < 500
+
+
+def _should_nudge_imagine_for_edit_in_chat(
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+) -> bool:
+    if not _is_image_gen_enabled():
+        return False
+    if context.user_data.get(_CHAT_IMG_PROMPT_WAIT):
+        return False
+    if context.user_data.get(_CHAT_IMAGINE_STYLE_PHOTO_WAIT):
+        return False
+    if _should_route_chat_text_to_imagine(context, text):
+        return False
+    if _should_route_chat_text_to_imagine_edit(context, text):
+        return False
+    return _text_looks_like_image_edit_request(text)
+
+
+_IMAGINE_EDIT_NUDGE_HTML = (
+    "Чтобы <b>изменить картинку</b> (убрать объект, перерисовать и т.п.), "
+    "открой <code>/imagine</code> или кнопку <b>Сгенерировать фото</b> в меню чата.\n\n"
+    "В обычном чате Grok только <b>обсуждает</b> присланные фото текстом, "
+    "но не рисует и не правит изображения."
+)
 
 
 _CHAT_IMAGINE_EXAMPLE_PROMPT = (
@@ -1969,7 +2018,23 @@ def _chat_session_status_html(session_until) -> str:
     return f"Сессия чата активна до <b>{_h(when)}</b>."
 
 
-def _chat_menu_keyboard_for_user(active: bool, user_id: int) -> InlineKeyboardMarkup:
+def _imagine_photo_button_label(context: ContextTypes.DEFAULT_TYPE | None) -> str:
+    if context is None:
+        return "Сгенерировать фото"
+    if context.user_data.get(_CHAT_IMG_PROMPT_WAIT):
+        return "Фото: жду описание…"
+    if context.user_data.get(_CHAT_IMAGINE_STYLE_PHOTO_WAIT):
+        return "Фото: жду снимок…"
+    if _chat_imagine_last_png(context) and context.user_data.get(_CHAT_IMAGINE_SESSION):
+        return "Фото: правки текстом ✓"
+    return "Сгенерировать фото"
+
+
+def _chat_menu_keyboard_for_user(
+    active: bool,
+    user_id: int,
+    context: ContextTypes.DEFAULT_TYPE | None = None,
+) -> InlineKeyboardMarkup:
     """Клавиатура меню чата, подтянув текущую модель из БД (sync, дёшево)."""
     model_slug = ai_checker.chat_cursor_model_default()
     try:
@@ -1979,6 +2044,7 @@ def _chat_menu_keyboard_for_user(active: bool, user_id: int) -> InlineKeyboardMa
     return _chat_menu_keyboard(
         active,
         model_slug=model_slug,
+        imagine_photo_label=_imagine_photo_button_label(context),
     )
 
 
@@ -2002,12 +2068,16 @@ def _chat_menu_keyboard(
     active: bool,
     *,
     model_slug: str | None = None,
+    imagine_photo_label: str = "Сгенерировать фото",
 ) -> InlineKeyboardMarkup | None:
     if not active:
         return None
     model_label = ai_checker.chat_cursor_model_label(
         model_slug or ai_checker.chat_cursor_model_default(),
     )
+    photo_btn = imagine_photo_label
+    if len(photo_btn) > 64:
+        photo_btn = photo_btn[:63] + "…"
     rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
@@ -2016,9 +2086,19 @@ def _chat_menu_keyboard(
             ),
         ],
         [InlineKeyboardButton(f"Модель: {model_label}", callback_data="chat:model")],
-        [InlineKeyboardButton("Сгенерировать фото", callback_data="chat:imagine")],
+        [InlineKeyboardButton(photo_btn, callback_data="chat:imagine")],
     ]
     return InlineKeyboardMarkup(rows)
+
+
+def _chat_imagine_compact_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("Сгенерировать / править фото", callback_data="chat:imagine")],
+            [InlineKeyboardButton("Выйти из режима фото", callback_data="chat:imagine:exit")],
+            [InlineKeyboardButton("Меню чата", callback_data="chat:menu")],
+        ],
+    )
 
 
 def _chat_imagine_choice_keyboard() -> InlineKeyboardMarkup:
@@ -2064,7 +2144,10 @@ def _chat_imagine_choice_help_html() -> str:
     )
 
 
-def _chat_imagine_wait_keyboard(user_id: int) -> InlineKeyboardMarkup:
+def _chat_imagine_wait_keyboard(
+    user_id: int,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
@@ -2074,7 +2157,9 @@ def _chat_imagine_wait_keyboard(user_id: int) -> InlineKeyboardMarkup:
         ],
         [InlineKeyboardButton("Назад к выбору", callback_data="chat:imagine")],
     ]
-    rows.extend(_chat_menu_keyboard_for_user(True, user_id).inline_keyboard)
+    rows.extend(
+        _chat_menu_keyboard_for_user(True, user_id, context=context).inline_keyboard,
+    )
     return InlineKeyboardMarkup(rows)
 
 
@@ -2085,11 +2170,16 @@ def _chat_imagine_custom_prompt_help_html() -> str:
     )
 
 
-def _chat_imagine_style_photo_wait_keyboard(user_id: int) -> InlineKeyboardMarkup:
+def _chat_imagine_style_photo_wait_keyboard(
+    user_id: int,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton("Назад к выбору", callback_data="chat:imagine")],
     ]
-    rows.extend(_chat_menu_keyboard_for_user(True, user_id).inline_keyboard)
+    rows.extend(
+        _chat_menu_keyboard_for_user(True, user_id, context=context).inline_keyboard,
+    )
     return InlineKeyboardMarkup(rows)
 
 
@@ -2157,6 +2247,7 @@ async def _send_chat_menu(
     *,
     user_id: int,
     extra_html: str = "",
+    context: ContextTypes.DEFAULT_TYPE | None = None,
 ) -> None:
     until = await asyncio.to_thread(
         user_storage.chat_session_active_until,
@@ -2169,7 +2260,9 @@ async def _send_chat_menu(
     )
     if active:
         model_label = ai_checker.chat_cursor_model_label(model_slug)
-        body = f"Модель: <b>{_h(model_label)}</b> (reasoning Low, без Fast)."
+        body = (
+            f"Чат: <b>{_h(model_label)}</b> (текст и разбор фото; reasoning Low, без Fast)."
+        )
     else:
         body = (
             "<b>ИИ-ассистент Cursor.</b> Доступ закрыт паролем. "
@@ -2181,12 +2274,53 @@ async def _send_chat_menu(
     await bot.send_message(
         chat_id,
         body,
-        reply_markup=_chat_menu_keyboard(
-            active,
-            model_slug=model_slug,
-        ),
+        reply_markup=_chat_menu_keyboard_for_user(active, user_id, context=context)
+        if active
+        else None,
         parse_mode=ParseMode.HTML,
     )
+
+
+async def _send_chat_imagine_status_menu(
+    bot,
+    chat_id: int,
+    *,
+    user_id: int,
+    extra_html: str = "",
+) -> None:
+    """Урезанное меню после генерации/правки фото (режим imagine)."""
+    model_slug = await asyncio.to_thread(
+        user_storage.chat_model_get, USER_DB_PATH, user_id,
+    )
+    chat_label = ai_checker.chat_cursor_model_label(model_slug)
+    photo_label = image_gen.image_gen_user_facing_label()
+    body = (
+        f"Чат: <b>{_h(chat_label)}</b> (текст и разбор фото)\n"
+        f"Фото: <b>{_h(photo_label)}</b> (генерация и правки текстом)"
+    )
+    if extra_html:
+        body = body + "\n\n" + extra_html
+    await bot.send_message(
+        chat_id,
+        body,
+        reply_markup=_chat_imagine_compact_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+def _activate_chat_imagine_compact_ui(context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data[_CHAT_IMAGINE_UI_COMPACT] = True
+
+
+async def _send_post_imagine_menu(
+    bot,
+    chat_id: int,
+    *,
+    user_id: int,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    _activate_chat_imagine_compact_ui(context)
+    await _send_chat_imagine_status_menu(bot, chat_id, user_id=user_id)
 
 
 _CHAT_VOICE_CURSOR_PREFIX: Final[str] = (
@@ -2319,9 +2453,15 @@ async def _handle_chat_callback(
         return
     if action == "menu":
         await _answer_query_once(query)
+        context.user_data.pop(_CHAT_IMAGINE_UI_COMPACT, None)
         with suppress(BadRequest, Exception):
             await query.delete_message()
-        await _send_chat_menu(context.bot, chat_id, user_id=user_id)
+        await _send_chat_menu(
+            context.bot,
+            chat_id,
+            user_id=user_id,
+            context=context,
+        )
         return
     if action == "list":
         await _answer_query_once(query)
@@ -2413,12 +2553,25 @@ async def _handle_chat_callback(
         with suppress(BadRequest, Exception):
             await query.edit_message_text(
                 f"<i>{_h(msg)}</i>",
-                reply_markup=_chat_menu_keyboard_for_user(True, user_id),
+                reply_markup=_chat_menu_keyboard_for_user(True, user_id, context=context),
                 parse_mode=ParseMode.HTML,
             )
         return
     if action == "imagine":
         sub = parts[2] if len(parts) > 2 else ""
+        if sub == "exit":
+            _clear_chat_imagine_session(context)
+            _clear_chat_imagine_waits(context)
+            await _answer_query_once(query, "Режим фото выключен.")
+            with suppress(BadRequest, Exception):
+                await query.delete_message()
+            await _send_chat_menu(
+                context.bot,
+                chat_id,
+                user_id=user_id,
+                context=context,
+            )
+            return
         if sub == "example":
             if not _is_image_gen_enabled():
                 await _answer_query_once(query, "Генерация изображений не настроена.")
@@ -2445,7 +2598,7 @@ async def _handle_chat_callback(
             with suppress(BadRequest, Exception):
                 await query.edit_message_text(
                     _chat_imagine_custom_prompt_help_html(),
-                    reply_markup=_chat_imagine_wait_keyboard(user_id),
+                    reply_markup=_chat_imagine_wait_keyboard(user_id, context),
                     parse_mode=ParseMode.HTML,
                 )
             return
@@ -2461,7 +2614,7 @@ async def _handle_chat_callback(
             with suppress(BadRequest, Exception):
                 await query.edit_message_text(
                     _chat_imagine_style_photo_help_html(),
-                    reply_markup=_chat_imagine_style_photo_wait_keyboard(user_id),
+                    reply_markup=_chat_imagine_style_photo_wait_keyboard(user_id, context),
                     parse_mode=ParseMode.HTML,
                 )
             return
@@ -2472,7 +2625,7 @@ async def _handle_chat_callback(
                     "<i>Генерация изображений не настроена: задайте "
                     "<code>IMAGE_GEN_BASE_URL</code> и <code>IMAGE_GEN_API_KEY</code> "
                     "в .env.</i>",
-                    reply_markup=_chat_menu_keyboard_for_user(True, user_id),
+                    reply_markup=_chat_menu_keyboard_for_user(True, user_id, context=context),
                     parse_mode=ParseMode.HTML,
                 )
             return
@@ -3854,6 +4007,12 @@ async def handle_homework_text(update: Update, context: ContextTypes.DEFAULT_TYP
                     instruction=text.strip(),
                 )
                 return
+            if _should_nudge_imagine_for_edit_in_chat(context, text):
+                await update.message.reply_text(
+                    _IMAGINE_EDIT_NUDGE_HTML,
+                    parse_mode=ParseMode.HTML,
+                )
+                return
             await _handle_chat_user_message(
                 update,
                 context,
@@ -4537,7 +4696,12 @@ async def _handle_chat_imagine_request(
         else:
             if saved_id and not dialog_id:
                 context.user_data[_CHAT_DIALOG_ID] = saved_id
-        await _send_chat_menu(context.bot, chat_id, user_id=user_id)
+        await _send_post_imagine_menu(
+            context.bot,
+            chat_id,
+            user_id=user_id,
+            context=context,
+        )
     finally:
         context.user_data.pop(_CHAT_BUSY, None)
 
@@ -4662,7 +4826,12 @@ async def _handle_chat_imagine_style_redraw(
         else:
             if saved_id and not dialog_id:
                 context.user_data[_CHAT_DIALOG_ID] = saved_id
-        await _send_chat_menu(context.bot, chat_id, user_id=user_id)
+        await _send_post_imagine_menu(
+            context.bot,
+            chat_id,
+            user_id=user_id,
+            context=context,
+        )
     finally:
         context.user_data.pop(_CHAT_BUSY, None)
 
@@ -4788,7 +4957,12 @@ async def _handle_chat_imagine_edit(
         else:
             if saved_id and not dialog_id:
                 context.user_data[_CHAT_DIALOG_ID] = saved_id
-        await _send_chat_menu(context.bot, chat_id, user_id=user_id)
+        await _send_post_imagine_menu(
+            context.bot,
+            chat_id,
+            user_id=user_id,
+            context=context,
+        )
     finally:
         context.user_data.pop(_CHAT_BUSY, None)
 
@@ -5360,6 +5534,7 @@ async def _handle_chat_photo(
     в `cursor-agent`). В RAM/DB-историю кладём только текстовый плейсхолдер
     `[фото: подпись]`, чтобы не таскать base64 в `chat_dialog.history_json`.
     """
+    _clear_chat_imagine_session(context)
     if not update.message or not update.message.photo:
         return
     if context.user_data.get(_CHAT_BUSY):

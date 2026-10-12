@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 import bot
 import image_gen
 
@@ -156,7 +158,7 @@ def test_handle_chat_imagine_request_sends_photo_and_records_history(
         patch.object(bot, "_request_image_from_server", side_effect=_fake_request),
         patch.object(bot.user_storage, "chat_dialog_upsert", return_value=99),
         # «Меню чата» внутри финального шага мы не проверяем — глушим.
-        patch.object(bot, "_send_chat_menu", return_value=None),
+        patch.object(bot, "_send_post_imagine_menu", new=AsyncMock()),
     ):
         asyncio.run(
             bot._handle_chat_imagine_request(
@@ -200,7 +202,7 @@ def test_handle_chat_imagine_request_truncates_long_caption(monkeypatch) -> None
     with (
         patch.object(bot, "_request_image_from_server", side_effect=_fake_request),
         patch.object(bot.user_storage, "chat_dialog_upsert", return_value=1),
-        patch.object(bot, "_send_chat_menu", return_value=None),
+        patch.object(bot, "_send_post_imagine_menu", new=AsyncMock()),
     ):
         asyncio.run(
             bot._handle_chat_imagine_request(
@@ -263,7 +265,7 @@ def test_chat_imagine_choice_keyboard_has_example_and_custom() -> None:
 
 
 def test_chat_imagine_wait_keyboard_includes_example_and_back() -> None:
-    kb = bot._chat_imagine_wait_keyboard(1)
+    kb = bot._chat_imagine_wait_keyboard(1, _FakeContext())
     flat = [b for row in kb.inline_keyboard for b in row]
     callbacks = [b.callback_data for b in flat]
     assert callbacks[0] == "chat:imagine:example"
@@ -295,7 +297,7 @@ def test_handle_chat_imagine_style_redraw_calls_server(monkeypatch) -> None:
 
     with (
         patch.object(bot, "_request_image_style_redraw_from_server", side_effect=_fake_style),
-        patch.object(bot, "_send_chat_menu", new=AsyncMock()),
+        patch.object(bot, "_send_post_imagine_menu", new=AsyncMock()),
         patch.object(bot.user_storage, "chat_dialog_upsert", lambda *a, **k: None),
     ):
         asyncio.run(
@@ -336,6 +338,36 @@ def test_should_route_chat_text_to_imagine_edit_after_last_image(
     )
 
 
+def test_imagine_edit_not_routed_without_imagine_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    ctx = _FakeContext()
+    ctx.user_data[bot._CHAT_IMAGINE_SESSION] = True
+    ctx.user_data[bot._CHAT_IMAGINE_LAST_PNG] = b"png"
+    ctx.user_data[bot._CHAT_HISTORY] = [
+        {"role": "user", "content": "[фото: усилитель]"},
+        {"role": "assistant", "content": "Да, подходит."},
+    ]
+    assert not bot._should_route_chat_text_to_imagine_edit(
+        ctx,
+        "Это Amp a275. Под динамики 140 Вт номинал это ок?",
+    )
+
+
+def test_nudge_imagine_when_edit_request_in_plain_chat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    ctx = _FakeContext()
+    ctx.user_data[bot._CHAT_HISTORY] = [
+        {"role": "user", "content": "[фото: x]"},
+    ]
+    assert bot._should_nudge_imagine_for_edit_in_chat(ctx, "убери провода с фото")
+
+
 def test_handle_chat_imagine_edit_calls_server(monkeypatch) -> None:
     monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
     monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
@@ -350,7 +382,7 @@ def test_handle_chat_imagine_edit_calls_server(monkeypatch) -> None:
 
     with (
         patch.object(bot, "_request_image_edit_from_server", side_effect=_fake_edit),
-        patch.object(bot, "_send_chat_menu", new=AsyncMock()),
+        patch.object(bot, "_send_post_imagine_menu", new=AsyncMock()),
     ):
         asyncio.run(
             bot._handle_chat_imagine_edit(
