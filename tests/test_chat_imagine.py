@@ -283,6 +283,15 @@ def test_chat_imagine_status_placeholders() -> None:
     assert bot._CHAT_IMAGINE_STYLE_REDRAW_PLACEHOLDER.startswith("Перерисовываю фото")
 
 
+def test_image_gen_server_user_error_429() -> None:
+    msg = bot._image_gen_server_user_error(
+        429,
+        '{"detail":"image generation already in progress; retry in a minute"}',
+    )
+    assert "одна за раз" in msg
+    assert "429" not in msg
+
+
 def test_chat_imagine_choice_help_shows_copyable_example_prompt() -> None:
     html = bot._chat_imagine_choice_help_html()
     assert "<pre>" in html

@@ -4512,6 +4512,19 @@ def _is_image_gen_enabled() -> bool:
     return image_gen.is_image_gen_configured()
 
 
+def _image_gen_server_user_error(status_code: int, body: str) -> str:
+    """Короткое сообщение для чата вместо сырого JSON от /image/generate."""
+    if status_code == 429:
+        return (
+            "Сейчас уже идет другая генерация или перерисовка (одна за раз). "
+            "Подождите пару минут и попробуйте снова."
+        )
+    snippet = (body or "").strip()
+    if len(snippet) > 200:
+        snippet = snippet[:200] + "…"
+    return f"Ошибка сервера ({status_code}): {snippet}" if snippet else f"Ошибка сервера ({status_code})."
+
+
 async def _request_image_from_server(*, user_id: int, prompt: str) -> bytes:
     """POST `/image/generate` -> PNG-байты. Бросает RuntimeError при не-200."""
     url = f"{SERVER_URL.rstrip('/')}/image/generate"
@@ -4523,7 +4536,7 @@ async def _request_image_from_server(*, user_id: int, prompt: str) -> bytes:
         r = await client.post(url, json={"user_id": user_id, "prompt": prompt})
         if r.status_code != 200:
             body = r.text or ""
-            raise RuntimeError(f"server {r.status_code}: {body[:300]}")
+            raise RuntimeError(_image_gen_server_user_error(r.status_code, body))
         return r.content
 
 
@@ -4549,7 +4562,7 @@ async def _request_image_edit_from_server(
         r = await client.post(url, json=payload)
         if r.status_code != 200:
             body = r.text or ""
-            raise RuntimeError(f"server {r.status_code}: {body[:300]}")
+            raise RuntimeError(_image_gen_server_user_error(r.status_code, body))
         return r.content
 
 
@@ -4575,7 +4588,7 @@ async def _request_image_style_redraw_from_server(
         r = await client.post(url, json=payload)
         if r.status_code != 200:
             body = r.text or ""
-            raise RuntimeError(f"server {r.status_code}: {body[:300]}")
+            raise RuntimeError(_image_gen_server_user_error(r.status_code, body))
         return r.content
 
 
@@ -4746,7 +4759,10 @@ async def _handle_chat_imagine_style_redraw(
         )
         return
     if context.user_data.get(_CHAT_BUSY):
-        await _reply("Подожди, чат ещё печатает предыдущий ответ.")
+        await _reply(
+            "Подожди: уже идет генерация или перерисовка фото. "
+            "Обычно это до пары минут.",
+        )
         return
 
     context.user_data[_CHAT_BUSY] = True
