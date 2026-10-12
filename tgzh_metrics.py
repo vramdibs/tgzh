@@ -130,6 +130,11 @@ def sync_llm_db_gauges(totals: dict[str, int]) -> None:
         _llm_tokens_db_total.set(max(0, int(totals.get("total_tokens", 0))))
     if _llm_requests_db_total is not None:
         _llm_requests_db_total.set(max(0, int(totals.get("requests", 0))))
+    if _llm_users is not None:
+        users_year = totals.get("users_current_year")
+        if users_year is None:
+            users_year = totals.get("users", 0)
+        _llm_users.set(max(0, int(users_year)))
 
 
 def maybe_start_http_server() -> None:

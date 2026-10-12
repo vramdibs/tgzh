@@ -229,6 +229,9 @@ def test_record_llm_spend_syncs_db_gauges(monkeypatch: pytest.MonkeyPatch) -> No
         assert tgzh_metrics._llm_tokens_db_total._value.get() == 150.0
         assert tgzh_metrics._llm_requests_db_total is not None
         assert tgzh_metrics._llm_requests_db_total._value.get() == 1.0
+        assert tot["users_current_year"] == 1
+        assert tgzh_metrics._llm_users is not None
+        assert tgzh_metrics._llm_users._value.get() == 1.0
 
 
 def test_stats_hides_zero_llm_token_lines(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -365,6 +365,7 @@ def record_llm_spend(
 
 def get_llm_usage_totals(path: str) -> dict[str, int]:
     init_stats(path)
+    y = academic_year_now()
     conn = connect(path)
     try:
         row = _e(
@@ -376,18 +377,25 @@ def get_llm_usage_totals(path: str) -> dict[str, int]:
             conn,
             "SELECT COUNT(DISTINCT user_id) FROM bot_llm_user_year",
         ).fetchone()
+        users_year_row = _e(
+            conn,
+            "SELECT COUNT(*) FROM bot_llm_user_year WHERE academic_year = ?",
+            (y,),
+        ).fetchone()
     finally:
         conn.close()
     requests = int(row[0]) if row else 0
     prompt = int(row[1]) if row else 0
     completion = int(row[2]) if row else 0
     users = int(users_row[0]) if users_row else 0
+    users_current_year = int(users_year_row[0]) if users_year_row else 0
     return {
         "requests": requests,
         "prompt_tokens": prompt,
         "completion_tokens": completion,
         "total_tokens": prompt + completion,
         "users": users,
+        "users_current_year": users_current_year,
     }
 
 

@@ -132,6 +132,7 @@
     },
     {
       "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Уникальные user_id с LLM в текущем учебном году (БД). Синхронизируется при старте tgzh-server и после каждого запроса к модели. В /stats «Людей» - за все годы.",
       "fieldConfig": {"defaults": {}, "overrides": []},
       "gridPos": {"h": 4, "w": 8, "x": 0, "y": 24},
       "id": 10,
