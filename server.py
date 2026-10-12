@@ -85,6 +85,14 @@ async def _acquire_image_gen_slot() -> None:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     tgzh_metrics.maybe_start_http_server()
+    try:
+        import bot_stats
+
+        tgzh_metrics.sync_llm_db_gauges(
+            bot_stats.get_llm_usage_totals(_USER_DB_PATH),
+        )
+    except Exception:
+        logger.debug("llm db gauge sync on startup failed", exc_info=True)
     logger.info(
         "server startup host=0.0.0.0 port=%s AI_MOCK=%s",
         os.getenv("PORT", "8000"),

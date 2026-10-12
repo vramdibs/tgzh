@@ -32,6 +32,8 @@ _stt_requests_total = None
 _llm_requests_total = None
 _llm_tokens_total = None
 _llm_users = None
+_llm_tokens_db_total = None
+_llm_requests_db_total = None
 
 
 def _ensure_metrics() -> None:
@@ -39,6 +41,7 @@ def _ensure_metrics() -> None:
     global _server_check_requests_total, _server_check_errors_total, _server_check_duration_seconds
     global _check_feedback_total, _llm_fallback_total, _stt_requests_total
     global _llm_requests_total, _llm_tokens_total, _llm_users
+    global _llm_tokens_db_total, _llm_requests_db_total
     if Counter is None:
         return
     if _bot_updates_total is None:
@@ -108,6 +111,25 @@ def _ensure_metrics() -> None:
             "tgzh_llm_users",
             "Уникальные пользователи с запросами к LLM в текущем учебном году",
         )
+    if _llm_tokens_db_total is None and Gauge is not None:
+        _llm_tokens_db_total = Gauge(
+            "tgzh_llm_tokens_db_total",
+            "Накопительные токены LLM в БД (как /stats), все учебные годы",
+        )
+    if _llm_requests_db_total is None and Gauge is not None:
+        _llm_requests_db_total = Gauge(
+            "tgzh_llm_requests_db_total",
+            "Накопительные запросы к LLM в БД (как /stats), все учебные годы",
+        )
+
+
+def sync_llm_db_gauges(totals: dict[str, int]) -> None:
+    """Выставить gauge зеркала БД после старта сервера или записи spend."""
+    _ensure_metrics()
+    if _llm_tokens_db_total is not None:
+        _llm_tokens_db_total.set(max(0, int(totals.get("total_tokens", 0))))
+    if _llm_requests_db_total is not None:
+        _llm_requests_db_total.set(max(0, int(totals.get("requests", 0))))
 
 
 def maybe_start_http_server() -> None:

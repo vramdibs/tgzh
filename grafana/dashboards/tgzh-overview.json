@@ -148,34 +148,53 @@
     },
     {
       "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Накопительно в БД, как команда /stats в боте (все учебные годы). Не зависит от интервала time picker.",
       "fieldConfig": {"defaults": {}, "overrides": []},
       "gridPos": {"h": 4, "w": 8, "x": 8, "y": 24},
-      "id": 11,
-      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"]}},
+      "id": 13,
+      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"]}},
       "targets": [
         {
-          "expr": "sum(increase(tgzh_llm_tokens_total[24h]))",
-          "legendFormat": "tokens 24h",
+          "expr": "max(tgzh_llm_tokens_db_total)",
+          "legendFormat": "tokens db",
           "refId": "A"
         }
       ],
-      "title": "Токены за 24h",
+      "title": "Токены всего (БД, как /stats)",
       "type": "stat"
     },
     {
       "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Сумма increase по счетчикам tgzh-server. После рестарта контейнера внутри интервала цифра может быть ниже фактического расхода.",
       "fieldConfig": {"defaults": {}, "overrides": []},
       "gridPos": {"h": 4, "w": 8, "x": 16, "y": 24},
+      "id": 11,
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [
+        {
+          "expr": "sum(increase(tgzh_llm_tokens_total[$__range]))",
+          "legendFormat": "tokens",
+          "refId": "A"
+        }
+      ],
+      "title": "Токены за период",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "description": "Запросы к LLM за выбранный в Grafana интервал (счетчики Prometheus на tgzh-server).",
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 4, "w": 8, "x": 0, "y": 28},
       "id": 12,
       "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"]}},
       "targets": [
         {
-          "expr": "sum(increase(tgzh_llm_requests_total[24h]))",
-          "legendFormat": "requests 24h",
+          "expr": "sum(increase(tgzh_llm_requests_total[$__range]))",
+          "legendFormat": "requests",
           "refId": "A"
         }
       ],
-      "title": "LLM запросы за 24h",
+      "title": "LLM запросы за период",
       "type": "stat"
     }
   ],

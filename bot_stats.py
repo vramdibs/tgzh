@@ -358,6 +358,7 @@ def record_llm_spend(
             requests=req_n,
             users=users_year,
         )
+        tgzh_metrics.sync_llm_db_gauges(get_llm_usage_totals(path))
     except Exception:
         pass
 
@@ -616,7 +617,7 @@ def format_all_stats_html(path: str) -> str:
         ],
     )
     llm_block = _join_stat_section(
-        "<b>ИИ (токены и запросы):</b>",
+        "<b>ИИ (токены и запросы, накопительно в БД, все учебные годы):</b>",
         [
             _html_count_line("Запросов к модели", llm["requests"]),
             _html_count_line("Токенов вход", llm["prompt_tokens"]),

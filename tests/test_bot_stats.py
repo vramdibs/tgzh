@@ -201,12 +201,34 @@ def test_llm_spend_requests_tokens_and_unique_users(monkeypatch: pytest.MonkeyPa
         assert tot["total_tokens"] == 45
         assert tot["users"] == 2
         html = bot_stats.format_all_stats_html(path)
-        assert "ИИ (токены и запросы)" in html
+        assert "накопительно в БД" in html
         assert "Запросов к модели: <b>3</b>" in html
         assert "Токенов вход: <b>16</b>" in html
         assert "Токенов выход: <b>29</b>" in html
         assert "Токенов всего: <b>45</b>" in html
         assert "Людей (уникальные): <b>2</b>" in html
+
+
+def test_record_llm_spend_syncs_db_gauges(monkeypatch: pytest.MonkeyPatch) -> None:
+    import tgzh_metrics
+
+    monkeypatch.delenv("AI_MOCK", raising=False)
+    tgzh_metrics.sync_llm_db_gauges(
+        {"requests": 0, "total_tokens": 0},
+    )
+    with tempfile.TemporaryDirectory() as td:
+        path = str(Path(td) / "gauge.sqlite")
+        bot_stats.init_stats(path)
+        bot_stats.record_llm_spend(
+            path, user_id=1, kind="chat", prompt_tokens=100, completion_tokens=50,
+        )
+        tot = bot_stats.get_llm_usage_totals(path)
+        assert tot["total_tokens"] == 150
+        assert tot["requests"] == 1
+        assert tgzh_metrics._llm_tokens_db_total is not None
+        assert tgzh_metrics._llm_tokens_db_total._value.get() == 150.0
+        assert tgzh_metrics._llm_requests_db_total is not None
+        assert tgzh_metrics._llm_requests_db_total._value.get() == 1.0
 
 
 def test_stats_hides_zero_llm_token_lines(monkeypatch: pytest.MonkeyPatch) -> None:
