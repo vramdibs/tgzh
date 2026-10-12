@@ -2095,6 +2095,12 @@ def _chat_imagine_compact_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("Сгенерировать / править фото", callback_data="chat:imagine")],
+            [
+                InlineKeyboardButton(
+                    "Перерисовать новое фото",
+                    callback_data="chat:imagine:style_photo",
+                ),
+            ],
             [InlineKeyboardButton("Выйти из режима фото", callback_data="chat:imagine:exit")],
             [InlineKeyboardButton("Меню чата", callback_data="chat:menu")],
         ],
@@ -2609,6 +2615,7 @@ async def _handle_chat_callback(
             await asyncio.to_thread(user_storage.chat_session_login, USER_DB_PATH, user_id)
             _activate_chat_session_ram(context, fresh=False)
             context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
+            context.user_data.pop(_CHAT_IMAGINE_LAST_PNG, None)
             context.user_data[_CHAT_IMAGINE_STYLE_PHOTO_WAIT] = True
             await _answer_query_once(query, "Жду фото для перерисовки.")
             with suppress(BadRequest, Exception):
@@ -4749,7 +4756,7 @@ async def _handle_chat_imagine_style_redraw(
         with suppress(Exception):
             placeholder = await context.bot.send_message(
                 chat_id,
-                "Перерисовываю фото в стиле примера… Это может занять до пары минут.",
+                "Перерисовываю фото, это займет пару минут...",
             )
         logger.info(
             "chat imagine style_redraw user_id=%s source_bytes=%s notes_chars=%s",
