@@ -4892,7 +4892,7 @@ async def _handle_chat_imagine_edit(
         with suppress(Exception):
             placeholder = await context.bot.send_message(
                 chat_id,
-                "Правлю последнюю картинку… Это может занять до пары минут.",
+                "Правлю последнюю картинку, подождите...",
             )
         logger.info(
             "chat imagine image_edit user_id=%s source_bytes=%s instruction_chars=%s",
