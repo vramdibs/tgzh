@@ -15,6 +15,7 @@
 
 ### Fixed
 
+- **Перерисовка фото (`style_redraw`)**: bridge больше не обрывает `cursor-agent` по первому `result` до записи PNG; поиск файла с опросом до **`BRIDGE_IMAGE_LOCATE_TIMEOUT_SEC`** (дефолт 90 с) - см. **discourse-cursor-bridge** `images_endpoint.py` / `agent_runner.py`
 - **`tgzh_llm_users` после рестарта server**: gauge синхронизируется из БД (текущий учебный год) в `sync_llm_db_gauges` при старте и после `record_llm_spend`, панель Grafana не показывает 0 впустую
 - **Метрики LLM для генерации картинок**: успешный `POST /image/generate` (`/imagine`, style_redraw) пишет `tgzh_llm_requests_total{kind="image_gen"}` и учет людей в БД/`tgzh_llm_users` (раньше запросы были в логах, панели Grafana `tgzh_llm_*` - No data)
 - **Токены LLM для `/image/generate`**: `usage` из ответа images API (`prompt_tokens` / `inputTokens` и т.д.) или оценка через **`IMAGE_GEN_ESTIMATE_*`** (bridge пока без `usage` в JSON) - счетчики `tgzh_llm_tokens_total` для Grafana

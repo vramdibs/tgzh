@@ -99,3 +99,18 @@
 
 **Связанные env:** ...
 ```
+
+---
+
+## INC-2026-10-12-01: перерисовка фото - `image file locate timed out after generation`
+
+| Поле | Значение |
+|------|----------|
+| **Дата** | 2026-10-12 |
+| **Симптом** | В `/imagine` / «Перерисовать фото в стиле примера» бот: `server 502` / `image file locate timed out after generation` |
+| **Диагностика** | `tgzh-server` -> `POST /image/generate` -> bridge `POST /v1/images/generations`. Лог bridge: `images generate: locate file timed out`. `cursor-agent` мог завершить stream по `type==result` до записи PNG |
+| **Причина** | Ранний выход `AgentRunner` по строке `result` в stream-json убивал процесс до окончания GenerateImage; однократный поиск файла не дожидался появления PNG на диске |
+| **Решение** | Обновить **discourse-cursor-bridge**: `run(..., exit_on_result=False)` для images, опрос `_wait_for_located_image` (env **`BRIDGE_IMAGE_LOCATE_TIMEOUT_SEC`**, дефолт 90), перезапуск bridge на хосте с `IMAGE_GEN_BASE_URL` |
+| **Проверка** | Повторить перерисовку фото; ответ с PNG в чате. При долгой генерации при необходимости увеличить **`BRIDGE_IMAGE_TIMEOUT_SEC`** и **`IMAGE_GEN_TIMEOUT_SEC`** |
+
+**Связанные env:** `BRIDGE_IMAGE_LOCATE_TIMEOUT_SEC`, `BRIDGE_IMAGE_LOCATE_POLL_SEC`, `BRIDGE_IMAGE_TIMEOUT_SEC`, `IMAGE_GEN_TIMEOUT_SEC`
