@@ -2339,33 +2339,6 @@ async def _send_chat_menu(
     )
 
 
-async def _send_chat_imagine_status_menu(
-    bot,
-    chat_id: int,
-    *,
-    user_id: int,
-    extra_html: str = "",
-) -> None:
-    """Урезанное меню после генерации/правки фото (режим imagine)."""
-    model_slug = await asyncio.to_thread(
-        user_storage.chat_model_get, USER_DB_PATH, user_id,
-    )
-    chat_label = ai_checker.chat_cursor_model_label(model_slug)
-    photo_label = image_gen.image_gen_user_facing_label()
-    body = (
-        f"Чат: <b>{_h(chat_label)}</b> (текст и разбор фото)\n"
-        f"Фото: <b>{_h(photo_label)}</b> (генерация и правки текстом)"
-    )
-    if extra_html:
-        body = body + "\n\n" + extra_html
-    await bot.send_message(
-        chat_id,
-        body,
-        reply_markup=_chat_imagine_compact_keyboard(),
-        parse_mode=ParseMode.HTML,
-    )
-
-
 def _activate_chat_imagine_compact_ui(context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data[_CHAT_IMAGINE_UI_COMPACT] = True
 
@@ -2377,8 +2350,8 @@ async def _send_post_imagine_menu(
     user_id: int,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
+    """После успешной генерации: флаг compact UI (кнопки на сообщении с фото)."""
     _activate_chat_imagine_compact_ui(context)
-    await _send_chat_imagine_status_menu(bot, chat_id, user_id=user_id)
 
 
 _CHAT_VOICE_CURSOR_PREFIX: Final[str] = (
@@ -4783,8 +4756,14 @@ async def _handle_chat_imagine_request(
             if len(p) <= _TG_PHOTO_CAPTION_MAX_LEN
             else (p[: _TG_PHOTO_CAPTION_MAX_LEN - 1] + "…")
         )
+        _activate_chat_imagine_compact_ui(context)
         try:
-            await context.bot.send_photo(chat_id, photo=png_bytes, caption=cap)
+            await context.bot.send_photo(
+                chat_id,
+                photo=png_bytes,
+                caption=cap,
+                reply_markup=_chat_imagine_compact_keyboard(),
+            )
         except Exception:
             logger.exception("chat imagine send_photo failed user_id=%s", user_id)
             with suppress(Exception):
@@ -4913,8 +4892,13 @@ async def _handle_chat_imagine_style_redraw(
                     chat_id=chat_id,
                     message_id=placeholder.message_id,
                 )
+        _activate_chat_imagine_compact_ui(context)
         try:
-            await context.bot.send_photo(chat_id, photo=png_bytes)
+            await context.bot.send_photo(
+                chat_id,
+                photo=png_bytes,
+                reply_markup=_chat_imagine_compact_keyboard(),
+            )
         except Exception:
             logger.exception("chat imagine style_redraw send_photo failed user_id=%s", user_id)
             with suppress(Exception):
@@ -5050,8 +5034,14 @@ async def _handle_chat_imagine_edit(
         cap = instr
         if len(cap) > _TG_PHOTO_CAPTION_MAX_LEN:
             cap = cap[: _TG_PHOTO_CAPTION_MAX_LEN - 1] + "…"
+        _activate_chat_imagine_compact_ui(context)
         try:
-            await context.bot.send_photo(chat_id, photo=png_bytes, caption=cap)
+            await context.bot.send_photo(
+                chat_id,
+                photo=png_bytes,
+                caption=cap,
+                reply_markup=_chat_imagine_compact_keyboard(),
+            )
         except Exception:
             logger.exception("chat imagine image_edit send_photo failed user_id=%s", user_id)
             with suppress(Exception):
