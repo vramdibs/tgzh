@@ -119,13 +119,18 @@ tgzh `/imagine` и кнопка «Сгенерировать фото» вызы
 IMAGE_GEN_BASE_URL=http://host.docker.internal:8787/v1
 IMAGE_GEN_API_KEY=<тот же VLLM_FALLBACK_API_KEY / BRIDGE_OPENAI_API_KEY>
 IMAGE_GEN_MODEL=auto
-IMAGE_GEN_SIZE=1024x1024
+IMAGE_GEN_SIZE=512x512
+IMAGE_GEN_SOURCE_MAX_SIDE=768
+IMAGE_GEN_STYLE_REFERENCE_MAX_SIDE=512
+IMAGE_GEN_JPEG_QUALITY=82
 IMAGE_GEN_TIMEOUT_SEC=180
 # style_redraw/image_edit: >= BRIDGE_IMAGE_TIMEOUT_SEC + BRIDGE_IMAGE_LOCATE_TIMEOUT_SEC + запас
 IMAGE_GEN_MULTIPART_TIMEOUT_SEC=480
 ```
 
 На bridge картинка создается через headless `cursor-agent` и инструмент GenerateImage (ADR-009 в репозитории bridge). Ответ - `data[0].b64_json`.
+
+**Скорость на bridge:** узкое место - полный цикл `cursor-agent` (часто ~5 мин на запрос), а не только пиксели. Снижение **`IMAGE_GEN_SIZE`** (например `512x512`) и сжатие исходников (**`IMAGE_GEN_SOURCE_MAX_SIDE`**, **`IMAGE_GEN_JPEG_QUALITY`**) уменьшают payload и могут чуть ускорить multimodal; замер: **`scripts/benchmark-image-gen-bridge.sh`**. На bridge не гонять тяжелый `/chat` параллельно с images - один агент на хост.
 
 Один **`cursor-agent`** на хост (глобальная очередь в bridge): не запускать параллельно `/imagine` и тяжёлый `/chat` на bridge. На **tgzh-server** по умолчанию **`IMAGE_GEN_MAX_CONCURRENT=1`** - второй запрос `/image/generate` получает **429**, а не встаёт в очередь на минуты. Unit bridge: **`TimeoutStopSec=30`** (см. `deploy/discourse-cursor-bridge.service` в репозитории bridge).
 

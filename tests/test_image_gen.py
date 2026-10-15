@@ -27,7 +27,7 @@ def test_is_image_gen_configured_requires_url_and_key(
 
 def test_image_gen_defaults_when_unset() -> None:
     assert image_gen.image_gen_model() == "gpt-image-1"
-    assert image_gen.image_gen_size() == "1024x1024"
+    assert image_gen.image_gen_size() == "512x512"
     assert image_gen.image_gen_timeout_sec() == 120.0
 
 
@@ -103,7 +103,7 @@ def test_generate_image_returns_b64_decoded_bytes(
     assert usage.prompt_tokens >= 1
     assert usage.completion_tokens >= 1
     assert captured["model"] == "gpt-image-1"
-    assert captured["size"] == "1024x1024"
+    assert captured["size"] == "512x512"
     assert captured["n"] == 1
     assert captured["prompt"] == "cat sitting on a fence"
     # Не должен передавать response_format (gpt-image-1 не принимает).
@@ -347,3 +347,24 @@ def test_generate_image_propagates_timeout(
     ):
         with pytest.raises(asyncio.TimeoutError):
             asyncio.run(image_gen.generate_image("x"))
+
+
+def test_image_gen_size_allowlist_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("IMAGE_GEN_SIZE", "9999x9999")
+    assert image_gen.image_gen_size() == "512x512"
+    monkeypatch.setenv("IMAGE_GEN_SIZE", "1024x1024")
+    assert image_gen.image_gen_size() == "1024x1024"
+
+
+def test_prepare_bridge_source_bytes_shrinks_large_jpeg() -> None:
+    from PIL import Image
+
+    buf = __import__("io").BytesIO()
+    im = Image.new("RGB", (2400, 1800), color=(128, 64, 32))
+    im.save(buf, format="JPEG", quality=95)
+    raw = buf.getvalue()
+    assert len(raw) > 30_000
+    out = image_gen.prepare_bridge_source_bytes(raw)
+    assert len(out) < len(raw)
+    out_im = Image.open(__import__("io").BytesIO(out))
+    assert max(out_im.size) <= image_gen.image_gen_source_max_side()

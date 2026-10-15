@@ -23,6 +23,8 @@ from typing import Any, Final
 
 import httpx
 
+import photo_prepare
+
 from ai_checker import CompletionUsage, add_completion_usage, usage_from_openai
 
 logger = logging.getLogger("tgzh.image_gen")
@@ -30,7 +32,19 @@ logger = logging.getLogger("tgzh.image_gen")
 
 PROMPT_MAX_LEN: Final[int] = 2_000
 _DEFAULT_MODEL: Final[str] = "gpt-image-1"
-_DEFAULT_SIZE: Final[str] = "1024x1024"
+_DEFAULT_SIZE: Final[str] = "512x512"
+_DEFAULT_SOURCE_MAX_SIDE: Final[int] = 768
+_DEFAULT_STYLE_REFERENCE_MAX_SIDE: Final[int] = 512
+_DEFAULT_JPEG_QUALITY: Final[int] = 82
+_ALLOWED_SIZES: Final[frozenset[str]] = frozenset(
+    {
+        "256x256",
+        "512x512",
+        "1024x1024",
+        "1536x1024",
+        "1024x1536",
+    },
+)
 _DEFAULT_TIMEOUT_SEC: Final[float] = 120.0
 # Запас под BRIDGE_IMAGE_LOCATE_TIMEOUT_SEC (до 90 с) после cursor-agent
 _MULTIPART_LOCATE_BUFFER_SEC: Final[float] = 120.0
@@ -78,7 +92,99 @@ def image_gen_user_facing_label() -> str:
 
 
 def image_gen_size() -> str:
-    return _strip_env("IMAGE_GEN_SIZE") or _DEFAULT_SIZE
+    raw = _strip_env("IMAGE_GEN_SIZE") or _DEFAULT_SIZE
+    if raw in _ALLOWED_SIZES:
+        return raw
+    logger.warning("IMAGE_GEN_SIZE=%r not in allowlist, using %s", raw, _DEFAULT_SIZE)
+    return _DEFAULT_SIZE
+
+
+def image_gen_source_max_side() -> int:
+    raw = _strip_env("IMAGE_GEN_SOURCE_MAX_SIDE")
+    if not raw:
+        return _DEFAULT_SOURCE_MAX_SIDE
+    try:
+        v = int(raw)
+    except ValueError:
+        return _DEFAULT_SOURCE_MAX_SIDE
+    return max(256, min(1536, v))
+
+
+def image_gen_style_reference_max_side() -> int:
+    raw = _strip_env("IMAGE_GEN_STYLE_REFERENCE_MAX_SIDE")
+    if not raw:
+        return _DEFAULT_STYLE_REFERENCE_MAX_SIDE
+    try:
+        v = int(raw)
+    except ValueError:
+        return _DEFAULT_STYLE_REFERENCE_MAX_SIDE
+    return max(128, min(1024, v))
+
+
+def image_gen_jpeg_quality() -> int:
+    raw = _strip_env("IMAGE_GEN_JPEG_QUALITY")
+    if not raw:
+        return _DEFAULT_JPEG_QUALITY
+    try:
+        v = int(raw)
+    except ValueError:
+        return _DEFAULT_JPEG_QUALITY
+    return max(50, min(95, v))
+
+
+def prepare_bridge_source_bytes(data: bytes) -> bytes:
+    """Уменьшить исходник перед base64 на bridge (style_redraw / image_edit)."""
+    before = len(data)
+    if before == 0:
+        return data
+    try:
+        out = photo_prepare.prepare_photo_for_upload(
+            data,
+            max_side=image_gen_source_max_side(),
+            jpeg_quality=image_gen_jpeg_quality(),
+        )
+    except Exception:
+        logger.warning(
+            "prepare_bridge_source_bytes failed raw_bytes=%s",
+            before,
+            exc_info=True,
+        )
+        return data
+    if len(out) < before:
+        logger.info(
+            "image_gen source prepared bytes %s -> %s max_side=%s",
+            before,
+            len(out),
+            image_gen_source_max_side(),
+        )
+    return out
+
+
+def prepare_style_reference_bytes(data: bytes) -> bytes:
+    before = len(data)
+    if before == 0:
+        return data
+    try:
+        out = photo_prepare.prepare_photo_for_upload(
+            data,
+            max_side=image_gen_style_reference_max_side(),
+            jpeg_quality=image_gen_jpeg_quality(),
+        )
+    except Exception:
+        logger.warning(
+            "prepare_style_reference_bytes failed raw_bytes=%s",
+            before,
+            exc_info=True,
+        )
+        return data
+    if len(out) < before:
+        logger.info(
+            "image_gen style_reference prepared bytes %s -> %s max_side=%s",
+            before,
+            len(out),
+            image_gen_style_reference_max_side(),
+        )
+    return out
 
 
 def image_gen_timeout_sec() -> float:
@@ -159,7 +265,7 @@ def load_style_reference_bytes() -> bytes:
     data = path.read_bytes()
     if not data or len(data) > _MAX_SOURCE_IMAGE_BYTES:
         raise ImageGenStyleReferenceMissing("style reference file is empty or too large")
-    return data
+    return prepare_style_reference_bytes(data)
 
 
 def _validate_source_bytes(source: bytes) -> bytes:
@@ -230,7 +336,7 @@ def decode_source_image_b64(source_image_b64: str) -> bytes:
         data = base64.b64decode(raw, validate=True)
     except (binascii.Error, ValueError) as e:
         raise ImageGenBadSource("source_image_b64 is not valid base64") from e
-    return _validate_source_bytes(data)
+    return prepare_bridge_source_bytes(_validate_source_bytes(data))
 
 
 async def _parse_images_response(resp: Any) -> bytes:
@@ -354,7 +460,7 @@ async def generate_image_edit(
     instruction: str = "",
 ) -> bytes:
     """Правка исходного фото по текстовой инструкции (bridge image_edit)."""
-    src = _validate_source_bytes(source_bytes)
+    src = prepare_bridge_source_bytes(_validate_source_bytes(source_bytes))
     notes = _validate_optional_notes(instruction)
     api_prompt = notes or IMAGE_EDIT_DEFAULT_PROMPT
     if not is_image_gen_configured():
@@ -390,7 +496,7 @@ async def generate_image_style_redraw(
     extra_prompt: str = "",
 ) -> bytes:
     """Перерисовать исходное фото в стиле эталона (bridge style_redraw)."""
-    src = _validate_source_bytes(source_bytes)
+    src = prepare_bridge_source_bytes(_validate_source_bytes(source_bytes))
     notes = _validate_optional_notes(extra_prompt)
     api_prompt = notes or STYLE_REDRAW_DEFAULT_PROMPT
     if not is_image_gen_configured():

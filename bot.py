@@ -7681,6 +7681,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             source_jpeg = await asyncio.to_thread(
                 photo_prepare.prepare_photo_for_upload,
                 bytes(raw_bytes),
+                image_gen.image_gen_source_max_side(),
+                image_gen.image_gen_jpeg_quality(),
             )
         except Exception as e:
             logger.exception("imagine style photo download user_id=%s", user_id)
