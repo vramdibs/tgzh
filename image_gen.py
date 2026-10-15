@@ -16,8 +16,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import contextvars
 import logging
 import os
+import time
+from collections import deque
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Final
 
@@ -60,14 +64,134 @@ IMAGE_EDIT_DEFAULT_PROMPT: Final[str] = (
     "Внеси правки по инструкции пользователя, остальное на фото не меняй."
 )
 
+_DEFAULT_BOT_QUEUE_WAIT_BUFFER_SEC: Final[float] = 900.0
+_BOT_QUEUE_BUFFER_LO: Final[float] = 0.0
+_BOT_QUEUE_BUFFER_HI: Final[float] = 1800.0
+
+_active_base_url: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "image_gen_active_base_url",
+    default=None,
+)
+
 
 def _strip_env(name: str) -> str:
     return (os.getenv(name) or "").strip()
 
 
+def image_gen_base_urls() -> list[str]:
+    """OpenAI base URL (без хвостового `/`), один или несколько bridge."""
+    csv = _strip_env("IMAGE_GEN_BASE_URLS")
+    urls: list[str] = []
+    if csv:
+        urls = [u.strip().rstrip("/") for u in csv.split(",") if u.strip()]
+    else:
+        single = _strip_env("IMAGE_GEN_BASE_URL")
+        if single:
+            urls = [single.rstrip("/")]
+    seen: set[str] = set()
+    out: list[str] = []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
+def image_gen_max_concurrent() -> int:
+    urls = image_gen_base_urls()
+    n_urls = max(1, len(urls))
+    raw = _strip_env("IMAGE_GEN_MAX_CONCURRENT")
+    if raw:
+        try:
+            v = int(raw)
+        except ValueError:
+            v = n_urls
+    else:
+        v = n_urls
+    return max(1, min(4, v, n_urls if urls else 1))
+
+
+class _BridgePoolState:
+    def __init__(self, urls: list[str]) -> None:
+        self.urls = urls
+        self.in_use: dict[str, bool] = {u: False for u in urls}
+        self._waiters: deque[asyncio.Future[tuple[str, float]]] = deque()
+        self._lock = asyncio.Lock()
+
+
+_bridge_pool: _BridgePoolState | None = None
+
+
+def reset_image_gen_bridge_pool() -> None:
+    """Сброс пула (тесты)."""
+    global _bridge_pool
+    _bridge_pool = None
+
+
+def _get_bridge_pool() -> _BridgePoolState:
+    global _bridge_pool
+    if _bridge_pool is None:
+        urls = image_gen_base_urls()[: image_gen_max_concurrent()]
+        if not urls:
+            urls = ["http://invalid.local/v1"]
+        _bridge_pool = _BridgePoolState(urls)
+    return _bridge_pool
+
+
+async def acquire_image_gen_bridge() -> tuple[str, float]:
+    """FIFO: свободный bridge или ожидание в очереди."""
+    t0 = time.monotonic()
+    pool = _get_bridge_pool()
+    async with pool._lock:
+        for url in pool.urls:
+            if not pool.in_use[url]:
+                pool.in_use[url] = True
+                return url, 0.0
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[tuple[str, float]] = loop.create_future()
+        pool._waiters.append(fut)
+    url, _assigned_at = await fut
+    return url, time.monotonic() - t0
+
+
+async def release_image_gen_bridge(url: str) -> None:
+    pool = _get_bridge_pool()
+    async with pool._lock:
+        if pool._waiters:
+            fut = pool._waiters.popleft()
+            if not fut.done():
+                fut.set_result((url, time.monotonic()))
+            return
+        pool.in_use[url] = False
+
+
+@asynccontextmanager
+async def image_gen_bridge_slot():
+    """Занять слот bridge на время одного `/image/generate`."""
+    url, wait_s = await acquire_image_gen_bridge()
+    if wait_s >= 0.05:
+        logger.info("image_gen queue wait_s=%.2f bridge=%s", wait_s, url)
+    token = _active_base_url.set(url)
+    try:
+        yield url
+    finally:
+        _active_base_url.reset(token)
+        await release_image_gen_bridge(url)
+
+
+def image_gen_resolved_base_url() -> str:
+    active = _active_base_url.get()
+    if active:
+        return active.rstrip("/")
+    urls = image_gen_base_urls()
+    if urls:
+        return urls[0]
+    return _strip_env("IMAGE_GEN_BASE_URL").rstrip("/")
+
+
 def is_image_gen_configured() -> bool:
-    """Бэкенд считается готовым, если заданы и base_url, и api_key."""
-    return bool(_strip_env("IMAGE_GEN_BASE_URL")) and bool(_strip_env("IMAGE_GEN_API_KEY"))
+    """Бэкенд считается готовым, если заданы base URL и api_key."""
+    return bool(image_gen_base_urls()) and bool(_strip_env("IMAGE_GEN_API_KEY"))
 
 
 def image_gen_model() -> str:
@@ -211,10 +335,24 @@ def image_gen_multipart_timeout_sec() -> float:
     return max(_TIMEOUT_LO, min(_TIMEOUT_HI, base + _MULTIPART_LOCATE_BUFFER_SEC))
 
 
+def image_gen_bot_queue_wait_buffer_sec() -> float:
+    raw = _strip_env("IMAGE_GEN_BOT_QUEUE_WAIT_BUFFER_SEC")
+    if not raw:
+        return _DEFAULT_BOT_QUEUE_WAIT_BUFFER_SEC
+    try:
+        v = float(raw)
+    except ValueError:
+        return _DEFAULT_BOT_QUEUE_WAIT_BUFFER_SEC
+    return max(_BOT_QUEUE_BUFFER_LO, min(_BOT_QUEUE_BUFFER_HI, v))
+
+
 def image_gen_bot_client_timeout_sec(*, multipart: bool = False) -> float:
-    """HTTP-таймаут бота на POST /image/generate (+ запас на сеть)."""
+    """HTTP-таймаут бота на POST /image/generate (+ сеть + очередь на bridge)."""
     base = image_gen_multipart_timeout_sec() if multipart else image_gen_timeout_sec()
-    return max(60.0, base + 30.0)
+    return max(
+        60.0,
+        base + 30.0 + image_gen_bot_queue_wait_buffer_sec(),
+    )
 
 
 class ImageGenNotConfigured(RuntimeError):
@@ -369,7 +507,7 @@ async def _post_images_generations_json(
         raise ImageGenNotConfigured(
             "image generation backend not configured (IMAGE_GEN_BASE_URL/API_KEY)",
         )
-    base_url = _strip_env("IMAGE_GEN_BASE_URL").rstrip("/")
+    base_url = image_gen_resolved_base_url()
     api_key = _strip_env("IMAGE_GEN_API_KEY")
     if timeout is None:
         timeout = image_gen_timeout_sec()
@@ -424,7 +562,7 @@ async def generate_image(prompt: str) -> bytes:
 
     from openai import AsyncOpenAI
 
-    base_url = _strip_env("IMAGE_GEN_BASE_URL")
+    base_url = image_gen_resolved_base_url()
     api_key = _strip_env("IMAGE_GEN_API_KEY")
     model = image_gen_model()
     size = image_gen_size()
@@ -432,10 +570,11 @@ async def generate_image(prompt: str) -> bytes:
 
     client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=timeout)
     logger.info(
-        "image_gen request model=%s size=%s prompt_chars=%s",
+        "image_gen request model=%s size=%s prompt_chars=%s base_url=%s",
         model,
         size,
         len(p),
+        base_url,
     )
 
     # `gpt-image-1` отвергает аргумент `response_format` (всегда отдаёт b64_json),

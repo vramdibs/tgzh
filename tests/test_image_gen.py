@@ -44,7 +44,7 @@ def test_image_gen_multipart_timeout_default_buffer(monkeypatch: pytest.MonkeyPa
     monkeypatch.delenv("IMAGE_GEN_MULTIPART_TIMEOUT_SEC", raising=False)
     monkeypatch.setenv("IMAGE_GEN_TIMEOUT_SEC", "180")
     assert image_gen.image_gen_multipart_timeout_sec() == 300.0
-    assert image_gen.image_gen_bot_client_timeout_sec(multipart=True) == 330.0
+    assert image_gen.image_gen_bot_client_timeout_sec(multipart=True) == 1230.0
 
 
 def test_image_gen_multipart_timeout_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -354,6 +354,73 @@ def test_image_gen_size_allowlist_fallback(monkeypatch: pytest.MonkeyPatch) -> N
     assert image_gen.image_gen_size() == "512x512"
     monkeypatch.setenv("IMAGE_GEN_SIZE", "1024x1024")
     assert image_gen.image_gen_size() == "1024x1024"
+
+
+@pytest.mark.asyncio
+async def test_bridge_pool_two_urls_parallel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "IMAGE_GEN_BASE_URLS",
+        "https://bridge-a.example/v1,https://bridge-b.example/v1",
+    )
+    monkeypatch.delenv("IMAGE_GEN_BASE_URL", raising=False)
+    image_gen.reset_image_gen_bridge_pool()
+    async with image_gen.image_gen_bridge_slot() as u1:
+        async with image_gen.image_gen_bridge_slot() as u2:
+            assert u1 != u2
+            assert {u1, u2} == {
+                "https://bridge-a.example/v1",
+                "https://bridge-b.example/v1",
+            }
+
+
+@pytest.mark.asyncio
+async def test_bridge_pool_third_waits_until_slot_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "IMAGE_GEN_BASE_URLS",
+        "https://bridge-a.example/v1,https://bridge-b.example/v1",
+    )
+    image_gen.reset_image_gen_bridge_pool()
+    hold = asyncio.Event()
+    third_started = asyncio.Event()
+
+    async def _hold_bridge() -> None:
+        async with image_gen.image_gen_bridge_slot():
+            await hold.wait()
+
+    t1 = asyncio.create_task(_hold_bridge())
+    t2 = asyncio.create_task(_hold_bridge())
+    await asyncio.sleep(0.02)
+
+    async def _third() -> None:
+        async with image_gen.image_gen_bridge_slot():
+            third_started.set()
+
+    t3 = asyncio.create_task(_third())
+    await asyncio.sleep(0.03)
+    assert not third_started.is_set()
+    hold.set()
+    await asyncio.gather(t1, t2, t3)
+    assert third_started.is_set()
+
+
+def test_image_gen_base_urls_csv_and_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("IMAGE_GEN_BASE_URLS", raising=False)
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://one.example/v1/")
+    image_gen.reset_image_gen_bridge_pool()
+    assert image_gen.image_gen_base_urls() == ["https://one.example/v1"]
+    monkeypatch.setenv(
+        "IMAGE_GEN_BASE_URLS",
+        "https://a.example/v1, https://b.example/v1 ,https://a.example/v1",
+    )
+    assert image_gen.image_gen_base_urls() == [
+        "https://a.example/v1",
+        "https://b.example/v1",
+    ]
+    assert image_gen.image_gen_max_concurrent() == 2
 
 
 def test_prepare_bridge_source_bytes_shrinks_large_jpeg() -> None:

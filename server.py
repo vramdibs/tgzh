@@ -50,38 +50,6 @@ _MAX_SUMMARIZE_PARTS = 16
 _MAX_SUMMARIZE_PART_LEN = 16_000
 _MAX_QUIP_EXCERPT_LEN = 8_000
 
-_image_gen_slot: asyncio.Semaphore | None = None
-
-
-def _image_gen_max_concurrent() -> int:
-    raw = (os.getenv("IMAGE_GEN_MAX_CONCURRENT") or "1").strip()
-    try:
-        return max(1, min(4, int(raw)))
-    except ValueError:
-        return 1
-
-
-def _get_image_gen_sem() -> asyncio.Semaphore:
-    global _image_gen_slot
-    if _image_gen_slot is None:
-        _image_gen_slot = asyncio.Semaphore(_image_gen_max_concurrent())
-    return _image_gen_slot
-
-
-async def _acquire_image_gen_slot() -> None:
-    sem = _get_image_gen_sem()
-    if _image_gen_max_concurrent() == 1:
-        try:
-            await asyncio.wait_for(sem.acquire(), timeout=0.1)
-        except asyncio.TimeoutError:
-            raise HTTPException(
-                429,
-                "image generation already in progress; retry in a minute",
-            ) from None
-    else:
-        await sem.acquire()
-
-
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     tgzh_metrics.maybe_start_http_server()
@@ -782,78 +750,83 @@ async def image_generate(req: ImageGenerateRequest) -> Response:
     if len(prompt) > image_gen.PROMPT_MAX_LEN:
         raise HTTPException(400, f"prompt longer than {image_gen.PROMPT_MAX_LEN} chars")
 
-    await _acquire_image_gen_slot()
-    reset_completion_usage()
-    t0 = time.perf_counter()
-    try:
-        if mode == "style_redraw":
-            if not (req.source_image_b64 or "").strip():
-                raise HTTPException(400, "source_image_b64 is required for style_redraw")
-            logger.info(
-                "image_generate style_redraw start user_id=%s notes_chars=%s model=%s",
-                req.user_id,
-                len(prompt),
-                image_gen.image_gen_model(),
-            )
-            source_bytes = image_gen.decode_source_image_b64(req.source_image_b64)
-            png_bytes = await image_gen.generate_image_style_redraw(
-                source_bytes,
-                extra_prompt=prompt,
-            )
-        elif mode == "image_edit":
-            if not (req.source_image_b64 or "").strip():
-                raise HTTPException(400, "source_image_b64 is required for image_edit")
-            logger.info(
-                "image_generate image_edit start user_id=%s instruction_chars=%s model=%s",
-                req.user_id,
-                len(prompt),
-                image_gen.image_gen_model(),
-            )
-            source_bytes = image_gen.decode_source_image_b64(req.source_image_b64)
-            png_bytes = await image_gen.generate_image_edit(
-                source_bytes,
-                instruction=prompt,
-            )
-        else:
-            if not prompt:
-                raise HTTPException(400, "prompt is empty")
-            logger.info(
-                "image_generate start user_id=%s prompt_chars=%s model=%s size=%s",
-                req.user_id,
-                len(prompt),
-                image_gen.image_gen_model(),
-                image_gen.image_gen_size(),
-            )
-            png_bytes = await image_gen.generate_image(prompt)
-    except image_gen.ImageGenBadPrompt as e:
-        raise HTTPException(400, str(e)) from e
-    except image_gen.ImageGenBadSource as e:
-        raise HTTPException(400, str(e)) from e
-    except image_gen.ImageGenStyleReferenceMissing as e:
-        raise HTTPException(503, str(e)) from e
-    except image_gen.ImageGenNotConfigured as e:
-        raise HTTPException(503, str(e)) from e
-    except asyncio.TimeoutError as e:
-        logger.warning("image_generate timeout user_id=%s", req.user_id)
-        raise HTTPException(504, "image generation timeout") from e
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("image_generate upstream failure user_id=%s", req.user_id)
-        raise HTTPException(502, f"image backend error: {e}") from e
-    finally:
-        _get_image_gen_sem().release()
+    async with image_gen.image_gen_bridge_slot():
+        reset_completion_usage()
+        t0 = time.perf_counter()
+        try:
+            if mode == "style_redraw":
+                if not (req.source_image_b64 or "").strip():
+                    raise HTTPException(
+                        400,
+                        "source_image_b64 is required for style_redraw",
+                    )
+                logger.info(
+                    "image_generate style_redraw start user_id=%s notes_chars=%s model=%s",
+                    req.user_id,
+                    len(prompt),
+                    image_gen.image_gen_model(),
+                )
+                source_bytes = image_gen.decode_source_image_b64(req.source_image_b64)
+                png_bytes = await image_gen.generate_image_style_redraw(
+                    source_bytes,
+                    extra_prompt=prompt,
+                )
+            elif mode == "image_edit":
+                if not (req.source_image_b64 or "").strip():
+                    raise HTTPException(
+                        400,
+                        "source_image_b64 is required for image_edit",
+                    )
+                logger.info(
+                    "image_generate image_edit start user_id=%s instruction_chars=%s model=%s",
+                    req.user_id,
+                    len(prompt),
+                    image_gen.image_gen_model(),
+                )
+                source_bytes = image_gen.decode_source_image_b64(req.source_image_b64)
+                png_bytes = await image_gen.generate_image_edit(
+                    source_bytes,
+                    instruction=prompt,
+                )
+            else:
+                if not prompt:
+                    raise HTTPException(400, "prompt is empty")
+                logger.info(
+                    "image_generate start user_id=%s prompt_chars=%s model=%s size=%s",
+                    req.user_id,
+                    len(prompt),
+                    image_gen.image_gen_model(),
+                    image_gen.image_gen_size(),
+                )
+                png_bytes = await image_gen.generate_image(prompt)
+        except image_gen.ImageGenBadPrompt as e:
+            raise HTTPException(400, str(e)) from e
+        except image_gen.ImageGenBadSource as e:
+            raise HTTPException(400, str(e)) from e
+        except image_gen.ImageGenStyleReferenceMissing as e:
+            raise HTTPException(503, str(e)) from e
+        except image_gen.ImageGenNotConfigured as e:
+            raise HTTPException(503, str(e)) from e
+        except asyncio.TimeoutError as e:
+            logger.warning("image_generate timeout user_id=%s", req.user_id)
+            raise HTTPException(504, "image generation timeout") from e
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("image_generate upstream failure user_id=%s", req.user_id)
+            raise HTTPException(502, f"image backend error: {e}") from e
 
-    elapsed = time.perf_counter() - t0
-    logger.info(
-        "image_generate done user_id=%s mode=%s elapsed_s=%.2f bytes=%s",
-        req.user_id,
-        mode,
-        elapsed,
-        len(png_bytes),
-    )
-    _record_llm_spend(kind="image_gen", user_id=req.user_id)
-    return Response(content=png_bytes, media_type="image/png")
+        elapsed = time.perf_counter() - t0
+        logger.info(
+            "image_generate done user_id=%s mode=%s elapsed_s=%.2f bytes=%s bridge=%s",
+            req.user_id,
+            mode,
+            elapsed,
+            len(png_bytes),
+            image_gen.image_gen_resolved_base_url(),
+        )
+        _record_llm_spend(kind="image_gen", user_id=req.user_id)
+        return Response(content=png_bytes, media_type="image/png")
 
 
 @app.get("/health")

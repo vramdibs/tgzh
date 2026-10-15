@@ -318,24 +318,6 @@ def test_image_generate_records_llm_spend(
     assert recorded == [{"kind": "image_gen", "user_id": 42}]
 
 
-def test_image_generate_returns_429_when_slot_busy(
-    monkeypatch: pytest.MonkeyPatch, client: TestClient
-) -> None:
-    import image_gen
-    import server as server_mod
-    from fastapi import HTTPException
-
-    monkeypatch.setattr(image_gen, "is_image_gen_configured", lambda: True)
-
-    async def _busy() -> None:
-        raise HTTPException(429, "image generation already in progress")
-
-    monkeypatch.setattr(server_mod, "_acquire_image_gen_slot", _busy)
-    r = client.post(
-        "/image/generate",
-        json={"user_id": 2, "prompt": "b", "mode": "prompt"},
-    )
-    assert r.status_code == 429
 
 
 def test_image_generate_records_llm_token_usage_via_spend(

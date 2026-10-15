@@ -132,7 +132,9 @@ IMAGE_GEN_MULTIPART_TIMEOUT_SEC=480
 
 **Скорость на bridge:** узкое место - полный цикл `cursor-agent` (часто ~5 мин на запрос), а не только пиксели. Снижение **`IMAGE_GEN_SIZE`** (например `512x512`) и сжатие исходников (**`IMAGE_GEN_SOURCE_MAX_SIDE`**, **`IMAGE_GEN_JPEG_QUALITY`**) уменьшают payload и могут чуть ускорить multimodal; замер: **`scripts/benchmark-image-gen-bridge.sh`**. На bridge не гонять тяжелый `/chat` параллельно с images - один агент на хост.
 
-Один **`cursor-agent`** на хост (глобальная очередь в bridge): не запускать параллельно `/imagine` и тяжёлый `/chat` на bridge. На **tgzh-server** по умолчанию **`IMAGE_GEN_MAX_CONCURRENT=1`** - второй запрос `/image/generate` получает **429**, а не встаёт в очередь на минуты. Unit bridge: **`TimeoutStopSec=30`** (см. `deploy/discourse-cursor-bridge.service` в репозитории bridge).
+**Несколько bridge для images:** **`IMAGE_GEN_BASE_URLS`** (CSV OpenAI-base URL). Дефолт **`IMAGE_GEN_MAX_CONCURRENT`** = число URL (до 4). Два инстанса **discourse-cursor-bridge** на разных портах (разные `BRIDGE_PORT`, `CURSOR_OPENAI_WORKSPACE`) - два пользователя генерируют параллельно; **3+** ждут FIFO на `tgzh-server` (без 429). Один **`cursor-agent`** на инстанс - не смешивать тяжёлый `/chat` и images на одном процессе bridge, если можно выделить image-only порты.
+
+Unit bridge: **`TimeoutStopSec=30`** (см. `deploy/discourse-cursor-bridge.service` в репозитории bridge).
 
 **Перерисовка фото в стиле эталона** (кнопка в `/imagine`): в теле JSON дополнительно `source_image_b64` (и опционально `style_reference_b64` от tgzh-server). Подпись к фото Telegram уходит в `prompt` как уточнение; если подписи нет, **tgzh-server** подставляет короткий дефолтный `prompt` (bridge требует min_length=1) На bridge эталон по умолчанию - `assets/imagine_style_reference.png` (`BRIDGE_IMAGE_STYLE_REFERENCE_PATH`).
 

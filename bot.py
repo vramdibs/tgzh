@@ -327,8 +327,16 @@ _CHAT_IMAGINE_LAST_PNG = "chat_imagine_last_png"
 _CHAT_IMAGINE_LAST_PNG_MAX_BYTES = 6 * 1024 * 1024
 # После успешной генерации - урезанное меню режима фото (auto_compact).
 _CHAT_IMAGINE_UI_COMPACT = "chat_imagine_ui_compact"
-_CHAT_IMAGINE_STYLE_REDRAW_PLACEHOLDER = "Перерисовываю фото, это займет пару минут..."
-_CHAT_IMAGINE_EDIT_PLACEHOLDER = "Правлю последнюю картинку, подождите..."
+_CHAT_IMAGINE_QUEUE_HINT = (
+    "При высокой нагрузке запрос встанет в очередь - обычно до нескольких минут."
+)
+_CHAT_IMAGINE_STYLE_REDRAW_PLACEHOLDER = (
+    "Перерисовываю фото, это займет пару минут… "
+    + _CHAT_IMAGINE_QUEUE_HINT
+)
+_CHAT_IMAGINE_EDIT_PLACEHOLDER = (
+    "Правлю последнюю картинку, подождите… " + _CHAT_IMAGINE_QUEUE_HINT
+)
 # Буфер документов в /chat (несколько PDF подряд или альбом).
 _CHAT_FILE_BUFFER = "chat_file_buffer"
 _CHAT_FILE_BUFFER_AT = "chat_file_buffer_at"
@@ -4520,7 +4528,7 @@ def _image_gen_server_user_error(status_code: int, body: str) -> str:
     """Короткое сообщение для чата вместо сырого JSON от /image/generate."""
     if status_code == 429:
         return (
-            "Сейчас уже идет другая генерация или перерисовка (одна за раз). "
+            "Сейчас все слоты генерации заняты. "
             "Подождите пару минут и попробуйте снова."
         )
     snippet = (body or "").strip()
@@ -4646,7 +4654,8 @@ async def _handle_chat_imagine_request(
         with suppress(Exception):
             placeholder = await context.bot.send_message(
                 chat_id,
-                "Генерирую изображение… Это может занять до пары минут.",
+                "Генерирую изображение… Это может занять до пары минут. "
+                + _CHAT_IMAGINE_QUEUE_HINT,
             )
         logger.info(
             "chat imagine user_id=%s prompt_chars=%s model=%s",

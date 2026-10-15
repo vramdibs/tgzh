@@ -288,7 +288,7 @@ def test_image_gen_server_user_error_429() -> None:
         429,
         '{"detail":"image generation already in progress; retry in a minute"}',
     )
-    assert "одна за раз" in msg
+    assert "слоты генерации" in msg
     assert "429" not in msg
 
 
