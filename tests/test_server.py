@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 
 import pytest
@@ -294,6 +295,53 @@ async def _fake_generate_image(prompt: str) -> bytes:
 
     image_gen.record_image_gen_usage(None, prompt=prompt)
     return b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+
+
+@pytest.mark.asyncio
+async def test_image_generate_three_parallel_no_429(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Два bridge-слота: два запроса параллельно, третий ждет FIFO (не 429)."""
+    import image_gen
+
+    monkeypatch.setenv(
+        "IMAGE_GEN_BASE_URLS",
+        "https://bridge-a.example/v1,https://bridge-b.example/v1",
+    )
+    monkeypatch.delenv("IMAGE_GEN_BASE_URL", raising=False)
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    image_gen.reset_image_gen_bridge_pool()
+    monkeypatch.setattr(image_gen, "is_image_gen_configured", lambda: True)
+
+    gate = asyncio.Event()
+    in_flight = 0
+    peak = 0
+
+    async def _slow_generate(prompt: str) -> bytes:
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.08)
+        in_flight -= 1
+        gate.set()
+        return b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+
+    monkeypatch.setattr(image_gen, "generate_image", _slow_generate)
+
+    async def _one(user_id: int) -> int:
+        from httpx import ASGITransport, AsyncClient
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.post(
+                "/image/generate",
+                json={"user_id": user_id, "prompt": f"p{user_id}", "mode": "prompt"},
+            )
+            return r.status_code
+
+    codes = await asyncio.gather(_one(1), _one(2), _one(3))
+    assert codes == [200, 200, 200]
+    assert peak == 2
 
 
 def test_image_generate_records_llm_spend(

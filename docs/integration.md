@@ -134,6 +134,8 @@ IMAGE_GEN_MULTIPART_TIMEOUT_SEC=480
 
 **Несколько bridge для images:** **`IMAGE_GEN_BASE_URLS`** (CSV OpenAI-base URL). Дефолт **`IMAGE_GEN_MAX_CONCURRENT`** = число URL (до 4). Два инстанса **discourse-cursor-bridge** на разных портах (разные `BRIDGE_PORT`, `CURSOR_OPENAI_WORKSPACE`) - два пользователя генерируют параллельно; **3+** ждут FIFO на `tgzh-server` (без 429). Один **`cursor-agent`** на инстанс - не смешивать тяжёлый `/chat` и images на одном процессе bridge, если можно выделить image-only порты.
 
+Дополнительный image-only инстанс на хосте: **`scripts/setup-image-bridge-instance.sh <PORT>`** (копия `.env` bridge, отдельный `state-image-PORT.json`, unit `discourse-cursor-bridge-image-PORT.service`). Smoke пула: **`scripts/smoke-image-gen-pool.sh`** (`IMAGE_GEN_SMOKE_PORTS=8787,8789,...`).
+
 Unit bridge: **`TimeoutStopSec=30`** (см. `deploy/discourse-cursor-bridge.service` в репозитории bridge).
 
 **Перерисовка фото в стиле эталона** (кнопка в `/imagine`): в теле JSON дополнительно `source_image_b64` (и опционально `style_reference_b64` от tgzh-server). Подпись к фото Telegram уходит в `prompt` как уточнение; если подписи нет, **tgzh-server** подставляет короткий дефолтный `prompt` (bridge требует min_length=1) На bridge эталон по умолчанию - `assets/imagine_style_reference.png` (`BRIDGE_IMAGE_STYLE_REFERENCE_PATH`).
