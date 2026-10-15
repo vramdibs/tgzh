@@ -403,23 +403,37 @@ def _set_chat_imagine_pick_size(context: ContextTypes.DEFAULT_TYPE, size: str) -
 
 
 def _chat_imagine_size_label(size: str, active: bool) -> str:
-    display = size.replace("x", "×")
+    if size == image_gen.CHAT_IMAGINE_SIZE_ORIGINAL:
+        display = "Оригинал до 1280"
+    else:
+        display = size.replace("x", "×")
     return f"{display} ✓" if active else display
 
 
-def _chat_imagine_size_keyboard_row(
+def _chat_imagine_size_keyboard_rows(
     context: ContextTypes.DEFAULT_TYPE,
-) -> list[InlineKeyboardButton]:
+) -> list[list[InlineKeyboardButton]]:
     current = _chat_imagine_pick_size(context)
     return [
-        InlineKeyboardButton(
-            _chat_imagine_size_label("1024x1024", current == "1024x1024"),
-            callback_data="chat:imagine:size:1024x1024",
-        ),
-        InlineKeyboardButton(
-            _chat_imagine_size_label("256x256", current == "256x256"),
-            callback_data="chat:imagine:size:256x256",
-        ),
+        [
+            InlineKeyboardButton(
+                _chat_imagine_size_label("1024x1024", current == "1024x1024"),
+                callback_data="chat:imagine:size:1024x1024",
+            ),
+            InlineKeyboardButton(
+                _chat_imagine_size_label("256x256", current == "256x256"),
+                callback_data="chat:imagine:size:256x256",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                _chat_imagine_size_label(
+                    image_gen.CHAT_IMAGINE_SIZE_ORIGINAL,
+                    current == image_gen.CHAT_IMAGINE_SIZE_ORIGINAL,
+                ),
+                callback_data=f"chat:imagine:size:{image_gen.CHAT_IMAGINE_SIZE_ORIGINAL}",
+            ),
+        ],
     ]
 
 
@@ -2206,7 +2220,7 @@ def _chat_imagine_wait_keyboard(
                 callback_data="chat:imagine:example",
             ),
         ],
-        _chat_imagine_size_keyboard_row(context),
+        *_chat_imagine_size_keyboard_rows(context),
         [InlineKeyboardButton("Назад к выбору", callback_data="chat:imagine")],
     ]
     return InlineKeyboardMarkup(rows)
@@ -2216,7 +2230,8 @@ def _chat_imagine_custom_prompt_help_html() -> str:
     return (
         "<b>Свой промпт</b> — пришли описание картинки одним сообщением "
         f"(до {image_gen.PROMPT_MAX_LEN} символов).\n"
-        "Размер кадра — кнопками ниже (256×256 или 1024×1024)."
+        "Размер кадра — кнопками ниже (256×256, 1024×1024 или оригинальные "
+        "пропорции, длинная сторона до 1280)."
     )
 
 
@@ -2225,7 +2240,7 @@ def _chat_imagine_style_photo_wait_keyboard(
     context: ContextTypes.DEFAULT_TYPE,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
-        _chat_imagine_size_keyboard_row(context),
+        *_chat_imagine_size_keyboard_rows(context),
         [InlineKeyboardButton("Назад к выбору", callback_data="chat:imagine")],
     ]
     return InlineKeyboardMarkup(rows)
@@ -2238,7 +2253,8 @@ def _chat_imagine_style_photo_help_html() -> str:
         "(как эталон в меню генерации), сохранив твой сюжет. "
         "Сцену купе и персонажей из эталона копировать не будет.\n\n"
         "Подпись к фото (caption) — опциональное уточнение для генерации.\n"
-        "Размер кадра — кнопками ниже (256×256 или 1024×1024).\n\n"
+        "Размер кадра — кнопками ниже; <b>Оригинал до 1280</b> сохраняет пропорции "
+        "твоего снимка (длинная сторона не больше 1280).\n\n"
         "После результата можно править картинку текстом (например «убери провода») "
         "без повторной загрузки фото."
     )
@@ -2632,7 +2648,10 @@ async def _handle_chat_callback(
                 await _answer_query_once(query, "Неизвестный размер.")
                 return
             _set_chat_imagine_pick_size(context, picked)
-            label = picked.replace("x", "×")
+            if picked == image_gen.CHAT_IMAGINE_SIZE_ORIGINAL:
+                label = "Оригинал до 1280"
+            else:
+                label = picked.replace("x", "×")
             await _answer_query_once(query, f"Размер: {label}")
             if context.user_data.get(_CHAT_IMAGINE_STYLE_PHOTO_WAIT):
                 help_html = _chat_imagine_style_photo_help_html()

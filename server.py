@@ -752,8 +752,11 @@ async def image_generate(req: ImageGenerateRequest) -> Response:
         raise HTTPException(400, f"prompt longer than {image_gen.PROMPT_MAX_LEN} chars")
 
     size_override = (req.size or "").strip() or None
-    if size_override and size_override not in image_gen.image_gen_allowed_sizes():
-        raise HTTPException(400, f"size must be one of: {sorted(image_gen.image_gen_allowed_sizes())}")
+    if size_override and not image_gen.is_api_client_image_size(size_override):
+        raise HTTPException(
+            400,
+            "size must be a standard WxH, original_max1280, or WxH up to 1280 per side",
+        )
 
     async with image_gen.image_gen_bridge_slot():
         reset_completion_usage()

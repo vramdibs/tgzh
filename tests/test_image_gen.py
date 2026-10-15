@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -356,6 +357,24 @@ def test_resolve_image_gen_size_override_and_env(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("IMAGE_GEN_SIZE", "512x512")
     assert image_gen.resolve_image_gen_size(None) == "512x512"
     assert image_gen.resolve_image_gen_size("1024x1024") == "1024x1024"
+
+
+def test_resolve_original_max1280_from_image_bytes() -> None:
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (2000, 1000), color="red").save(buf, format="PNG")
+    out = image_gen.resolve_image_gen_size(
+        image_gen.CHAT_IMAGINE_SIZE_ORIGINAL,
+        source_bytes=buf.getvalue(),
+    )
+    assert out == "1280x640"
+
+
+def test_is_api_client_image_size_accepts_original_token() -> None:
+    assert image_gen.is_api_client_image_size(image_gen.CHAT_IMAGINE_SIZE_ORIGINAL)
+    assert image_gen.is_api_client_image_size("800x600")
+    assert not image_gen.is_api_client_image_size("2000x1000")
 
 
 def test_image_gen_size_allowlist_fallback(monkeypatch: pytest.MonkeyPatch) -> None:

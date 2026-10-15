@@ -17,8 +17,10 @@ import asyncio
 import base64
 import binascii
 import contextvars
+import io
 import logging
 import os
+import re
 import time
 from collections import deque
 from contextlib import asynccontextmanager
@@ -224,19 +226,71 @@ def image_gen_allowed_sizes() -> frozenset[str]:
 
 
 # Размеры, которые пользователь выбирает кнопками в /imagine (не все allowlist bridge).
-CHAT_IMAGINE_PICK_SIZES: Final[frozenset[str]] = frozenset({"256x256", "1024x1024"})
+CHAT_IMAGINE_SIZE_ORIGINAL: Final[str] = "original_max1280"
+CHAT_IMAGINE_PICK_SIZES: Final[frozenset[str]] = frozenset(
+    {"256x256", "1024x1024", CHAT_IMAGINE_SIZE_ORIGINAL},
+)
 CHAT_IMAGINE_DEFAULT_PICK_SIZE: Final[str] = "1024x1024"
+_ORIGINAL_MAX_LONG_SIDE: Final[int] = 1280
+_SIZE_WXH_RE = re.compile(r"^(\d{1,4})x(\d{1,4})$")
+_ORIGINAL_PROMPT_SIZE_HINT: Final[str] = (
+    "natural aspect ratio for the scene, longest side 1280 pixels"
+)
 
 
-def resolve_image_gen_size(override: str | None) -> str:
+def size_from_image_bytes_max_long_side(
+    data: bytes,
+    max_long: int = _ORIGINAL_MAX_LONG_SIDE,
+) -> str:
+    """WxH с сохранением пропорций, длинная сторона не больше max_long."""
+    from PIL import Image, ImageOps
+
+    im = Image.open(io.BytesIO(data))
+    im = ImageOps.exif_transpose(im)
+    w, h = im.size
+    if w <= 0 or h <= 0:
+        return _DEFAULT_SIZE
+    long_side = max(w, h)
+    if long_side > max_long:
+        scale = max_long / float(long_side)
+        w = max(1, int(round(w * scale)))
+        h = max(1, int(round(h * scale)))
+    return f"{w}x{h}"
+
+
+def is_api_client_image_size(size: str) -> bool:
+    """Допустимое значение поля size в POST /image/generate."""
+    s = (size or "").strip()
+    if not s:
+        return False
+    if s in _ALLOWED_SIZES or s == CHAT_IMAGINE_SIZE_ORIGINAL:
+        return True
+    m = _SIZE_WXH_RE.match(s)
+    if not m:
+        return False
+    w, h = int(m.group(1)), int(m.group(2))
+    return 1 <= w <= _ORIGINAL_MAX_LONG_SIDE and 1 <= h <= _ORIGINAL_MAX_LONG_SIDE
+
+
+def resolve_image_gen_size(
+    override: str | None,
+    *,
+    source_bytes: bytes | None = None,
+) -> str:
     """Размер кадра: override из запроса бота, иначе IMAGE_GEN_SIZE, иначе дефолт."""
-    raw = (override or "").strip() or _strip_env("IMAGE_GEN_SIZE") or _DEFAULT_SIZE
-    if raw in _ALLOWED_SIZES:
+    raw = (override or "").strip()
+    if raw == CHAT_IMAGINE_SIZE_ORIGINAL:
+        if source_bytes:
+            return size_from_image_bytes_max_long_side(source_bytes)
+        return _ORIGINAL_PROMPT_SIZE_HINT
+    if raw and is_api_client_image_size(raw) and raw != CHAT_IMAGINE_SIZE_ORIGINAL:
+        if raw in _ALLOWED_SIZES:
+            return raw
         return raw
-    if override:
-        logger.warning("image_gen size override %r not in allowlist, using env/default", raw)
-    else:
-        logger.warning("IMAGE_GEN_SIZE=%r not in allowlist, using %s", raw, _DEFAULT_SIZE)
+    env_raw = _strip_env("IMAGE_GEN_SIZE") or _DEFAULT_SIZE
+    if env_raw in _ALLOWED_SIZES:
+        return env_raw
+    logger.warning("IMAGE_GEN_SIZE=%r not in allowlist, using %s", env_raw, _DEFAULT_SIZE)
     return _DEFAULT_SIZE
 
 
@@ -626,7 +680,7 @@ async def generate_image_edit(
             "image generation backend not configured (IMAGE_GEN_BASE_URL/API_KEY)",
         )
     model = image_gen_model()
-    resolved_size = resolve_image_gen_size(size)
+    resolved_size = resolve_image_gen_size(size, source_bytes=src)
     timeout = image_gen_multipart_timeout_sec()
     payload = {
         "model": model,
@@ -665,7 +719,7 @@ async def generate_image_style_redraw(
         )
     style_bytes = load_style_reference_bytes()
     model = image_gen_model()
-    resolved_size = resolve_image_gen_size(size)
+    resolved_size = resolve_image_gen_size(size, source_bytes=src)
     timeout = image_gen_multipart_timeout_sec()
     payload = {
         "model": model,

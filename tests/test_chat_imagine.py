@@ -275,6 +275,7 @@ def test_chat_imagine_wait_keyboard_includes_example_and_back() -> None:
     assert "chat:imagine" in callbacks
     assert "chat:imagine:size:256x256" in callbacks
     assert "chat:imagine:size:1024x1024" in callbacks
+    assert f"chat:imagine:size:{image_gen.CHAT_IMAGINE_SIZE_ORIGINAL}" in callbacks
     assert "chat:list" not in callbacks
     assert "chat:model" not in callbacks
 
@@ -283,6 +284,7 @@ def test_chat_imagine_style_photo_wait_keyboard_no_chat_menu() -> None:
     kb = bot._chat_imagine_style_photo_wait_keyboard(1, _FakeContext())
     callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
     assert "chat:imagine:size:1024x1024" in callbacks
+    assert f"chat:imagine:size:{image_gen.CHAT_IMAGINE_SIZE_ORIGINAL}" in callbacks
     assert "chat:list" not in callbacks
     assert "chat:model" not in callbacks
 

@@ -230,6 +230,32 @@ def test_image_generate_rejects_bad_size(
     assert r.status_code == 400
 
 
+def test_image_generate_accepts_original_max1280_token(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient,
+) -> None:
+    import image_gen
+
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    seen: dict[str, str] = {}
+
+    async def _fake_generate(prompt: str, *, size: str | None = None) -> bytes:  # noqa: ARG001
+        seen["size"] = size or ""
+        return b"\x89PNG\r\n\x1a\n"
+
+    monkeypatch.setattr(image_gen, "generate_image", _fake_generate)
+    r = client.post(
+        "/image/generate",
+        json={
+            "user_id": 1,
+            "prompt": "landscape",
+            "size": image_gen.CHAT_IMAGINE_SIZE_ORIGINAL,
+        },
+    )
+    assert r.status_code == 200
+    assert "1280" in seen["size"]
+
+
 def test_image_generate_style_redraw_requires_source(
     monkeypatch: pytest.MonkeyPatch, client: TestClient
 ) -> None:
