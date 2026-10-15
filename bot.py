@@ -328,16 +328,9 @@ _CHAT_IMAGINE_LAST_PNG_MAX_BYTES = 6 * 1024 * 1024
 # После успешной генерации - урезанное меню режима фото (auto_compact).
 _CHAT_IMAGINE_UI_COMPACT = "chat_imagine_ui_compact"
 _CHAT_IMAGINE_SIZE = "chat_imagine_size"
-_CHAT_IMAGINE_QUEUE_HINT = (
-    "При высокой нагрузке запрос встанет в очередь - обычно до нескольких минут."
-)
-_CHAT_IMAGINE_STYLE_REDRAW_PLACEHOLDER = (
-    "Перерисовываю фото, это займет пару минут… "
-    + _CHAT_IMAGINE_QUEUE_HINT
-)
-_CHAT_IMAGINE_EDIT_PLACEHOLDER = (
-    "Правлю последнюю картинку, подождите… " + _CHAT_IMAGINE_QUEUE_HINT
-)
+_CHAT_IMAGINE_GENERATE_PLACEHOLDER = "Генерирую изображение, это займет 5 минут…"
+_CHAT_IMAGINE_STYLE_REDRAW_PLACEHOLDER = "Перерисовываю фото, это займет 5 минут…"
+_CHAT_IMAGINE_EDIT_PLACEHOLDER = "Правлю последнюю картинку, это займет 5 минут…"
 # Буфер документов в /chat (несколько PDF подряд или альбом).
 _CHAT_FILE_BUFFER = "chat_file_buffer"
 _CHAT_FILE_BUFFER_AT = "chat_file_buffer_at"
@@ -4746,8 +4739,7 @@ async def _handle_chat_imagine_request(
         with suppress(Exception):
             placeholder = await context.bot.send_message(
                 chat_id,
-                "Генерирую изображение… Это может занять до пары минут. "
-                + _CHAT_IMAGINE_QUEUE_HINT,
+                _CHAT_IMAGINE_GENERATE_PLACEHOLDER,
             )
         gen_size = size if size is not None else _chat_imagine_pick_size(context)
         logger.info(
@@ -4921,11 +4913,8 @@ async def _handle_chat_imagine_style_redraw(
                     chat_id=chat_id,
                     message_id=placeholder.message_id,
                 )
-        cap = notes_clean or "Перерисовка в стиле примера"
-        if len(cap) > _TG_PHOTO_CAPTION_MAX_LEN:
-            cap = cap[: _TG_PHOTO_CAPTION_MAX_LEN - 1] + "…"
         try:
-            await context.bot.send_photo(chat_id, photo=png_bytes, caption=cap)
+            await context.bot.send_photo(chat_id, photo=png_bytes)
         except Exception:
             logger.exception("chat imagine style_redraw send_photo failed user_id=%s", user_id)
             with suppress(Exception):

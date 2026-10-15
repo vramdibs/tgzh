@@ -302,8 +302,14 @@ def test_chat_imagine_example_prompt_constant_non_empty() -> None:
 
 
 def test_chat_imagine_status_placeholders() -> None:
-    assert bot._CHAT_IMAGINE_EDIT_PLACEHOLDER.startswith("Правлю последнюю картинку, подождите")
-    assert "пару минут" not in bot._CHAT_IMAGINE_EDIT_PLACEHOLDER
+    for text in (
+        bot._CHAT_IMAGINE_GENERATE_PLACEHOLDER,
+        bot._CHAT_IMAGINE_STYLE_REDRAW_PLACEHOLDER,
+        bot._CHAT_IMAGINE_EDIT_PLACEHOLDER,
+    ):
+        assert "5 минут" in text
+        assert "очередь" not in text.lower()
+        assert "нагрузк" not in text.lower()
     assert bot._CHAT_IMAGINE_STYLE_REDRAW_PLACEHOLDER.startswith("Перерисовываю фото")
 
 
@@ -353,6 +359,7 @@ def test_handle_chat_imagine_style_redraw_calls_server(monkeypatch) -> None:
     assert captured["source_jpeg"] == b"jpeg"
     assert captured["notes"] == "evening"
     assert ctx.bot.sent_photos
+    assert ctx.bot.sent_photos[0][2] == ""
     assert bot._CHAT_IMAGINE_STYLE_PHOTO_WAIT not in ctx.user_data
 
 
