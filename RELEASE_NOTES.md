@@ -15,6 +15,7 @@
 
 ### Fixed
 
+- **Кнопки и callback при чужой генерации фото**: `concurrent_updates` и per-user lock в боте - пока у одного пользователя идет долгий `/image/generate`, другие сразу получают меню и ответы на inline-кнопки
 - **`/chat` и «Меню чата» выходят из режима фото**: сбрасывают `_CHAT_IMAGINE_SESSION` и последнюю PNG, чтобы следующий текст шел в Grok, а не в правку картинки
 - **Перерисовка фото (`style_redraw`)**: bridge больше не обрывает `cursor-agent` по первому `result` до записи PNG; поиск файла с опросом до **`BRIDGE_IMAGE_LOCATE_TIMEOUT_SEC`** (дефолт 90 с) - см. **discourse-cursor-bridge** `images_endpoint.py` / `agent_runner.py`
 - **Таймаут перерисовки (504/502)**: `style_redraw` / `image_edit` - **`IMAGE_GEN_MULTIPART_TIMEOUT_SEC`** (дефолт `IMAGE_GEN_TIMEOUT_SEC + 120`; на проде с bridge лучше ~480); на bridge поднять **`BRIDGE_IMAGE_TIMEOUT_SEC`** (например 360), иначе `cursor-agent timed out`

@@ -8207,6 +8207,34 @@ def _telegram_mode() -> str:
     return mode
 
 
+_USER_UPDATE_LOCKS: dict[int, asyncio.Lock] = {}
+_USER_UPDATE_LOCKS_MAX: int = 20_000
+
+
+def _user_update_lock(user_id: int) -> asyncio.Lock:
+    lock = _USER_UPDATE_LOCKS.get(user_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        if len(_USER_UPDATE_LOCKS) >= _USER_UPDATE_LOCKS_MAX:
+            _USER_UPDATE_LOCKS.clear()
+        _USER_UPDATE_LOCKS[user_id] = lock
+    return lock
+
+
+def _per_user_update_lock(handler):
+    """Один апдейт на пользователя; разные user_id обрабатываются параллельно."""
+
+    async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        eu = update.effective_user
+        if eu is None or eu.id <= 0:
+            await handler(update, context)
+            return
+        async with _user_update_lock(eu.id):
+            await handler(update, context)
+
+    return wrapped
+
+
 def _telegram_webhook_config() -> tuple[str, str, int, str, str | None]:
     """Параметры webhook (только при TG_MODE=webhook)."""
     webhook_url = (os.getenv("TELEGRAM_WEBHOOK_URL") or "").strip().rstrip("/")
@@ -8246,7 +8274,12 @@ def main() -> None:
         "on" if telegram_proxy else "off",
     )
 
-    builder = Application.builder().token(BOT_TOKEN).post_init(post_init_commands)
+    builder = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .post_init(post_init_commands)
+        .concurrent_updates(True)
+    )
     if telegram_proxy:
         builder = builder.request(
             HTTPXRequest(
@@ -8284,21 +8317,26 @@ def main() -> None:
 
     app.add_handler(TypeHandler(Update, _metrics_on_update), group=-1)
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("link", link_cmd))
-    app.add_handler(CommandHandler("textbook", textbook_cmd))
-    app.add_handler(CommandHandler("stats", stats_cmd))
-    app.add_handler(CommandHandler("begemot", begemot_cmd))
-    app.add_handler(CommandHandler("begemot_logout", begemot_logout_cmd))
-    app.add_handler(CommandHandler("chat", chat_cmd))
-    app.add_handler(CommandHandler("chat_logout", chat_logout_cmd))
-    app.add_handler(CommandHandler("imagine", imagine_cmd))
-    app.add_handler(CommandHandler("shot", shot_cmd))
-    app.add_handler(CallbackQueryHandler(button_callback))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_homework_text))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
+    _lock = _per_user_update_lock
+    app.add_handler(CommandHandler("start", _lock(start)))
+    app.add_handler(CommandHandler("link", _lock(link_cmd)))
+    app.add_handler(CommandHandler("textbook", _lock(textbook_cmd)))
+    app.add_handler(CommandHandler("stats", _lock(stats_cmd)))
+    app.add_handler(CommandHandler("begemot", _lock(begemot_cmd)))
+    app.add_handler(CommandHandler("begemot_logout", _lock(begemot_logout_cmd)))
+    app.add_handler(CommandHandler("chat", _lock(chat_cmd)))
+    app.add_handler(CommandHandler("chat_logout", _lock(chat_logout_cmd)))
+    app.add_handler(CommandHandler("imagine", _lock(imagine_cmd)))
+    app.add_handler(CommandHandler("shot", _lock(shot_cmd)))
+    app.add_handler(CallbackQueryHandler(_lock(button_callback)))
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, _lock(handle_homework_text)),
+    )
+    app.add_handler(MessageHandler(filters.PHOTO, _lock(handle_photo)))
+    app.add_handler(MessageHandler(filters.Document.ALL, _lock(handle_document)))
+    app.add_handler(
+        MessageHandler(filters.VOICE | filters.AUDIO, _lock(handle_voice)),
+    )
 
     tg_mode = _telegram_mode()
     logger.info("telegram mode=%s", tg_mode)
