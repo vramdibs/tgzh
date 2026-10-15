@@ -481,6 +481,8 @@ def _should_route_chat_text_to_imagine_edit(
         return False
     if context.user_data.get(_CHAT_IMAGINE_STYLE_PHOTO_WAIT):
         return False
+    if not context.user_data.get(_CHAT_IMAGINE_SESSION):
+        return False
     if _chat_imagine_last_png(context) is None:
         return False
     history = list(context.user_data.get(_CHAT_HISTORY) or [])
@@ -2414,8 +2416,9 @@ async def chat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await asyncio.to_thread(user_storage.chat_session_login, USER_DB_PATH, user_id)
     _activate_chat_session_ram(context, fresh=False)
+    _clear_chat_imagine_session(context)
     await ai_checker.chat_cursor_refresh_live_catalog()
-    await _send_chat_menu(context.bot, chat_id, user_id=user_id)
+    await _send_chat_menu(context.bot, chat_id, user_id=user_id, context=context)
 
 
 async def _handle_chat_callback(
@@ -2461,7 +2464,8 @@ async def _handle_chat_callback(
         return
     if action == "menu":
         await _answer_query_once(query)
-        context.user_data.pop(_CHAT_IMAGINE_UI_COMPACT, None)
+        _clear_chat_imagine_waits(context)
+        _clear_chat_imagine_session(context)
         with suppress(BadRequest, Exception):
             await query.delete_message()
         await _send_chat_menu(

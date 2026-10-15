@@ -351,6 +351,11 @@ def test_should_route_chat_text_to_imagine_edit_after_last_image(
         ctx,
         "Что такое интеграл?",
     )
+    ctx.user_data.pop(bot._CHAT_IMAGINE_SESSION, None)
+    assert not bot._should_route_chat_text_to_imagine_edit(
+        ctx,
+        "А можешь с фото убрать провода?",
+    )
 
 
 def test_imagine_edit_not_routed_without_imagine_history(

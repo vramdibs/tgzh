@@ -123,6 +123,8 @@ def test_chat_cmd_opens_without_password(monkeypatch: pytest.MonkeyPatch) -> Non
     user_storage.init_db(path)
     monkeypatch.setattr(bot, "USER_DB_PATH", path)
     monkeypatch.setattr(bot, "_cursor_recheck_available", lambda: True)
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
 
     class _Msg:
         async def reply_text(self, *a, **k):
@@ -135,19 +137,38 @@ def test_chat_cmd_opens_without_password(monkeypatch: pytest.MonkeyPatch) -> Non
 
     class _Ctx:
         def __init__(self) -> None:
-            self.user_data: dict = {}
+            self.user_data: dict = {
+                bot._CHAT_IMAGINE_SESSION: True,
+                bot._CHAT_IMAGINE_LAST_PNG: b"png",
+                bot._CHAT_IMAGINE_UI_COMPACT: True,
+                bot._CHAT_HISTORY: [
+                    {
+                        "role": "assistant",
+                        "content": "[перерисовано фото в стиле примера: x]",
+                    },
+                ],
+            }
             self.bot = object()
 
     menu = AsyncMock()
     blocked = AsyncMock(return_value=False)
     refresh = AsyncMock()
+    ctx = _Ctx()
     with (
         patch.object(bot, "_send_chat_menu", menu),
         patch.object(bot, "_reply_if_blocked_cmd", blocked),
         patch.object(ai_checker, "chat_cursor_refresh_live_catalog", refresh),
     ):
-        asyncio.run(bot.chat_cmd(_Update(), _Ctx()))
+        asyncio.run(bot.chat_cmd(_Update(), ctx))
 
     menu.assert_called_once()
+    assert menu.await_args.kwargs.get("context") is ctx
     refresh.assert_awaited()
     assert user_storage.chat_session_active_until(path, 51) is not None
+    assert bot._CHAT_IMAGINE_SESSION not in ctx.user_data
+    assert bot._CHAT_IMAGINE_LAST_PNG not in ctx.user_data
+    assert bot._CHAT_IMAGINE_UI_COMPACT not in ctx.user_data
+    assert not bot._should_route_chat_text_to_imagine_edit(
+        ctx,
+        "Покажи листинг директории",
+    )
