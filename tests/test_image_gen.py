@@ -27,7 +27,7 @@ def test_is_image_gen_configured_requires_url_and_key(
 
 def test_image_gen_defaults_when_unset() -> None:
     assert image_gen.image_gen_model() == "gpt-image-1"
-    assert image_gen.image_gen_size() == "512x512"
+    assert image_gen.image_gen_size() == "1024x1024"
     assert image_gen.image_gen_timeout_sec() == 120.0
 
 
@@ -103,7 +103,7 @@ def test_generate_image_returns_b64_decoded_bytes(
     assert usage.prompt_tokens >= 1
     assert usage.completion_tokens >= 1
     assert captured["model"] == "gpt-image-1"
-    assert captured["size"] == "512x512"
+    assert captured["size"] == "1024x1024"
     assert captured["n"] == 1
     assert captured["prompt"] == "cat sitting on a fence"
     # Не должен передавать response_format (gpt-image-1 не принимает).
@@ -349,9 +349,18 @@ def test_generate_image_propagates_timeout(
             asyncio.run(image_gen.generate_image("x"))
 
 
+def test_resolve_image_gen_size_override_and_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("IMAGE_GEN_SIZE", raising=False)
+    assert image_gen.resolve_image_gen_size(None) == "1024x1024"
+    assert image_gen.resolve_image_gen_size("256x256") == "256x256"
+    monkeypatch.setenv("IMAGE_GEN_SIZE", "512x512")
+    assert image_gen.resolve_image_gen_size(None) == "512x512"
+    assert image_gen.resolve_image_gen_size("1024x1024") == "1024x1024"
+
+
 def test_image_gen_size_allowlist_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("IMAGE_GEN_SIZE", "9999x9999")
-    assert image_gen.image_gen_size() == "512x512"
+    assert image_gen.image_gen_size() == "1024x1024"
     monkeypatch.setenv("IMAGE_GEN_SIZE", "1024x1024")
     assert image_gen.image_gen_size() == "1024x1024"
 

@@ -727,6 +727,7 @@ class ImageGenerateRequest(BaseModel):
     prompt: str = ""
     mode: str = "prompt"
     source_image_b64: str | None = None
+    size: str | None = None
 
 
 @app.post("/image/generate")
@@ -750,6 +751,10 @@ async def image_generate(req: ImageGenerateRequest) -> Response:
     if len(prompt) > image_gen.PROMPT_MAX_LEN:
         raise HTTPException(400, f"prompt longer than {image_gen.PROMPT_MAX_LEN} chars")
 
+    size_override = (req.size or "").strip() or None
+    if size_override and size_override not in image_gen.image_gen_allowed_sizes():
+        raise HTTPException(400, f"size must be one of: {sorted(image_gen.image_gen_allowed_sizes())}")
+
     async with image_gen.image_gen_bridge_slot():
         reset_completion_usage()
         t0 = time.perf_counter()
@@ -770,6 +775,7 @@ async def image_generate(req: ImageGenerateRequest) -> Response:
                 png_bytes = await image_gen.generate_image_style_redraw(
                     source_bytes,
                     extra_prompt=prompt,
+                    size=size_override,
                 )
             elif mode == "image_edit":
                 if not (req.source_image_b64 or "").strip():
@@ -787,6 +793,7 @@ async def image_generate(req: ImageGenerateRequest) -> Response:
                 png_bytes = await image_gen.generate_image_edit(
                     source_bytes,
                     instruction=prompt,
+                    size=size_override,
                 )
             else:
                 if not prompt:
@@ -796,9 +803,9 @@ async def image_generate(req: ImageGenerateRequest) -> Response:
                     req.user_id,
                     len(prompt),
                     image_gen.image_gen_model(),
-                    image_gen.image_gen_size(),
+                    image_gen.resolve_image_gen_size(size_override),
                 )
-                png_bytes = await image_gen.generate_image(prompt)
+                png_bytes = await image_gen.generate_image(prompt, size=size_override)
         except image_gen.ImageGenBadPrompt as e:
             raise HTTPException(400, str(e)) from e
         except image_gen.ImageGenBadSource as e:

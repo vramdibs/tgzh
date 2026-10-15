@@ -36,7 +36,7 @@ logger = logging.getLogger("tgzh.image_gen")
 
 PROMPT_MAX_LEN: Final[int] = 2_000
 _DEFAULT_MODEL: Final[str] = "gpt-image-1"
-_DEFAULT_SIZE: Final[str] = "512x512"
+_DEFAULT_SIZE: Final[str] = "1024x1024"
 _DEFAULT_SOURCE_MAX_SIDE: Final[int] = 768
 _DEFAULT_STYLE_REFERENCE_MAX_SIDE: Final[int] = 512
 _DEFAULT_JPEG_QUALITY: Final[int] = 82
@@ -216,10 +216,27 @@ def image_gen_user_facing_label() -> str:
 
 
 def image_gen_size() -> str:
-    raw = _strip_env("IMAGE_GEN_SIZE") or _DEFAULT_SIZE
+    return resolve_image_gen_size(None)
+
+
+def image_gen_allowed_sizes() -> frozenset[str]:
+    return _ALLOWED_SIZES
+
+
+# Размеры, которые пользователь выбирает кнопками в /imagine (не все allowlist bridge).
+CHAT_IMAGINE_PICK_SIZES: Final[frozenset[str]] = frozenset({"256x256", "1024x1024"})
+CHAT_IMAGINE_DEFAULT_PICK_SIZE: Final[str] = "1024x1024"
+
+
+def resolve_image_gen_size(override: str | None) -> str:
+    """Размер кадра: override из запроса бота, иначе IMAGE_GEN_SIZE, иначе дефолт."""
+    raw = (override or "").strip() or _strip_env("IMAGE_GEN_SIZE") or _DEFAULT_SIZE
     if raw in _ALLOWED_SIZES:
         return raw
-    logger.warning("IMAGE_GEN_SIZE=%r not in allowlist, using %s", raw, _DEFAULT_SIZE)
+    if override:
+        logger.warning("image_gen size override %r not in allowlist, using env/default", raw)
+    else:
+        logger.warning("IMAGE_GEN_SIZE=%r not in allowlist, using %s", raw, _DEFAULT_SIZE)
     return _DEFAULT_SIZE
 
 
@@ -545,7 +562,7 @@ async def _post_images_generations_json(
     raise RuntimeError("image backend returned neither b64_json nor url")
 
 
-async def generate_image(prompt: str) -> bytes:
+async def generate_image(prompt: str, *, size: str | None = None) -> bytes:
     """Сгенерировать одну картинку по промпту. Возвращает байты PNG.
 
     Raises:
@@ -565,14 +582,14 @@ async def generate_image(prompt: str) -> bytes:
     base_url = image_gen_resolved_base_url()
     api_key = _strip_env("IMAGE_GEN_API_KEY")
     model = image_gen_model()
-    size = image_gen_size()
+    resolved_size = resolve_image_gen_size(size)
     timeout = image_gen_timeout_sec()
 
     client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=timeout)
     logger.info(
         "image_gen request model=%s size=%s prompt_chars=%s base_url=%s",
         model,
-        size,
+        resolved_size,
         len(p),
         base_url,
     )
@@ -585,7 +602,7 @@ async def generate_image(prompt: str) -> bytes:
             model=model,
             prompt=p,
             n=1,
-            size=size,
+            size=resolved_size,
         ),
         timeout=timeout,
     )
@@ -597,6 +614,8 @@ async def generate_image(prompt: str) -> bytes:
 async def generate_image_edit(
     source_bytes: bytes,
     instruction: str = "",
+    *,
+    size: str | None = None,
 ) -> bytes:
     """Правка исходного фото по текстовой инструкции (bridge image_edit)."""
     src = prepare_bridge_source_bytes(_validate_source_bytes(source_bytes))
@@ -607,20 +626,20 @@ async def generate_image_edit(
             "image generation backend not configured (IMAGE_GEN_BASE_URL/API_KEY)",
         )
     model = image_gen_model()
-    size = image_gen_size()
+    resolved_size = resolve_image_gen_size(size)
     timeout = image_gen_multipart_timeout_sec()
     payload = {
         "model": model,
         "prompt": api_prompt,
         "n": 1,
-        "size": size,
+        "size": resolved_size,
         "source_image_b64": base64.b64encode(src).decode("ascii"),
         "image_edit": True,
     }
     logger.info(
         "image_gen image_edit model=%s size=%s source_bytes=%s instruction_chars=%s",
         model,
-        size,
+        resolved_size,
         len(src),
         len(notes),
     )
@@ -633,6 +652,8 @@ async def generate_image_edit(
 async def generate_image_style_redraw(
     source_bytes: bytes,
     extra_prompt: str = "",
+    *,
+    size: str | None = None,
 ) -> bytes:
     """Перерисовать исходное фото в стиле эталона (bridge style_redraw)."""
     src = prepare_bridge_source_bytes(_validate_source_bytes(source_bytes))
@@ -644,20 +665,20 @@ async def generate_image_style_redraw(
         )
     style_bytes = load_style_reference_bytes()
     model = image_gen_model()
-    size = image_gen_size()
+    resolved_size = resolve_image_gen_size(size)
     timeout = image_gen_multipart_timeout_sec()
     payload = {
         "model": model,
         "prompt": api_prompt,
         "n": 1,
-        "size": size,
+        "size": resolved_size,
         "source_image_b64": base64.b64encode(src).decode("ascii"),
         "style_reference_b64": base64.b64encode(style_bytes).decode("ascii"),
     }
     logger.info(
         "image_gen style_redraw model=%s size=%s source_bytes=%s notes_chars=%s api_prompt_chars=%s",
         model,
-        size,
+        resolved_size,
         len(src),
         len(notes),
         len(api_prompt),

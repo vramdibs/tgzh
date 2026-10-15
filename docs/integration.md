@@ -119,7 +119,7 @@ tgzh `/imagine` и кнопка «Сгенерировать фото» вызы
 IMAGE_GEN_BASE_URL=http://host.docker.internal:8787/v1
 IMAGE_GEN_API_KEY=<тот же VLLM_FALLBACK_API_KEY / BRIDGE_OPENAI_API_KEY>
 IMAGE_GEN_MODEL=auto
-IMAGE_GEN_SIZE=512x512
+IMAGE_GEN_SIZE=1024x1024
 IMAGE_GEN_SOURCE_MAX_SIDE=768
 IMAGE_GEN_STYLE_REFERENCE_MAX_SIDE=512
 IMAGE_GEN_JPEG_QUALITY=82
@@ -130,7 +130,7 @@ IMAGE_GEN_MULTIPART_TIMEOUT_SEC=480
 
 На bridge картинка создается через headless `cursor-agent` и инструмент GenerateImage (ADR-009 в репозитории bridge). Ответ - `data[0].b64_json`.
 
-**Скорость на bridge:** узкое место - полный цикл `cursor-agent` (часто ~5 мин на запрос), а не только пиксели. Снижение **`IMAGE_GEN_SIZE`** (например `512x512`) и сжатие исходников (**`IMAGE_GEN_SOURCE_MAX_SIDE`**, **`IMAGE_GEN_JPEG_QUALITY`**) уменьшают payload и могут чуть ускорить multimodal; замер: **`scripts/benchmark-image-gen-bridge.sh`**. На bridge не гонять тяжелый `/chat` параллельно с images - один агент на хост.
+**Скорость на bridge:** узкое место - полный цикл `cursor-agent` (часто ~5 мин на запрос), а не только пиксели. В боте для части режимов доступны **256×256** и **1024×1024** (поле `size` в `POST /image/generate`); сжатие исходников (**`IMAGE_GEN_SOURCE_MAX_SIDE`**, **`IMAGE_GEN_JPEG_QUALITY`**) уменьшают payload и могут чуть ускорить multimodal; замер: **`scripts/benchmark-image-gen-bridge.sh`**. На bridge не гонять тяжелый `/chat` параллельно с images - один агент на хост.
 
 **Несколько bridge для images:** **`IMAGE_GEN_BASE_URLS`** (CSV OpenAI-base URL). Дефолт **`IMAGE_GEN_MAX_CONCURRENT`** = число URL (до 4). Два инстанса **discourse-cursor-bridge** на разных портах (разные `BRIDGE_PORT`, `CURSOR_OPENAI_WORKSPACE`) - два пользователя генерируют параллельно; **3+** ждут FIFO на `tgzh-server` (без 429). Один **`cursor-agent`** на инстанс - не смешивать тяжёлый `/chat` и images на одном процессе bridge, если можно выделить image-only порты.
 

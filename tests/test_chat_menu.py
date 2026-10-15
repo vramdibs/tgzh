@@ -56,6 +56,8 @@ def test_chat_imagine_compact_keyboard_has_exit() -> None:
     assert "chat:menu" in callbacks
     assert "chat:imagine:style_photo" in callbacks
     assert any("Перерисовать новое фото" in t for t in labels)
+    assert callbacks.count("chat:imagine") == 0
+    assert not any("Сгенерировать / править" in t for t in labels)
 
 
 def test_chat_model_keyboard_lists_available_composer_grok(

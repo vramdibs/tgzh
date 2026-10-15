@@ -196,6 +196,40 @@ def test_image_generate_rejects_too_long_prompt(
     assert r.status_code == 400
 
 
+def test_image_generate_passes_size_override(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient,
+) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    import image_gen
+
+    seen: dict[str, str] = {}
+
+    async def _fake_generate(prompt: str, *, size: str | None = None) -> bytes:  # noqa: ARG001
+        seen["size"] = size or ""
+        return b"\x89PNG\r\n\x1a\n"
+
+    monkeypatch.setattr(image_gen, "generate_image", _fake_generate)
+    r = client.post(
+        "/image/generate",
+        json={"user_id": 1, "prompt": "circle", "size": "256x256"},
+    )
+    assert r.status_code == 200
+    assert seen["size"] == "256x256"
+
+
+def test_image_generate_rejects_bad_size(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient,
+) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    r = client.post(
+        "/image/generate",
+        json={"user_id": 1, "prompt": "x", "size": "9999x9999"},
+    )
+    assert r.status_code == 400
+
+
 def test_image_generate_style_redraw_requires_source(
     monkeypatch: pytest.MonkeyPatch, client: TestClient
 ) -> None:
@@ -217,7 +251,12 @@ def test_image_generate_style_redraw_ok(
 
     import image_gen
 
-    async def _fake_style(source_bytes: bytes, extra_prompt: str = "") -> bytes:  # noqa: ARG001
+    async def _fake_style(
+        source_bytes: bytes,
+        extra_prompt: str = "",
+        *,
+        size: str | None = None,
+    ) -> bytes:  # noqa: ARG001
         assert source_bytes == b"jpeg-bytes"
         assert extra_prompt == "evening"
         return b"png-out"
@@ -246,7 +285,12 @@ def test_image_generate_style_redraw_empty_prompt_ok(
 
     import image_gen
 
-    async def _fake_style(source_bytes: bytes, extra_prompt: str = "") -> bytes:  # noqa: ARG001
+    async def _fake_style(
+        source_bytes: bytes,
+        extra_prompt: str = "",
+        *,
+        size: str | None = None,
+    ) -> bytes:  # noqa: ARG001
         assert extra_prompt == ""
         return b"png-out"
 
@@ -290,7 +334,7 @@ def test_photo_check_mock(monkeypatch: pytest.MonkeyPatch, client: TestClient) -
     assert "/photo" in r.json()["result"] or "mock" in r.json()["result"].lower()
 
 
-async def _fake_generate_image(prompt: str) -> bytes:
+async def _fake_generate_image(prompt: str, *, size: str | None = None) -> bytes:
     import image_gen
 
     image_gen.record_image_gen_usage(None, prompt=prompt)
@@ -317,7 +361,7 @@ async def test_image_generate_three_parallel_no_429(
     in_flight = 0
     peak = 0
 
-    async def _slow_generate(prompt: str) -> bytes:
+    async def _slow_generate(prompt: str, *, size: str | None = None) -> bytes:
         nonlocal in_flight, peak
         in_flight += 1
         peak = max(peak, in_flight)

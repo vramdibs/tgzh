@@ -327,6 +327,7 @@ _CHAT_IMAGINE_LAST_PNG = "chat_imagine_last_png"
 _CHAT_IMAGINE_LAST_PNG_MAX_BYTES = 6 * 1024 * 1024
 # После успешной генерации - урезанное меню режима фото (auto_compact).
 _CHAT_IMAGINE_UI_COMPACT = "chat_imagine_ui_compact"
+_CHAT_IMAGINE_SIZE = "chat_imagine_size"
 _CHAT_IMAGINE_QUEUE_HINT = (
     "При высокой нагрузке запрос встанет в очередь - обычно до нескольких минут."
 )
@@ -387,6 +388,39 @@ def _clear_chat_imagine_session(context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop(_CHAT_IMAGINE_SESSION, None)
     context.user_data.pop(_CHAT_IMAGINE_LAST_PNG, None)
     context.user_data.pop(_CHAT_IMAGINE_UI_COMPACT, None)
+
+
+def _chat_imagine_pick_size(context: ContextTypes.DEFAULT_TYPE) -> str:
+    raw = context.user_data.get(_CHAT_IMAGINE_SIZE)
+    if isinstance(raw, str) and raw in image_gen.CHAT_IMAGINE_PICK_SIZES:
+        return raw
+    return image_gen.CHAT_IMAGINE_DEFAULT_PICK_SIZE
+
+
+def _set_chat_imagine_pick_size(context: ContextTypes.DEFAULT_TYPE, size: str) -> None:
+    if size in image_gen.CHAT_IMAGINE_PICK_SIZES:
+        context.user_data[_CHAT_IMAGINE_SIZE] = size
+
+
+def _chat_imagine_size_label(size: str, active: bool) -> str:
+    display = size.replace("x", "×")
+    return f"{display} ✓" if active else display
+
+
+def _chat_imagine_size_keyboard_row(
+    context: ContextTypes.DEFAULT_TYPE,
+) -> list[InlineKeyboardButton]:
+    current = _chat_imagine_pick_size(context)
+    return [
+        InlineKeyboardButton(
+            _chat_imagine_size_label("1024x1024", current == "1024x1024"),
+            callback_data="chat:imagine:size:1024x1024",
+        ),
+        InlineKeyboardButton(
+            _chat_imagine_size_label("256x256", current == "256x256"),
+            callback_data="chat:imagine:size:256x256",
+        ),
+    ]
 
 
 def _activate_chat_imagine_session(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2106,7 +2140,6 @@ def _chat_menu_keyboard(
 def _chat_imagine_compact_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("Сгенерировать / править фото", callback_data="chat:imagine")],
             [
                 InlineKeyboardButton(
                     "Перерисовать новое фото",
@@ -2136,7 +2169,7 @@ def _chat_imagine_choice_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    "Перерисовать фото в стиле примера",
+                    "Перерисовать в стиле примера",
                     callback_data="chat:imagine:style_photo",
                 ),
             ],
@@ -2153,7 +2186,7 @@ def _chat_imagine_choice_help_html() -> str:
         "• <b>По примеру</b> — кнопка ниже сразу запустит генерацию\n"
         "• <b>Свой промпт</b> — опишешь картинку одним сообщением "
         f"(до {image_gen.PROMPT_MAX_LEN} символов)\n"
-        "• <b>Перерисовать фото в стиле примера</b> — пришли своё фото; "
+        "• <b>Перерисовать в стиле примера</b> — пришли своё фото; "
         "стиль как у живописного эталона (без копирования сюжета купе). "
         "Подпись к фото — по желанию\n\n"
         "<b>Текст примера</b> (можно скопировать):\n"
@@ -2173,18 +2206,17 @@ def _chat_imagine_wait_keyboard(
                 callback_data="chat:imagine:example",
             ),
         ],
+        _chat_imagine_size_keyboard_row(context),
         [InlineKeyboardButton("Назад к выбору", callback_data="chat:imagine")],
     ]
-    rows.extend(
-        _chat_menu_keyboard_for_user(True, user_id, context=context).inline_keyboard,
-    )
     return InlineKeyboardMarkup(rows)
 
 
 def _chat_imagine_custom_prompt_help_html() -> str:
     return (
         "<b>Свой промпт</b> — пришли описание картинки одним сообщением "
-        f"(до {image_gen.PROMPT_MAX_LEN} символов)."
+        f"(до {image_gen.PROMPT_MAX_LEN} символов).\n"
+        "Размер кадра — кнопками ниже (256×256 или 1024×1024)."
     )
 
 
@@ -2193,21 +2225,20 @@ def _chat_imagine_style_photo_wait_keyboard(
     context: ContextTypes.DEFAULT_TYPE,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
+        _chat_imagine_size_keyboard_row(context),
         [InlineKeyboardButton("Назад к выбору", callback_data="chat:imagine")],
     ]
-    rows.extend(
-        _chat_menu_keyboard_for_user(True, user_id, context=context).inline_keyboard,
-    )
     return InlineKeyboardMarkup(rows)
 
 
 def _chat_imagine_style_photo_help_html() -> str:
     return (
-        "<b>Перерисовать фото в стиле примера</b>\n\n"
+        "<b>Перерисовать в стиле примера</b>\n\n"
         "Пришли <b>одно фото</b> — бот перерисует его в мягком живописном стиле "
         "(как эталон в меню генерации), сохранив твой сюжет. "
         "Сцену купе и персонажей из эталона копировать не будет.\n\n"
-        "Подпись к фото (caption) — опциональное уточнение для генерации.\n\n"
+        "Подпись к фото (caption) — опциональное уточнение для генерации.\n"
+        "Размер кадра — кнопками ниже (256×256 или 1024×1024).\n\n"
         "После результата можно править картинку текстом (например «убери провода») "
         "без повторной загрузки фото."
     )
@@ -2592,6 +2623,32 @@ async def _handle_chat_callback(
                 context=context,
             )
             return
+        if sub == "size":
+            if len(parts) < 4:
+                await _answer_query_once(query)
+                return
+            picked = parts[3]
+            if picked not in image_gen.CHAT_IMAGINE_PICK_SIZES:
+                await _answer_query_once(query, "Неизвестный размер.")
+                return
+            _set_chat_imagine_pick_size(context, picked)
+            label = picked.replace("x", "×")
+            await _answer_query_once(query, f"Размер: {label}")
+            if context.user_data.get(_CHAT_IMAGINE_STYLE_PHOTO_WAIT):
+                help_html = _chat_imagine_style_photo_help_html()
+                markup = _chat_imagine_style_photo_wait_keyboard(user_id, context)
+            elif context.user_data.get(_CHAT_IMG_PROMPT_WAIT):
+                help_html = _chat_imagine_custom_prompt_help_html()
+                markup = _chat_imagine_wait_keyboard(user_id, context)
+            else:
+                return
+            with suppress(BadRequest, Exception):
+                await query.edit_message_text(
+                    help_html,
+                    reply_markup=markup,
+                    parse_mode=ParseMode.HTML,
+                )
+            return
         if sub == "example":
             if not _is_image_gen_enabled():
                 await _answer_query_once(query, "Генерация изображений не настроена.")
@@ -2606,6 +2663,7 @@ async def _handle_chat_callback(
                 user_id=user_id,
                 chat_id=chat_id,
                 prompt=_CHAT_IMAGINE_EXAMPLE_PROMPT,
+                size=image_gen.CHAT_IMAGINE_DEFAULT_PICK_SIZE,
             )
             return
         if sub == "custom":
@@ -4537,15 +4595,23 @@ def _image_gen_server_user_error(status_code: int, body: str) -> str:
     return f"Ошибка сервера ({status_code}): {snippet}" if snippet else f"Ошибка сервера ({status_code})."
 
 
-async def _request_image_from_server(*, user_id: int, prompt: str) -> bytes:
+async def _request_image_from_server(
+    *,
+    user_id: int,
+    prompt: str,
+    size: str | None = None,
+) -> bytes:
     """POST `/image/generate` -> PNG-байты. Бросает RuntimeError при не-200."""
     url = f"{SERVER_URL.rstrip('/')}/image/generate"
     timeout_s = image_gen.image_gen_bot_client_timeout_sec(multipart=False)
+    body: dict[str, object] = {"user_id": user_id, "prompt": prompt}
+    if size:
+        body["size"] = size
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(timeout_s),
         transport=async_http_transport_ipv4_lookup(),
     ) as client:
-        r = await client.post(url, json={"user_id": user_id, "prompt": prompt})
+        r = await client.post(url, json=body)
         if r.status_code != 200:
             body = r.text or ""
             raise RuntimeError(_image_gen_server_user_error(r.status_code, body))
@@ -4557,16 +4623,19 @@ async def _request_image_edit_from_server(
     user_id: int,
     source_png: bytes,
     instruction: str,
+    size: str | None = None,
 ) -> bytes:
     """POST `/image/generate` mode=image_edit -> PNG-байты."""
     url = f"{SERVER_URL.rstrip('/')}/image/generate"
     timeout_s = image_gen.image_gen_bot_client_timeout_sec(multipart=True)
-    payload = {
+    payload: dict[str, object] = {
         "user_id": user_id,
         "mode": "image_edit",
         "prompt": (instruction or "").strip(),
         "source_image_b64": base64.b64encode(source_png).decode("ascii"),
     }
+    if size:
+        payload["size"] = size
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(timeout_s),
         transport=async_http_transport_ipv4_lookup(),
@@ -4583,16 +4652,19 @@ async def _request_image_style_redraw_from_server(
     user_id: int,
     source_jpeg: bytes,
     notes: str,
+    size: str | None = None,
 ) -> bytes:
     """POST `/image/generate` mode=style_redraw -> PNG-байты."""
     url = f"{SERVER_URL.rstrip('/')}/image/generate"
     timeout_s = image_gen.image_gen_bot_client_timeout_sec(multipart=True)
-    payload = {
+    payload: dict[str, object] = {
         "user_id": user_id,
         "mode": "style_redraw",
         "prompt": (notes or "").strip(),
         "source_image_b64": base64.b64encode(source_jpeg).decode("ascii"),
     }
+    if size:
+        payload["size"] = size
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(timeout_s),
         transport=async_http_transport_ipv4_lookup(),
@@ -4611,6 +4683,7 @@ async def _handle_chat_imagine_request(
     user_id: int,
     chat_id: int,
     prompt: str,
+    size: str | None = None,
 ) -> None:
     """Сгенерировать одну картинку и отправить как Telegram-фото."""
     was_awaiting_custom_prompt = bool(context.user_data.get(_CHAT_IMG_PROMPT_WAIT))
@@ -4657,14 +4730,20 @@ async def _handle_chat_imagine_request(
                 "Генерирую изображение… Это может занять до пары минут. "
                 + _CHAT_IMAGINE_QUEUE_HINT,
             )
+        gen_size = size if size is not None else _chat_imagine_pick_size(context)
         logger.info(
-            "chat imagine user_id=%s prompt_chars=%s model=%s",
+            "chat imagine user_id=%s prompt_chars=%s model=%s size=%s",
             user_id,
             len(p),
             image_gen.image_gen_model(),
+            gen_size,
         )
         try:
-            png_bytes = await _request_image_from_server(user_id=user_id, prompt=p)
+            png_bytes = await _request_image_from_server(
+                user_id=user_id,
+                prompt=p,
+                size=gen_size,
+            )
         except Exception as e:
             logger.exception("chat imagine failed user_id=%s", user_id)
             err_text = f"Не удалось сгенерировать изображение: {e}"
@@ -4800,6 +4879,7 @@ async def _handle_chat_imagine_style_redraw(
                 user_id=user_id,
                 source_jpeg=source_jpeg,
                 notes=notes_clean,
+                size=_chat_imagine_pick_size(context),
             )
         except Exception as e:
             logger.exception("chat imagine style_redraw failed user_id=%s", user_id)
@@ -4936,6 +5016,7 @@ async def _handle_chat_imagine_edit(
                 user_id=user_id,
                 source_png=src,
                 instruction=instr,
+                size=_chat_imagine_pick_size(context),
             )
         except Exception as e:
             logger.exception("chat imagine image_edit failed user_id=%s", user_id)

@@ -149,9 +149,10 @@ def test_handle_chat_imagine_request_sends_photo_and_records_history(
     ctx = _FakeContext()
     png = b"\x89PNG-bytes-from-server"
 
-    async def _fake_request(*, user_id, prompt):
+    async def _fake_request(*, user_id, prompt, size=None):
         assert user_id == 42
         assert prompt == "кот в шапке"
+        assert size == "1024x1024"
         return png
 
     with (
@@ -194,7 +195,7 @@ def test_handle_chat_imagine_request_truncates_long_caption(monkeypatch) -> None
     update = _FakeUpdate()
     ctx = _FakeContext()
 
-    async def _fake_request(*, user_id, prompt):
+    async def _fake_request(*, user_id, prompt, size=None):
         return b"x"
 
     long_prompt = "А" * 1500
@@ -221,7 +222,7 @@ def test_handle_chat_imagine_request_reports_server_failure(monkeypatch) -> None
     update = _FakeUpdate()
     ctx = _FakeContext()
 
-    async def _boom(*, user_id, prompt):
+    async def _boom(*, user_id, prompt, size=None):
         raise RuntimeError("server 502: backend down")
 
     with patch.object(bot, "_request_image_from_server", side_effect=_boom):
@@ -258,10 +259,12 @@ def test_chat_imagine_choice_keyboard_has_example_and_custom() -> None:
     kb = bot._chat_imagine_choice_keyboard()
     flat = [b for row in kb.inline_keyboard for b in row]
     callbacks = [b.callback_data for b in flat]
+    labels = [b.text for b in flat]
     assert "chat:imagine:example" in callbacks
     assert "chat:imagine:custom" in callbacks
     assert "chat:imagine:style_photo" in callbacks
     assert "chat:menu" in callbacks
+    assert any("Перерисовать в стиле примера" in t for t in labels)
 
 
 def test_chat_imagine_wait_keyboard_includes_example_and_back() -> None:
@@ -270,6 +273,25 @@ def test_chat_imagine_wait_keyboard_includes_example_and_back() -> None:
     callbacks = [b.callback_data for b in flat]
     assert callbacks[0] == "chat:imagine:example"
     assert "chat:imagine" in callbacks
+    assert "chat:imagine:size:256x256" in callbacks
+    assert "chat:imagine:size:1024x1024" in callbacks
+    assert "chat:list" not in callbacks
+    assert "chat:model" not in callbacks
+
+
+def test_chat_imagine_style_photo_wait_keyboard_no_chat_menu() -> None:
+    kb = bot._chat_imagine_style_photo_wait_keyboard(1, _FakeContext())
+    callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "chat:imagine:size:1024x1024" in callbacks
+    assert "chat:list" not in callbacks
+    assert "chat:model" not in callbacks
+
+
+def test_chat_imagine_pick_size_default_and_set() -> None:
+    ctx = _FakeContext()
+    assert bot._chat_imagine_pick_size(ctx) == "1024x1024"
+    bot._set_chat_imagine_pick_size(ctx, "256x256")
+    assert bot._chat_imagine_pick_size(ctx) == "256x256"
 
 
 def test_chat_imagine_example_prompt_constant_non_empty() -> None:
@@ -278,7 +300,7 @@ def test_chat_imagine_example_prompt_constant_non_empty() -> None:
 
 
 def test_chat_imagine_status_placeholders() -> None:
-    assert bot._CHAT_IMAGINE_EDIT_PLACEHOLDER == "Правлю последнюю картинку, подождите..."
+    assert bot._CHAT_IMAGINE_EDIT_PLACEHOLDER.startswith("Правлю последнюю картинку, подождите")
     assert "пару минут" not in bot._CHAT_IMAGINE_EDIT_PLACEHOLDER
     assert bot._CHAT_IMAGINE_STYLE_REDRAW_PLACEHOLDER.startswith("Перерисовываю фото")
 
