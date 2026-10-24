@@ -1,0 +1,40 @@
+---
+description: Имена Markdown-файлов строчными (lowercase), кроме README.md
+globs:
+  - "**/*.md"
+alwaysApply: false
+---
+
+# Имена Markdown-файлов
+
+Новые и переименовываемые `.md` (кроме исключений) - **строчные буквы**: `2026-08-17-media-retention-policy-design.md`.
+
+## Правило
+
+| Элемент | Как |
+|---------|-----|
+| Буквы в stem | `a-z` (нижний регистр) |
+| Цифры, `_`, `-`, `.` | допустимы |
+| Расширение | `.md` строчными |
+| Точка входа | только **`README.md`** |
+
+Примеры:
+
+- Плохо: `WORKFLOW.md`, `Two-Pc-Sync.md`
+- Хорошо: `agent_workflow.md`, `README.md`, `two-pc-sync.md`
+
+При создании doc сверяйся с именами в том же каталоге (`docs/superpowers/specs/`).
+
+## Исключения
+
+| Путь / шаблон | Зачем |
+|---------------|-------|
+| `**/README.md` | точка входа |
+| `**/*plan.md` | plan-файлы superpowers |
+| `local/**` | вне git |
+| `.cursor/skills/**`, `**/.cursor/plans/**` | Cursor |
+| `**/.venv/**`, `**/.pytest_cache/**` | зависимости |
+
+## Связанные правила
+
+- Типографика: `text-formatting.mdc`
