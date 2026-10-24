@@ -14,6 +14,7 @@
 
 ### Added
 
+- **Пачка style_redraw с диска**: **`scripts/batch_style_redraw.py`** - тот же `POST /image/generate` (`mode=style_redraw`, дефолт `original_max1280`), пропуск уже готовых PNG
 - **Image bridge pool (ops)**: `scripts/setup-image-bridge-instance.sh` и `scripts/smoke-image-gen-pool.sh` для дополнительных инстансов discourse-cursor-bridge и smoke FIFO без 429
 - **Gauge зеркала БД для Prometheus**: **`tgzh_llm_tokens_db_total`**, **`tgzh_llm_requests_db_total`** - синхронизация при старте **`tgzh-server`** и после каждого **`record_llm_spend`**
 - **Ссылки в `/chat`**: несколько http(s) URL в сообщении или буфере, безопасная загрузка на боте (`chat_urls.py`, SSRF-фильтр), HTML/PDF в текст для Cursor; общий flush с PDF-документами по одному заданию
