@@ -2739,9 +2739,21 @@ async def _handle_chat_callback(
             context.user_data.pop(_CHAT_IMAGINE_LAST_PNG, None)
             context.user_data[_CHAT_IMAGINE_STYLE_PHOTO_WAIT] = True
             _set_chat_imagine_pick_size(context, image_gen.CHAT_IMAGINE_SIZE_ORIGINAL)
+            context.user_data.pop(_CHAT_IMAGINE_STYLE_PROMPT_MSG, None)
+            await _answer_query_once(query, "Жду фото для перерисовки.")
+            if query.message is not None and query.message.photo:
+                # Кнопка под готовым результатом: его не трогаем, подсказка - отдельно.
+                with suppress(BadRequest, Exception):
+                    hint = await context.bot.send_message(
+                        chat_id,
+                        _chat_imagine_style_photo_help_html(),
+                        reply_markup=_chat_imagine_style_photo_wait_keyboard(user_id, context),
+                        parse_mode=ParseMode.HTML,
+                    )
+                    context.user_data[_CHAT_IMAGINE_STYLE_PROMPT_MSG] = hint.message_id
+                return
             if query.message is not None:
                 context.user_data[_CHAT_IMAGINE_STYLE_PROMPT_MSG] = query.message.message_id
-            await _answer_query_once(query, "Жду фото для перерисовки.")
             with suppress(BadRequest, Exception):
                 await query.edit_message_text(
                     _chat_imagine_style_photo_help_html(),

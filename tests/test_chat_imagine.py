@@ -534,6 +534,77 @@ def test_style_batch_shares_short_note_and_deletes_sources(monkeypatch) -> None:
     assert all(photo[2] == "" for photo in ctx.bot.sent_photos)
 
 
+class _FakeCallbackMessage:
+    def __init__(self, message_id: int, *, photo: bool) -> None:
+        self.message_id = message_id
+        self.chat_id = 9
+        self.photo = [object()] if photo else []
+
+
+class _FakeCallbackQuery:
+    def __init__(self, message: _FakeCallbackMessage) -> None:
+        self.id = f"q-{message.message_id}-{bool(message.photo)}"
+        self.from_user = _FakeUser(1)
+        self.message = message
+        self.edited: list[str] = []
+
+    async def edit_message_text(self, text, **_kw):
+        self.edited.append(text)
+
+
+def _run_style_redraw_after_callback(ctx: _FakeContext, query: _FakeCallbackQuery) -> None:
+    async def _fake(**kwargs):
+        return b"png"
+
+    with (
+        patch.object(bot, "_answer_query_once", new=AsyncMock()),
+        patch.object(bot.user_storage, "chat_session_login", lambda *a, **k: None),
+        patch.object(bot, "_request_image_style_redraw_from_server", side_effect=_fake),
+        patch.object(bot, "_send_post_imagine_menu", new=AsyncMock()),
+        patch.object(bot.user_storage, "chat_dialog_upsert", lambda *a, **k: None),
+    ):
+        asyncio.run(bot._handle_chat_callback(query, ctx, "chat:imagine:style_photo"))
+        asyncio.run(
+            bot._handle_chat_imagine_style_batch(
+                _FakeUpdate(),
+                ctx,
+                user_id=1,
+                chat_id=9,
+                items=[(11, b"a")],
+                notes="",
+            ),
+        )
+
+
+def test_redraw_button_on_result_keeps_previous_result(monkeypatch) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    ctx = _FakeContext()
+    query = _FakeCallbackQuery(_FakeCallbackMessage(500, photo=True))
+
+    _run_style_redraw_after_callback(ctx, query)
+
+    assert query.edited == []
+    hint_id = ctx.bot._next_message_id - 1
+    assert (9, 500) not in ctx.bot.deleted
+    assert (9, 11) in ctx.bot.deleted
+    assert any(text.startswith("<b>Перерисовать") for _, text in ctx.bot.sent_messages)
+    assert (9, hint_id) in ctx.bot.deleted
+
+
+def test_redraw_button_in_text_menu_deletes_that_hint(monkeypatch) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    ctx = _FakeContext()
+    query = _FakeCallbackQuery(_FakeCallbackMessage(600, photo=False))
+
+    _run_style_redraw_after_callback(ctx, query)
+
+    assert query.edited
+    assert (9, 600) in ctx.bot.deleted
+    assert (9, 11) in ctx.bot.deleted
+
+
 def test_style_batch_rejects_five_photos_and_long_album_note(monkeypatch) -> None:
     monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
     monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
