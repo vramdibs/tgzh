@@ -263,7 +263,7 @@ def test_chat_imagine_choice_keyboard_has_example_and_custom() -> None:
     assert "chat:imagine:custom" in callbacks
     assert "chat:imagine:style_photo" in callbacks
     assert "chat:menu" in callbacks
-    assert any("Перерисовать в стиле примера" in t for t in labels)
+    assert "👇 Перерисовать в стиле примера" in labels
 
 
 def test_chat_imagine_wait_keyboard_includes_example_and_back() -> None:

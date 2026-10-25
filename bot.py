@@ -2191,7 +2191,7 @@ def _chat_imagine_choice_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    "Перерисовать в стиле примера",
+                    "👇 Перерисовать в стиле примера",
                     callback_data="chat:imagine:style_photo",
                 ),
             ],
