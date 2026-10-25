@@ -463,3 +463,52 @@ def test_prepare_bridge_source_bytes_shrinks_large_jpeg() -> None:
     assert len(out) < len(raw)
     out_im = Image.open(__import__("io").BytesIO(out))
     assert max(out_im.size) <= image_gen.image_gen_source_max_side()
+
+
+def test_style_redraw_original_size_from_unshrunk_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    from PIL import Image
+
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    monkeypatch.setenv("IMAGE_GEN_SOURCE_MAX_SIDE", "768")
+    style_file = tmp_path / "style.png"
+    style_file.write_bytes(b"style-ref")
+    monkeypatch.setenv("IMAGE_GEN_STYLE_REFERENCE_PATH", str(style_file))
+    buf = io.BytesIO()
+    Image.new("RGB", (2000, 1000), color=(10, 20, 30)).save(buf, format="JPEG")
+    source_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    captured: dict = {}
+
+    class FakeHttpxClient:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args, **kwargs):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            captured["json"] = json
+            return SimpleNamespace(
+                status_code=200,
+                text="",
+                json=lambda: {"data": [{"b64_json": base64.b64encode(b"x").decode()}]},
+            )
+
+    source = image_gen.decode_source_image_b64(source_b64)
+    with patch("httpx.AsyncClient", FakeHttpxClient):
+        asyncio.run(
+            image_gen.generate_image_style_redraw(
+                source,
+                size=image_gen.CHAT_IMAGINE_SIZE_ORIGINAL,
+            ),
+        )
+
+    assert captured["json"]["size"] == "1280x640"
+    sent = Image.open(io.BytesIO(base64.b64decode(captured["json"]["source_image_b64"])))
+    assert sent.size == (768, 384)

@@ -4880,7 +4880,7 @@ async def _imagine_style_download_jpeg(bot, file_id: str) -> bytes:
     return await asyncio.to_thread(
         photo_prepare.prepare_photo_for_upload,
         bytes(raw_bytes),
-        image_gen.image_gen_source_max_side(),
+        max(image_gen.image_gen_source_max_side(), image_gen.ORIGINAL_MAX_LONG_SIDE),
         image_gen.image_gen_jpeg_quality(),
     )
 

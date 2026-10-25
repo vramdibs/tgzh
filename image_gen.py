@@ -231,7 +231,7 @@ CHAT_IMAGINE_PICK_SIZES: Final[frozenset[str]] = frozenset(
     {"256x256", "1024x1024", CHAT_IMAGINE_SIZE_ORIGINAL},
 )
 CHAT_IMAGINE_DEFAULT_PICK_SIZE: Final[str] = "1024x1024"
-_ORIGINAL_MAX_LONG_SIDE: Final[int] = 1280
+ORIGINAL_MAX_LONG_SIDE: Final[int] = 1280
 _SIZE_WXH_RE = re.compile(r"^(\d{1,4})x(\d{1,4})$")
 _ORIGINAL_PROMPT_SIZE_HINT: Final[str] = (
     "natural aspect ratio for the scene, longest side 1280 pixels"
@@ -240,7 +240,7 @@ _ORIGINAL_PROMPT_SIZE_HINT: Final[str] = (
 
 def size_from_image_bytes_max_long_side(
     data: bytes,
-    max_long: int = _ORIGINAL_MAX_LONG_SIDE,
+    max_long: int = ORIGINAL_MAX_LONG_SIDE,
 ) -> str:
     """WxH с сохранением пропорций, длинная сторона не больше max_long."""
     from PIL import Image, ImageOps
@@ -269,7 +269,7 @@ def is_api_client_image_size(size: str) -> bool:
     if not m:
         return False
     w, h = int(m.group(1)), int(m.group(2))
-    return 1 <= w <= _ORIGINAL_MAX_LONG_SIDE and 1 <= h <= _ORIGINAL_MAX_LONG_SIDE
+    return 1 <= w <= ORIGINAL_MAX_LONG_SIDE and 1 <= h <= ORIGINAL_MAX_LONG_SIDE
 
 
 def resolve_image_gen_size(
@@ -545,7 +545,7 @@ def decode_source_image_b64(source_image_b64: str) -> bytes:
         data = base64.b64decode(raw, validate=True)
     except (binascii.Error, ValueError) as e:
         raise ImageGenBadSource("source_image_b64 is not valid base64") from e
-    return prepare_bridge_source_bytes(_validate_source_bytes(data))
+    return _validate_source_bytes(data)
 
 
 async def _parse_images_response(resp: Any) -> bytes:
@@ -672,7 +672,8 @@ async def generate_image_edit(
     size: str | None = None,
 ) -> bytes:
     """Правка исходного фото по текстовой инструкции (bridge image_edit)."""
-    src = prepare_bridge_source_bytes(_validate_source_bytes(source_bytes))
+    raw = _validate_source_bytes(source_bytes)
+    src = prepare_bridge_source_bytes(raw)
     notes = _validate_optional_notes(instruction)
     api_prompt = notes or IMAGE_EDIT_DEFAULT_PROMPT
     if not is_image_gen_configured():
@@ -680,7 +681,7 @@ async def generate_image_edit(
             "image generation backend not configured (IMAGE_GEN_BASE_URL/API_KEY)",
         )
     model = image_gen_model()
-    resolved_size = resolve_image_gen_size(size, source_bytes=src)
+    resolved_size = resolve_image_gen_size(size, source_bytes=raw)
     timeout = image_gen_multipart_timeout_sec()
     payload = {
         "model": model,
@@ -710,7 +711,8 @@ async def generate_image_style_redraw(
     size: str | None = None,
 ) -> bytes:
     """Перерисовать исходное фото в стиле эталона (bridge style_redraw)."""
-    src = prepare_bridge_source_bytes(_validate_source_bytes(source_bytes))
+    raw = _validate_source_bytes(source_bytes)
+    src = prepare_bridge_source_bytes(raw)
     notes = _validate_optional_notes(extra_prompt)
     api_prompt = notes or STYLE_REDRAW_DEFAULT_PROMPT
     if not is_image_gen_configured():
@@ -719,7 +721,7 @@ async def generate_image_style_redraw(
         )
     style_bytes = load_style_reference_bytes()
     model = image_gen_model()
-    resolved_size = resolve_image_gen_size(size, source_bytes=src)
+    resolved_size = resolve_image_gen_size(size, source_bytes=raw)
     timeout = image_gen_multipart_timeout_sec()
     payload = {
         "model": model,
