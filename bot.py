@@ -2738,6 +2738,7 @@ async def _handle_chat_callback(
             context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
             context.user_data.pop(_CHAT_IMAGINE_LAST_PNG, None)
             context.user_data[_CHAT_IMAGINE_STYLE_PHOTO_WAIT] = True
+            _set_chat_imagine_pick_size(context, image_gen.CHAT_IMAGINE_SIZE_ORIGINAL)
             if query.message is not None:
                 context.user_data[_CHAT_IMAGINE_STYLE_PROMPT_MSG] = query.message.message_id
             await _answer_query_once(query, "Жду фото для перерисовки.")

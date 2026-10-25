@@ -295,6 +295,16 @@ def test_chat_imagine_pick_size_default_and_set() -> None:
     assert bot._chat_imagine_pick_size(ctx) == "256x256"
 
 
+def test_style_photo_wait_keyboard_marks_original_when_set() -> None:
+    ctx = _FakeContext()
+    assert bot._chat_imagine_pick_size(ctx) == "1024x1024"
+    bot._set_chat_imagine_pick_size(ctx, image_gen.CHAT_IMAGINE_SIZE_ORIGINAL)
+    kb = bot._chat_imagine_style_photo_wait_keyboard(1, ctx)
+    labels = [b.text for row in kb.inline_keyboard for b in row]
+    assert "Оригинал до 1280 ✓" in labels
+    assert "1024×1024 ✓" not in labels
+
+
 def test_chat_imagine_example_prompt_constant_non_empty() -> None:
     assert len(bot._CHAT_IMAGINE_EXAMPLE_PROMPT) > 50
     assert "поезд" in bot._CHAT_IMAGINE_EXAMPLE_PROMPT.lower()
