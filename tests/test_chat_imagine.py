@@ -63,6 +63,7 @@ class _FakeContext:
 class _FakeMessage:
     def __init__(self, text: str = "") -> None:
         self.text = text
+        self.message_id = 77
         self.replies: list[str] = []
 
     async def reply_text(self, text: str, **_kw):
@@ -167,12 +168,11 @@ def test_handle_chat_imagine_request_sends_photo_and_records_history(
             )
         )
 
-    # Должна уйти ровно одна картинка с подписью = промпт.
     assert len(ctx.bot.sent_photos) == 1
     chat_id, sent_bytes, caption = ctx.bot.sent_photos[0]
     assert chat_id == 7
     assert sent_bytes == png
-    assert caption == "кот в шапке"
+    assert caption == ""
 
     # История содержит парные плейсхолдеры (user / assistant).
     history = ctx.user_data[bot._CHAT_HISTORY]
@@ -189,7 +189,7 @@ def test_handle_chat_imagine_request_sends_photo_and_records_history(
     assert bot._CHAT_BUSY not in ctx.user_data
 
 
-def test_handle_chat_imagine_request_truncates_long_caption(monkeypatch) -> None:
+def test_handle_chat_imagine_request_sends_photo_without_caption(monkeypatch) -> None:
     monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
     monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
     update = _FakeUpdate()
@@ -212,8 +212,7 @@ def test_handle_chat_imagine_request_truncates_long_caption(monkeypatch) -> None
         )
 
     _, _, caption = ctx.bot.sent_photos[0]
-    assert len(caption) <= bot._TG_PHOTO_CAPTION_MAX_LEN
-    assert caption.endswith("…")
+    assert caption == ""
 
 
 def test_handle_chat_imagine_request_reports_server_failure(monkeypatch) -> None:
@@ -357,9 +356,10 @@ def test_handle_chat_imagine_style_redraw_calls_server(monkeypatch) -> None:
         )
 
     assert captured["source_jpeg"] == b"jpeg"
-    assert captured["notes"] == "evening"
+    assert captured["notes"] == bot._style_redraw_prompt_for_api("evening")
     assert ctx.bot.sent_photos
     assert ctx.bot.sent_photos[0][2] == ""
+    assert (100, 77) in ctx.bot.deleted
     assert bot._CHAT_IMAGINE_STYLE_PHOTO_WAIT not in ctx.user_data
 
 
@@ -448,6 +448,7 @@ def test_handle_chat_imagine_edit_calls_server(monkeypatch) -> None:
     assert captured["source_png"] == b"last"
     assert captured["instruction"] == "убери провода"
     assert ctx.bot.sent_photos
+    assert ctx.bot.sent_photos[0][2] == ""
     assert ctx.user_data[bot._CHAT_IMAGINE_LAST_PNG] == b"edited"
 
 
@@ -466,3 +467,98 @@ def test_imagine_cmd_without_active_chat_opens_choice_menu(monkeypatch) -> None:
     assert update.message.replies
     assert "Сгенерировать фото" in update.message.replies[0]
     assert not any("только из активного" in r for r in update.message.replies)
+
+
+def test_style_batch_gate_and_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(image_gen, "image_gen_max_concurrent", lambda: 4)
+    assert bot._style_batch_gate("сделай ярче", 3) is None
+    assert bot._style_batch_gate("", 4) is None
+    assert bot._style_batch_gate("А" * 121, 2)
+    detail = "убери карандаш из манжеты женщины и поправь тень на столе"
+    assert bot._style_batch_gate(detail, 1) is None
+    assert "не больше" in (bot._style_batch_gate("", 5) or "")
+    brighter = bot._style_redraw_prompt_for_api("сделай ярче")
+    assert brighter.startswith(image_gen.STYLE_REDRAW_DEFAULT_PROMPT)
+    assert brighter.endswith("сделай ярче")
+    assert bot._style_redraw_prompt_for_api("") == ""
+    assert detail in bot._style_redraw_prompt_for_api(detail)
+
+
+def test_style_batch_shares_short_note_and_deletes_sources(monkeypatch) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    monkeypatch.setattr(image_gen, "image_gen_max_concurrent", lambda: 4)
+    ctx = _FakeContext()
+    ctx.user_data[bot._CHAT_IMAGINE_STYLE_PROMPT_MSG] = 55
+    ctx.user_data[bot._CHAT_IMAGINE_STYLE_PHOTO_WAIT] = True
+    update = _FakeUpdate()
+    calls: list[dict] = []
+
+    async def _fake(**kwargs):
+        calls.append(kwargs)
+        return b"png"
+
+    with (
+        patch.object(bot, "_request_image_style_redraw_from_server", side_effect=_fake),
+        patch.object(bot, "_send_post_imagine_menu", new=AsyncMock()),
+        patch.object(bot.user_storage, "chat_dialog_upsert", lambda *a, **k: None),
+    ):
+        asyncio.run(
+            bot._handle_chat_imagine_style_batch(
+                update,
+                ctx,
+                user_id=1,
+                chat_id=9,
+                items=[(11, b"a"), (12, b"b")],
+                notes="сделай ярче",
+            ),
+        )
+
+    assert len(calls) == 2
+    assert calls[0]["notes"] == calls[1]["notes"]
+    assert calls[0]["notes"].endswith("сделай ярче")
+    assert (9, 11) in ctx.bot.deleted
+    assert (9, 12) in ctx.bot.deleted
+    assert (9, 55) in ctx.bot.deleted
+    assert bot._CHAT_IMAGINE_STYLE_PHOTO_WAIT not in ctx.user_data
+    assert all(photo[2] == "" for photo in ctx.bot.sent_photos)
+
+
+def test_style_batch_rejects_five_photos_and_long_album_note(monkeypatch) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    monkeypatch.setattr(image_gen, "image_gen_max_concurrent", lambda: 4)
+    ctx = _FakeContext()
+    update = _FakeUpdate()
+    called = False
+
+    async def _fake(**kwargs):
+        nonlocal called
+        called = True
+        return b"png"
+
+    with patch.object(bot, "_request_image_style_redraw_from_server", side_effect=_fake):
+        asyncio.run(
+            bot._handle_chat_imagine_style_batch(
+                update,
+                ctx,
+                user_id=1,
+                chat_id=9,
+                items=[(i, b"x") for i in range(1, 6)],
+                notes="",
+            ),
+        )
+        asyncio.run(
+            bot._handle_chat_imagine_style_batch(
+                update,
+                ctx,
+                user_id=1,
+                chat_id=9,
+                items=[(1, b"a"), (2, b"b")],
+                notes="А" * 121,
+            ),
+        )
+
+    assert called is False
+    assert any("не больше" in r for r in update.message.replies)
+    assert any("общее уточнение" in r for r in update.message.replies)

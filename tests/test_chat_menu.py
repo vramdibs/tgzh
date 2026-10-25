@@ -48,16 +48,12 @@ def test_chat_menu_imagine_photo_button_states() -> None:
     assert any("правки" in t for t, _ in flat if _ == "chat:imagine")
 
 
-def test_chat_imagine_compact_keyboard_has_exit() -> None:
+def test_chat_imagine_compact_keyboard_has_one_redraw_button() -> None:
     flat = _flatten(bot._chat_imagine_compact_keyboard())
     callbacks = [c for _, c in flat]
     labels = [t for t, _ in flat]
-    assert "chat:imagine:exit" in callbacks
-    assert "chat:menu" in callbacks
-    assert "chat:imagine:style_photo" in callbacks
-    assert any("Перерисовать новое фото" in t for t in labels)
-    assert callbacks.count("chat:imagine") == 0
-    assert not any("Сгенерировать / править" in t for t in labels)
+    assert callbacks == ["chat:imagine:style_photo"]
+    assert labels == ["Перерисовать новое фото"]
 
 
 def test_chat_model_keyboard_lists_available_composer_grok(
