@@ -316,7 +316,7 @@ def test_chat_imagine_status_placeholders() -> None:
         bot._CHAT_IMAGINE_STYLE_REDRAW_PLACEHOLDER,
         bot._CHAT_IMAGINE_EDIT_PLACEHOLDER,
     ):
-        assert "5 минут" in text
+        assert "пару минут.." in text
         assert "очередь" not in text.lower()
         assert "нагрузк" not in text.lower()
     assert bot._CHAT_IMAGINE_STYLE_REDRAW_PLACEHOLDER.startswith("Перерисовываю фото")

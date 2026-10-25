@@ -60,7 +60,9 @@ _MAX_SOURCE_IMAGE_BYTES: Final[int] = 8 * 1024 * 1024
 _DEFAULT_STYLE_REFERENCE_PATH: Final[str] = "/app/static/imagine/style_reference.png"
 # Bridge OpenAI-совместимый API требует prompt min_length=1 даже для style_redraw.
 STYLE_REDRAW_DEFAULT_PROMPT: Final[str] = (
-    "Перерисуй фото в живописном стиле эталона, сохрани сюжет и объекты на снимке."
+    "Перерисуй фото в живописном стиле эталона, сохрани сюжет и объекты на снимке. "
+    "Сделай картинку ярче исходного фото: светлые тона, ясный дневной свет, "
+    "без затемнения и мрачных теней."
 )
 IMAGE_EDIT_DEFAULT_PROMPT: Final[str] = (
     "Внеси правки по инструкции пользователя, остальное на фото не меняй."

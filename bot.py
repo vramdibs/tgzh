@@ -334,9 +334,9 @@ _CHAT_IMAGINE_LAST_PNG_MAX_BYTES = 6 * 1024 * 1024
 # После успешной генерации - урезанное меню режима фото (auto_compact).
 _CHAT_IMAGINE_UI_COMPACT = "chat_imagine_ui_compact"
 _CHAT_IMAGINE_SIZE = "chat_imagine_size"
-_CHAT_IMAGINE_GENERATE_PLACEHOLDER = "Генерирую изображение, это займет 5 минут…"
-_CHAT_IMAGINE_STYLE_REDRAW_PLACEHOLDER = "Перерисовываю фото, это займет 5 минут…"
-_CHAT_IMAGINE_EDIT_PLACEHOLDER = "Правлю последнюю картинку, это займет 5 минут…"
+_CHAT_IMAGINE_GENERATE_PLACEHOLDER = "Генерирую изображение, это займет пару минут.."
+_CHAT_IMAGINE_STYLE_REDRAW_PLACEHOLDER = "Перерисовываю фото, это займет пару минут.."
+_CHAT_IMAGINE_EDIT_PLACEHOLDER = "Правлю последнюю картинку, это займет пару минут.."
 # Буфер документов в /chat (несколько PDF подряд или альбом).
 _CHAT_FILE_BUFFER = "chat_file_buffer"
 _CHAT_FILE_BUFFER_AT = "chat_file_buffer_at"
@@ -5082,7 +5082,7 @@ async def _handle_chat_imagine_style_batch(
     placeholder_text = (
         _CHAT_IMAGINE_STYLE_REDRAW_PLACEHOLDER
         if n == 1
-        else f"Перерисовываю {n} фото, это займет 5 минут…"
+        else f"Перерисовываю {n} фото, это займет пару минут.."
     )
     try:
         with suppress(Exception):
