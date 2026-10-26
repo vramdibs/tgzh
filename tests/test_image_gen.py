@@ -275,9 +275,11 @@ def test_generate_image_style_redraw_empty_notes_uses_default_prompt(
     assert "ярче" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
     assert "прищур" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
     assert "челюсть" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
-    assert "Брови не менять" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
+    assert "узнаваемости сцены" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
+    assert "Не подменяй брови" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
     assert "не дорисовывай крик" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
-    assert "зуб" not in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
+    assert "стиснут" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
+    assert "смазан" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
 
 
 def test_image_gen_user_facing_label_auto(monkeypatch: pytest.MonkeyPatch) -> None:
