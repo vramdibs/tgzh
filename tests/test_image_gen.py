@@ -274,6 +274,7 @@ def test_generate_image_style_redraw_empty_notes_uses_default_prompt(
     assert captured["json"]["prompt"] == image_gen.STYLE_REDRAW_DEFAULT_PROMPT
     assert "ярче" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
     assert "мимик" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
+    assert "Брови" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
 
 
 def test_image_gen_user_facing_label_auto(monkeypatch: pytest.MonkeyPatch) -> None:
