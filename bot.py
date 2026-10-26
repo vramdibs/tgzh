@@ -2255,7 +2255,7 @@ def _chat_imagine_style_photo_wait_keyboard(
 
 
 def _chat_imagine_style_wait_text_reply() -> str:
-    n = image_gen.image_gen_max_concurrent()
+    n = image_gen.image_gen_style_album_limit()
     return (
         f"Жду от 1 до {n} фото. "
         "У одного снимка подпись может быть подробной. "
@@ -2265,7 +2265,7 @@ def _chat_imagine_style_wait_text_reply() -> str:
 
 def _style_batch_gate(notes: str, count: int) -> str | None:
     """Ошибка до вызова сервера. None - пачку можно отправлять."""
-    limit = image_gen.image_gen_max_concurrent()
+    limit = image_gen.image_gen_style_album_limit()
     if count > limit:
         return f"Можно не больше {limit} фото за раз."
     text = (notes or "").strip()
@@ -2301,7 +2301,7 @@ def _style_redraw_prompt_for_api(notes: str) -> str:
 
 
 def _chat_imagine_style_photo_help_html() -> str:
-    n = image_gen.image_gen_max_concurrent()
+    n = image_gen.image_gen_style_album_limit()
     return (
         "<b>Перерисовать в стиле примера</b>\n\n"
         f"Пришли от <b>1 до {n} фото</b> - бот перерисует их в мягком живописном стиле "

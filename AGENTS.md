@@ -16,6 +16,7 @@ Telegram-бот для проверки домашних заданий по м�
 
 ## Learned Workspace Facts
 
+- **Перерисовка `/imagine`**: вариант промпта до правки зубов (брови, прищур, взгляд, рот/челюсть, запрет дорисовывать крик) пока **самый близкий** к нужному лицу на тестовом кадре. Следующая проба: нижние зубы видны сильнее верхних и уведены назад (короткое удивление), не подменять верхним рядом. Текст - `STYLE_REDRAW_DEFAULT_PROMPT` и bridge `_build_style_redraw_agent_prompt`
 - **Режим приема апдейтов Telegram (`TG_MODE`)**: **`webhook`** (default) или **`polling`**; код - **`_telegram_mode()`**, **`post_init_commands`** снимает webhook в polling. Схема KeenDNS (inbound) + VPS egress (outbound) - **`docs/integration.md`**. Инциденты webhook timeout и ложный «устаревший DNS» - **`docs/error-registry.md`** (INC-2026-09-27-01, INC-2026-09-27-03). Прод: **`TG_MODE=polling`**
 - Правила **`.cursor/`** приведены в соответствие с этим репозиторием (не nfqws/роутер)
 - Проверка **текстом** (**«Ответить текстом»**): на **`tgzh-server`** pre-OCR только для **`image/*`**; при пустом MIME или **`application/octet-stream`** валидный **UTF-8** сниффится как **`text/plain`** (**`ai_checker._mime_from_bytes`**), чтобы не уходить в ветку JPEG и **`preocr_client`**

@@ -494,6 +494,15 @@ def test_style_batch_gate_and_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
     assert detail in bot._style_redraw_prompt_for_api(detail)
 
 
+def test_style_album_limit_ten_when_pool_is_twelve(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(image_gen, "image_gen_max_concurrent", lambda: 12)
+    assert image_gen.image_gen_style_album_limit() == 10
+    assert "1 до 10" in bot._chat_imagine_style_wait_text_reply()
+    assert "<b>1 до 10 фото</b>" in bot._chat_imagine_style_photo_help_html()
+    assert bot._style_batch_gate("", 10) is None
+    assert "не больше 10" in (bot._style_batch_gate("", 11) or "")
+
+
 def test_style_batch_shares_short_note_and_deletes_sources(monkeypatch) -> None:
     monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
     monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")

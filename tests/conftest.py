@@ -9,6 +9,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import image_gen
+
 
 def _openai_exc(name: str) -> type[Exception]:
     class _Exc(Exception):
@@ -61,6 +63,8 @@ def _clear_env_for_unit_tests(monkeypatch: pytest.MonkeyPatch) -> None:
         # `preocr_client.fetch_preocr_block`.
         "PREOCR_URL",
         "IMAGE_GEN_BASE_URL",
+        "IMAGE_GEN_BASE_URLS",
+        "IMAGE_GEN_MAX_CONCURRENT",
         "IMAGE_GEN_API_KEY",
         "IMAGE_GEN_MODEL",
         "IMAGE_GEN_SIZE",
@@ -95,3 +99,4 @@ def _clear_env_for_unit_tests(monkeypatch: pytest.MonkeyPatch) -> None:
         "VLLM_VISION",
     ):
         monkeypatch.delenv(key, raising=False)
+    image_gen.reset_image_gen_bridge_pool()

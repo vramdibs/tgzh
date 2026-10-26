@@ -277,6 +277,7 @@ def test_generate_image_style_redraw_empty_notes_uses_default_prompt(
     assert "челюсть" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
     assert "Брови не менять" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
     assert "не дорисовывай крик" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
+    assert "нижние видны сильнее" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
 
 
 def test_image_gen_user_facing_label_auto(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -454,6 +455,25 @@ def test_image_gen_base_urls_csv_and_fallback(monkeypatch: pytest.MonkeyPatch) -
         "https://b.example/v1",
     ]
     assert image_gen.image_gen_max_concurrent() == 2
+    assert image_gen.image_gen_style_album_limit() == 2
+
+
+def test_image_gen_pool_cap_twelve_and_album_ten(monkeypatch: pytest.MonkeyPatch) -> None:
+    urls = ",".join(f"https://b{i}.example/v1" for i in range(12))
+    monkeypatch.setenv("IMAGE_GEN_BASE_URLS", urls)
+    monkeypatch.delenv("IMAGE_GEN_MAX_CONCURRENT", raising=False)
+    monkeypatch.delenv("IMAGE_GEN_BASE_URL", raising=False)
+    image_gen.reset_image_gen_bridge_pool()
+    assert image_gen.image_gen_max_concurrent() == 12
+    assert image_gen.image_gen_style_album_limit() == 10
+    monkeypatch.setenv(
+        "IMAGE_GEN_BASE_URLS",
+        urls + ",https://b12.example/v1",
+    )
+    monkeypatch.setenv("IMAGE_GEN_MAX_CONCURRENT", "13")
+    image_gen.reset_image_gen_bridge_pool()
+    assert image_gen.image_gen_max_concurrent() == 12
+    assert image_gen.image_gen_style_album_limit() == 10
 
 
 def test_prepare_bridge_source_bytes_shrinks_large_jpeg() -> None:
