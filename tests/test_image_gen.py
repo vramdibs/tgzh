@@ -277,6 +277,7 @@ def test_generate_image_style_redraw_empty_notes_uses_default_prompt(
     assert "челюсть" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
     assert "узнаваемости сцены" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
     assert "Не подменяй брови" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
+    assert "наклон" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
     assert "не дорисовывай крик" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
     assert "стиснут" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
     assert "смазан" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
