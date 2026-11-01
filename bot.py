@@ -2199,6 +2199,16 @@ def _imagine_photo_button_label(context: ContextTypes.DEFAULT_TYPE | None) -> st
     return "Сгенерировать фото"
 
 
+def _chat_menu_body_html(model_label: str) -> str:
+    label = _h(model_label)
+    return (
+        "Напиши или надиктуй голосом. Можно прислать фото для его прочтения.\n\n"
+        "Перетащив/приложив пример pptx и несколько вспомогательных файлов, "
+        "можно попросить бота передалать презентацию.\n\n"
+        f"<i>Модель чата: {label} (reasoning Low, без Fast)</i>"
+    )
+
+
 def _chat_menu_keyboard_for_user(
     active: bool,
     user_id: int,
@@ -2213,7 +2223,6 @@ def _chat_menu_keyboard_for_user(
     return _chat_menu_keyboard(
         active,
         model_slug=model_slug,
-        imagine_photo_label=_imagine_photo_button_label(context),
     )
 
 
@@ -2237,19 +2246,14 @@ def _chat_menu_keyboard(
     active: bool,
     *,
     model_slug: str | None = None,
-    imagine_photo_label: str = "Сгенерировать фото",
 ) -> InlineKeyboardMarkup | None:
     if not active:
         return None
     model_label = ai_checker.chat_cursor_model_label(
         model_slug or ai_checker.chat_cursor_model_default(),
     )
-    photo_btn = imagine_photo_label
-    if len(photo_btn) > 64:
-        photo_btn = photo_btn[:63] + "…"
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(f"Модель: {model_label}", callback_data="chat:model")],
-        [InlineKeyboardButton(photo_btn, callback_data="chat:imagine")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -2596,9 +2600,7 @@ async def _send_chat_menu(
     )
     if active:
         model_label = ai_checker.chat_cursor_model_label(model_slug)
-        body = (
-            f"Чат: <b>{_h(model_label)}</b> (текст и разбор фото; reasoning Low, без Fast)."
-        )
+        body = _chat_menu_body_html(model_label)
     else:
         body = (
             "<b>ИИ-ассистент Cursor.</b> Доступ закрыт паролем. "

@@ -241,13 +241,12 @@ def test_handle_chat_imagine_request_reports_server_failure(monkeypatch) -> None
     assert bot._CHAT_HISTORY not in ctx.user_data
 
 
-def test_chat_menu_keyboard_includes_imagine_button() -> None:
+def test_chat_menu_keyboard_has_no_imagine_button() -> None:
     kb = bot._chat_menu_keyboard(active=True)
-    flat = [b for row in kb.inline_keyboard for b in row]
-    callbacks = [b.callback_data for b in flat]
-    labels = [b.text for b in flat]
-    assert "chat:imagine" in callbacks
-    assert any("Сгенериров" in t for t in labels)
+    assert kb is not None
+    callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert "chat:imagine" not in callbacks
+    assert callbacks == ["chat:model"]
 
 
 def test_chat_menu_keyboard_inactive_has_no_imagine() -> None:

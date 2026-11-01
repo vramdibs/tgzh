@@ -24,7 +24,7 @@ def test_chat_menu_active_contains_expected_buttons() -> None:
     callbacks = [c for _, c in flat]
     assert "chat:list" not in callbacks
     assert "chat:model" in callbacks
-    assert "chat:imagine" in callbacks
+    assert "chat:imagine" not in callbacks
     assert "chat:purge" not in callbacks
     assert "chat:new" not in callbacks
     assert "chat:logout" not in callbacks
@@ -32,17 +32,12 @@ def test_chat_menu_active_contains_expected_buttons() -> None:
     assert not any(c.startswith("chat:mem_") for c in callbacks)
 
 
-def test_chat_menu_imagine_photo_button_states() -> None:
-    ctx = type("C", (), {"user_data": {}})()
-    assert bot._imagine_photo_button_label(None) == "Сгенерировать фото"
-    ctx.user_data[bot._CHAT_IMAGINE_LAST_PNG] = b"x"
-    ctx.user_data[bot._CHAT_IMAGINE_SESSION] = True
-    label = bot._imagine_photo_button_label(ctx)
-    assert "правки текстом" in label
-    flat = _flatten(
-        bot._chat_menu_keyboard(active=True, imagine_photo_label=label),
-    )
-    assert any("правки" in t for t, _ in flat if _ == "chat:imagine")
+def test_chat_menu_body_html_uses_italic_model_line() -> None:
+    html = bot._chat_menu_body_html("Grok 4.7")
+    assert "надиктуй голосом" in html
+    assert "передалать презентацию" in html
+    assert "<i>Модель чата: Grok 4.7 (reasoning Low, без Fast)</i>" in html
+    assert "Чат:" not in html
 
 
 def test_chat_imagine_compact_keyboard_has_one_redraw_button() -> None:
