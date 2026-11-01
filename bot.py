@@ -309,7 +309,7 @@ def _presentation_fill_timeout_s() -> float:
     return v if v > 0 else 360.0
 
 
-def _chat_append_exchange(
+async def _chat_append_exchange(
     context: ContextTypes.DEFAULT_TYPE,
     *,
     user_id: int,
@@ -363,6 +363,7 @@ _CHAT_DIALOG_ID = "chat_dialog_id"
 _CHAT_IMG_PROMPT_WAIT = "chat_img_prompt_wait"
 # Ожидание одного фото для перерисовки в стиле эталона (кнопка «Перерисовать фото…»).
 _CHAT_IMAGINE_STYLE_PHOTO_WAIT = "chat_imagine_style_photo_wait"
+_CHAT_IMAGINE_STYLE_PROFILE = "chat_imagine_style_profile"
 _CHAT_IMAGINE_STYLE_PROMPT_MSG = "chat_imagine_style_prompt_msg"
 _CHAT_IMAGINE_STYLE_BATCH_GID = "chat_imagine_style_batch_gid"
 _CHAT_IMAGINE_STYLE_BATCH_ENTRIES = "chat_imagine_style_batch_entries"
@@ -431,6 +432,7 @@ def _clear_chat_imagine_style_batch(context: ContextTypes.DEFAULT_TYPE) -> None:
 def _clear_chat_imagine_waits(context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
     context.user_data.pop(_CHAT_IMAGINE_STYLE_PHOTO_WAIT, None)
+    context.user_data.pop(_CHAT_IMAGINE_STYLE_PROFILE, None)
     context.user_data.pop(_CHAT_IMAGINE_STYLE_PROMPT_MSG, None)
     _clear_chat_imagine_style_batch(context)
     _clear_chat_pending_sources(context)
@@ -2191,12 +2193,6 @@ def _chat_menu_keyboard(
     if len(photo_btn) > 64:
         photo_btn = photo_btn[:63] + "…"
     rows: list[list[InlineKeyboardButton]] = [
-        [
-            InlineKeyboardButton(
-                f"Мои чаты ({user_storage.CHAT_DIALOG_HISTORY_LIMIT} последних)",
-                callback_data="chat:list",
-            ),
-        ],
         [InlineKeyboardButton(f"Модель: {model_label}", callback_data="chat:model")],
         [InlineKeyboardButton(photo_btn, callback_data="chat:imagine")],
     ]
@@ -2216,13 +2212,43 @@ def _chat_imagine_compact_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def _chat_imagine_style_profile(context: ContextTypes.DEFAULT_TYPE) -> str:
+    raw = context.user_data.get(_CHAT_IMAGINE_STYLE_PROFILE)
+    if raw == image_gen.STYLE_PROFILE_COMIC:
+        return image_gen.STYLE_PROFILE_COMIC
+    if raw == image_gen.STYLE_PROFILE_BOOK:
+        return image_gen.STYLE_PROFILE_BOOK
+    return image_gen.STYLE_PROFILE_PAINTERLY
+
+
+def _chat_imagine_style_wait_help_html(context: ContextTypes.DEFAULT_TYPE) -> str:
+    profile = _chat_imagine_style_profile(context)
+    if profile == image_gen.STYLE_PROFILE_COMIC:
+        return _chat_imagine_style_comic_help_html()
+    if profile == image_gen.STYLE_PROFILE_BOOK:
+        return _chat_imagine_style_book_help_html()
+    return _chat_imagine_style_enhancer_help_html()
+
+
 def _chat_imagine_choice_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
-                    "По примеру (купе поезда)",
-                    callback_data="chat:imagine:example",
+                    "Улучшайзер",
+                    callback_data="chat:imagine:style_photo",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "📖 Рисунок из книги",
+                    callback_data="chat:imagine:style_book",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "🖼️ Стиль комикса",
+                    callback_data="chat:imagine:style_comic",
                 ),
             ],
             [
@@ -2233,8 +2259,8 @@ def _chat_imagine_choice_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    "👇 Перерисовать в стиле примера",
-                    callback_data="chat:imagine:style_photo",
+                    "Пример и справка",
+                    callback_data="chat:imagine:example_info",
                 ),
             ],
             [InlineKeyboardButton("Назад в меню чата", callback_data="chat:menu")],
@@ -2243,19 +2269,44 @@ def _chat_imagine_choice_keyboard() -> InlineKeyboardMarkup:
 
 
 def _chat_imagine_choice_help_html() -> str:
-    example = _h(_CHAT_IMAGINE_EXAMPLE_PROMPT)
     return (
         "<b>Сгенерировать фото</b>\n\n"
         "Выбери вариант:\n"
-        "• <b>По примеру</b> — кнопка ниже сразу запустит генерацию\n"
+        "• <b>Улучшайзер</b> — пришли фото; живописная перерисовка с сохранением "
+        "сюжета и лица (как раньше). Подпись — по желанию\n"
+        "• <b>Рисунок из книги</b> — иллюстрация в мягком painterly-стиле "
+        "эталона, сюжет с твоего снимка\n"
+        "• <b>Стиль комикса</b> — контуры, halftone и палитра "
+        "как у эталона комикса\n"
         "• <b>Свой промпт</b> — опишешь картинку одним сообщением "
         f"(до {image_gen.PROMPT_MAX_LEN} символов)\n"
-        "• <b>Перерисовать в стиле примера</b> — пришли своё фото; "
-        "стиль как у живописного эталона (без копирования сюжета купе). "
-        "Подпись к фото — по желанию\n\n"
-        "<b>Текст примера</b> (можно скопировать):\n"
-        f"<pre>{example}</pre>\n"
+        "• <b>Пример и справка</b> — текст примера и генерация по купе поезда\n\n"
         "Команда <code>/imagine</code> без текста открывает это же меню."
+    )
+
+
+def _chat_imagine_example_help_html() -> str:
+    example = _h(_CHAT_IMAGINE_EXAMPLE_PROMPT)
+    return (
+        "<b>Пример и справка</b>\n\n"
+        "Кнопка <b>Сгенерировать по примеру</b> ниже запустит картинку "
+        "по готовому промпту (купе поезда, 1024×1024).\n\n"
+        "<b>Текст примера</b> (можно скопировать):\n"
+        f"<pre>{example}</pre>"
+    )
+
+
+def _chat_imagine_example_help_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "Сгенерировать по примеру",
+                    callback_data="chat:imagine:example_run",
+                ),
+            ],
+            [InlineKeyboardButton("Назад к выбору", callback_data="chat:imagine")],
+        ],
     )
 
 
@@ -2266,8 +2317,8 @@ def _chat_imagine_wait_keyboard(
     rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
-                "По примеру (купе поезда)",
-                callback_data="chat:imagine:example",
+                "Пример и справка",
+                callback_data="chat:imagine:example_info",
             ),
         ],
         *_chat_imagine_size_keyboard_rows(context),
@@ -2327,12 +2378,16 @@ def _style_batch_gate(notes: str, count: int) -> str | None:
     return None
 
 
-def _style_redraw_prompt_for_api(notes: str) -> str:
+def _style_redraw_prompt_for_api(
+    notes: str,
+    *,
+    profile: str = image_gen.STYLE_PROFILE_PAINTERLY,
+) -> str:
     """Пустая подпись - сервер сам подставит стиль. Иначе стиль плюс уточнение."""
     extra = (notes or "").strip()
     if not extra:
         return ""
-    base = image_gen.STYLE_REDRAW_DEFAULT_PROMPT
+    base = image_gen.style_redraw_default_prompt(profile)
     combined = f"{base} {extra}"
     if len(combined) <= image_gen.PROMPT_MAX_LEN:
         return combined
@@ -2342,12 +2397,12 @@ def _style_redraw_prompt_for_api(notes: str) -> str:
     return f"{base} {extra[:room]}"
 
 
-def _chat_imagine_style_photo_help_html() -> str:
+def _chat_imagine_style_enhancer_help_html() -> str:
     n = image_gen.image_gen_style_album_limit()
     return (
-        "<b>Перерисовать в стиле примера</b>\n\n"
+        "<b>Улучшайзер</b>\n\n"
         f"Пришли от <b>1 до {n} фото</b> - бот перерисует их в мягком живописном стиле "
-        "(как эталон в меню генерации), сохранив сюжет. "
+        "эталона, сохранив сюжет и черты лица. "
         "Сцену купе и персонажей из эталона копировать не будет.\n\n"
         "Одно фото: подпись может быть подробной, с деталями правки.\n"
         "Несколько фото: одна подпись на все и только короткое общее уточнение, "
@@ -2357,6 +2412,83 @@ def _chat_imagine_style_photo_help_html() -> str:
         "После результата можно править картинку текстом (например «убери провода») "
         "без повторной загрузки фото."
     )
+
+
+def _chat_imagine_style_book_help_html() -> str:
+    n = image_gen.image_gen_style_album_limit()
+    return (
+        "<b>Рисунок из книги</b>\n\n"
+        f"Пришли от <b>1 до {n} фото</b> - бот перерисует их как book-illustration "
+        "в мягком painterly-стиле эталона, сохранив сюжет с твоего снимка. "
+        "Купе, пейзаж за окном и героев с эталона не копирует.\n\n"
+        "Одно фото: подпись может быть подробной.\n"
+        "Несколько фото: одна короткая общая подпись на все, "
+        "например «сделай ярче».\n"
+        "Размер кадра - кнопками ниже; <b>Оригинал до 1280</b> сохраняет пропорции "
+        "снимка (длинная сторона не больше 1280).\n\n"
+        "После результата можно править картинку текстом без повторной загрузки фото."
+    )
+
+
+def _chat_imagine_style_photo_help_html() -> str:
+    """Alias для тестов и обратной совместимости."""
+    return _chat_imagine_style_enhancer_help_html()
+
+
+def _chat_imagine_style_comic_help_html() -> str:
+    n = image_gen.image_gen_style_album_limit()
+    return (
+        "<b>Стиль комикса</b>\n\n"
+        f"Пришли от <b>1 до {n} фото</b> - бот перерисует их в стиле комикса "
+        "(контуры, halftone, cel-shading по эталону), сохранив сюжет с твоего снимка. "
+        "Панели и персонажей с эталона копировать не будет.\n\n"
+        "Одно фото: подпись может быть подробной.\n"
+        "Несколько фото: одна короткая общая подпись на все, "
+        "например «сделай ярче».\n"
+        "Размер кадра - кнопками ниже; <b>Оригинал до 1280</b> сохраняет пропорции "
+        "снимка (длинная сторона не больше 1280).\n\n"
+        "После результата можно править картинку текстом без повторной загрузки фото."
+    )
+
+
+async def _begin_chat_imagine_style_photo_wait(
+    query,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user_id: int,
+    chat_id: int,
+    style_profile: str,
+    toast: str,
+) -> None:
+    await asyncio.to_thread(user_storage.chat_session_login, USER_DB_PATH, user_id)
+    _activate_chat_session_ram(context, fresh=False)
+    context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
+    context.user_data.pop(_CHAT_IMAGINE_LAST_PNG, None)
+    context.user_data[_CHAT_IMAGINE_STYLE_PHOTO_WAIT] = True
+    context.user_data[_CHAT_IMAGINE_STYLE_PROFILE] = style_profile
+    _set_chat_imagine_pick_size(context, image_gen.CHAT_IMAGINE_SIZE_ORIGINAL)
+    context.user_data.pop(_CHAT_IMAGINE_STYLE_PROMPT_MSG, None)
+    await _answer_query_once(query, toast)
+    help_html = _chat_imagine_style_wait_help_html(context)
+    markup = _chat_imagine_style_photo_wait_keyboard(user_id, context)
+    if query.message is not None and query.message.photo:
+        with suppress(BadRequest, Exception):
+            hint = await context.bot.send_message(
+                chat_id,
+                help_html,
+                reply_markup=markup,
+                parse_mode=ParseMode.HTML,
+            )
+            context.user_data[_CHAT_IMAGINE_STYLE_PROMPT_MSG] = hint.message_id
+        return
+    if query.message is not None:
+        context.user_data[_CHAT_IMAGINE_STYLE_PROMPT_MSG] = query.message.message_id
+    with suppress(BadRequest, Exception):
+        await query.edit_message_text(
+            help_html,
+            reply_markup=markup,
+            parse_mode=ParseMode.HTML,
+        )
 
 
 def _chat_dialog_list_keyboard(
@@ -2581,7 +2713,7 @@ async def _handle_chat_callback(
             context.bot,
             chat_id,
             user_id=user_id,
-            extra_html="<i>Начат новый диалог. Предыдущий — в «Мои чаты».</i>",
+            extra_html="<i>Начат новый диалог.</i>",
         )
         return
     if action == "back":
@@ -2726,7 +2858,7 @@ async def _handle_chat_callback(
                 label = picked.replace("x", "×")
             await _answer_query_once(query, f"Размер: {label}")
             if context.user_data.get(_CHAT_IMAGINE_STYLE_PHOTO_WAIT):
-                help_html = _chat_imagine_style_photo_help_html()
+                help_html = _chat_imagine_style_wait_help_html(context)
                 markup = _chat_imagine_style_photo_wait_keyboard(user_id, context)
             elif context.user_data.get(_CHAT_IMG_PROMPT_WAIT):
                 help_html = _chat_imagine_custom_prompt_help_html()
@@ -2740,7 +2872,19 @@ async def _handle_chat_callback(
                     parse_mode=ParseMode.HTML,
                 )
             return
-        if sub == "example":
+        if sub == "example_info":
+            if not _is_image_gen_enabled():
+                await _answer_query_once(query, "Генерация изображений не настроена.")
+                return
+            await _answer_query_once(query, "Пример и справка.")
+            with suppress(BadRequest, Exception):
+                await query.edit_message_text(
+                    _chat_imagine_example_help_html(),
+                    reply_markup=_chat_imagine_example_help_keyboard(),
+                    parse_mode=ParseMode.HTML,
+                )
+            return
+        if sub == "example_run":
             if not _is_image_gen_enabled():
                 await _answer_query_once(query, "Генерация изображений не настроена.")
                 return
@@ -2762,6 +2906,7 @@ async def _handle_chat_callback(
                 await _answer_query_once(query, "Генерация изображений не настроена.")
                 return
             context.user_data.pop(_CHAT_IMAGINE_STYLE_PHOTO_WAIT, None)
+            context.user_data.pop(_CHAT_IMAGINE_STYLE_PROFILE, None)
             context.user_data[_CHAT_IMG_PROMPT_WAIT] = True
             await _answer_query_once(query, "Жду описание картинки.")
             with suppress(BadRequest, Exception):
@@ -2775,33 +2920,40 @@ async def _handle_chat_callback(
             if not _is_image_gen_enabled():
                 await _answer_query_once(query, "Генерация изображений не настроена.")
                 return
-            await asyncio.to_thread(user_storage.chat_session_login, USER_DB_PATH, user_id)
-            _activate_chat_session_ram(context, fresh=False)
-            context.user_data.pop(_CHAT_IMG_PROMPT_WAIT, None)
-            context.user_data.pop(_CHAT_IMAGINE_LAST_PNG, None)
-            context.user_data[_CHAT_IMAGINE_STYLE_PHOTO_WAIT] = True
-            _set_chat_imagine_pick_size(context, image_gen.CHAT_IMAGINE_SIZE_ORIGINAL)
-            context.user_data.pop(_CHAT_IMAGINE_STYLE_PROMPT_MSG, None)
-            await _answer_query_once(query, "Жду фото для перерисовки.")
-            if query.message is not None and query.message.photo:
-                # Кнопка под готовым результатом: его не трогаем, подсказка - отдельно.
-                with suppress(BadRequest, Exception):
-                    hint = await context.bot.send_message(
-                        chat_id,
-                        _chat_imagine_style_photo_help_html(),
-                        reply_markup=_chat_imagine_style_photo_wait_keyboard(user_id, context),
-                        parse_mode=ParseMode.HTML,
-                    )
-                    context.user_data[_CHAT_IMAGINE_STYLE_PROMPT_MSG] = hint.message_id
+            await _begin_chat_imagine_style_photo_wait(
+                query,
+                context,
+                user_id=user_id,
+                chat_id=chat_id,
+                style_profile=image_gen.STYLE_PROFILE_PAINTERLY,
+                toast="Жду фото для улучшайзера.",
+            )
+            return
+        if sub == "style_book":
+            if not _is_image_gen_enabled():
+                await _answer_query_once(query, "Генерация изображений не настроена.")
                 return
-            if query.message is not None:
-                context.user_data[_CHAT_IMAGINE_STYLE_PROMPT_MSG] = query.message.message_id
-            with suppress(BadRequest, Exception):
-                await query.edit_message_text(
-                    _chat_imagine_style_photo_help_html(),
-                    reply_markup=_chat_imagine_style_photo_wait_keyboard(user_id, context),
-                    parse_mode=ParseMode.HTML,
-                )
+            await _begin_chat_imagine_style_photo_wait(
+                query,
+                context,
+                user_id=user_id,
+                chat_id=chat_id,
+                style_profile=image_gen.STYLE_PROFILE_BOOK,
+                toast="Жду фото для рисунка из книги.",
+            )
+            return
+        if sub == "style_comic":
+            if not _is_image_gen_enabled():
+                await _answer_query_once(query, "Генерация изображений не настроена.")
+                return
+            await _begin_chat_imagine_style_photo_wait(
+                query,
+                context,
+                user_id=user_id,
+                chat_id=chat_id,
+                style_profile=image_gen.STYLE_PROFILE_COMIC,
+                toast="Жду фото для стиля комикса.",
+            )
             return
         if not _is_image_gen_enabled():
             await _answer_query_once(query, "Генерация изображений не настроена.")
@@ -4762,6 +4914,7 @@ async def _request_image_style_redraw_from_server(
     source_jpeg: bytes,
     notes: str,
     size: str | None = None,
+    style_profile: str = image_gen.STYLE_PROFILE_PAINTERLY,
 ) -> bytes:
     """POST `/image/generate` mode=style_redraw -> PNG-байты."""
     url = f"{SERVER_URL.rstrip('/')}/image/generate"
@@ -4771,6 +4924,7 @@ async def _request_image_style_redraw_from_server(
         "mode": "style_redraw",
         "prompt": (notes or "").strip(),
         "source_image_b64": base64.b64encode(source_jpeg).decode("ascii"),
+        "style_profile": style_profile,
     }
     if size:
         payload["size"] = size
@@ -5128,7 +5282,10 @@ async def _handle_chat_imagine_style_batch(
         )
         return
 
-    api_notes = _style_redraw_prompt_for_api(notes_clean)
+    api_notes = _style_redraw_prompt_for_api(
+        notes_clean,
+        profile=_chat_imagine_style_profile(context),
+    )
     context.user_data[_CHAT_BUSY] = True
     placeholder = None
     hist_notes = notes_clean or "без подписи"
@@ -5158,6 +5315,7 @@ async def _handle_chat_imagine_style_batch(
                     source_jpeg=source_jpeg,
                     notes=api_notes,
                     size=size,
+                    style_profile=_chat_imagine_style_profile(context),
                 )
             except Exception as e:
                 logger.exception(

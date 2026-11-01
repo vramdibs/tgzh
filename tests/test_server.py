@@ -282,9 +282,11 @@ def test_image_generate_style_redraw_ok(
         extra_prompt: str = "",
         *,
         size: str | None = None,
+        style_profile: str = image_gen.STYLE_PROFILE_PAINTERLY,
     ) -> bytes:  # noqa: ARG001
         assert source_bytes == b"jpeg-bytes"
         assert extra_prompt == "evening"
+        assert style_profile == image_gen.STYLE_PROFILE_PAINTERLY
         return b"png-out"
 
     monkeypatch.setattr(image_gen, "generate_image_style_redraw", _fake_style)
@@ -316,8 +318,10 @@ def test_image_generate_style_redraw_empty_prompt_ok(
         extra_prompt: str = "",
         *,
         size: str | None = None,
+        style_profile: str = image_gen.STYLE_PROFILE_PAINTERLY,
     ) -> bytes:  # noqa: ARG001
         assert extra_prompt == ""
+        assert style_profile == image_gen.STYLE_PROFILE_PAINTERLY
         return b"png-out"
 
     monkeypatch.setattr(image_gen, "generate_image_style_redraw", _fake_style)
@@ -333,6 +337,41 @@ def test_image_generate_style_redraw_empty_prompt_ok(
     )
     assert r.status_code == 200
     assert r.content == b"png-out"
+
+
+def test_image_generate_style_redraw_comic_profile(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient,
+) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    import base64
+
+    import image_gen
+
+    async def _fake_style(
+        source_bytes: bytes,
+        extra_prompt: str = "",
+        *,
+        size: str | None = None,
+        style_profile: str = image_gen.STYLE_PROFILE_PAINTERLY,
+    ) -> bytes:  # noqa: ARG001
+        assert style_profile == image_gen.STYLE_PROFILE_COMIC
+        return b"png-comic"
+
+    monkeypatch.setattr(image_gen, "generate_image_style_redraw", _fake_style)
+    b64 = base64.b64encode(b"jpeg-bytes").decode("ascii")
+    r = client.post(
+        "/image/generate",
+        json={
+            "user_id": 1,
+            "mode": "style_redraw",
+            "prompt": "",
+            "source_image_b64": b64,
+            "style_profile": "comic",
+        },
+    )
+    assert r.status_code == 200
+    assert r.content == b"png-comic"
 
 
 def test_photo_check_disabled(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:

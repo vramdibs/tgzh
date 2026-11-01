@@ -259,18 +259,24 @@ def test_chat_imagine_choice_keyboard_has_example_and_custom() -> None:
     flat = [b for row in kb.inline_keyboard for b in row]
     callbacks = [b.callback_data for b in flat]
     labels = [b.text for b in flat]
-    assert "chat:imagine:example" in callbacks
+    assert callbacks[0] == "chat:imagine:style_photo"
+    assert callbacks[1] == "chat:imagine:style_book"
+    assert callbacks[2] == "chat:imagine:style_comic"
+    assert callbacks[3] == "chat:imagine:custom"
+    assert callbacks[4] == "chat:imagine:example_info"
     assert "chat:imagine:custom" in callbacks
     assert "chat:imagine:style_photo" in callbacks
     assert "chat:menu" in callbacks
-    assert "👇 Перерисовать в стиле примера" in labels
+    assert "Улучшайзер" in labels
+    assert "📖 Рисунок из книги" in labels
+    assert "🖼️ Стиль комикса" in labels
 
 
 def test_chat_imagine_wait_keyboard_includes_example_and_back() -> None:
     kb = bot._chat_imagine_wait_keyboard(1, _FakeContext())
     flat = [b for row in kb.inline_keyboard for b in row]
     callbacks = [b.callback_data for b in flat]
-    assert callbacks[0] == "chat:imagine:example"
+    assert callbacks[0] == "chat:imagine:example_info"
     assert "chat:imagine" in callbacks
     assert "chat:imagine:size:256x256" in callbacks
     assert "chat:imagine:size:1024x1024" in callbacks
@@ -333,8 +339,15 @@ def test_image_gen_server_user_error_429() -> None:
 
 def test_chat_imagine_choice_help_shows_copyable_example_prompt() -> None:
     html = bot._chat_imagine_choice_help_html()
+    assert "<pre>" not in html
+    assert "Улучшайзер" in html
+    assert "Рисунок из книги" in html
+
+
+def test_chat_imagine_example_help_shows_copyable_prompt() -> None:
+    html = bot._chat_imagine_example_help_html()
     assert "<pre>" in html
-    assert "купе поезда" in html
+    assert "купе" in html.lower() or "поезд" in html.lower()
     assert bot._CHAT_IMAGINE_EXAMPLE_PROMPT.split()[0] in html
 
 
@@ -597,7 +610,7 @@ def test_redraw_button_on_result_keeps_previous_result(monkeypatch) -> None:
     hint_id = ctx.bot._next_message_id - 1
     assert (9, 500) not in ctx.bot.deleted
     assert (9, 11) in ctx.bot.deleted
-    assert any(text.startswith("<b>Перерисовать") for _, text in ctx.bot.sent_messages)
+    assert any(text.startswith("<b>Улучшайзер") for _, text in ctx.bot.sent_messages)
     assert (9, hint_id) in ctx.bot.deleted
 
 
@@ -652,3 +665,46 @@ def test_style_batch_rejects_five_photos_and_long_album_note(monkeypatch) -> Non
     assert called is False
     assert any("не больше" in r for r in update.message.replies)
     assert any("общее уточнение" in r for r in update.message.replies)
+
+
+def test_style_comic_callback_sets_profile_and_server_field(monkeypatch) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    ctx = _FakeContext()
+    query = _FakeCallbackQuery(_FakeCallbackMessage(700, photo=False))
+    captured: list[dict] = []
+
+    async def _fake_style(**kwargs):
+        captured.append(kwargs)
+        return b"png"
+
+    with (
+        patch.object(bot, "_answer_query_once", new=AsyncMock()),
+        patch.object(bot.user_storage, "chat_session_login", lambda *a, **k: None),
+        patch.object(bot, "_request_image_style_redraw_from_server", side_effect=_fake_style),
+    ):
+        asyncio.run(bot._handle_chat_callback(query, ctx, "chat:imagine:style_comic"))
+
+    assert ctx.user_data[bot._CHAT_IMAGINE_STYLE_PROFILE] == image_gen.STYLE_PROFILE_COMIC
+    assert query.edited
+    assert "Стиль комикса" in query.edited[0]
+
+    ctx.user_data[bot._CHAT_IMAGINE_STYLE_PHOTO_WAIT] = True
+    with (
+        patch.object(bot, "_request_image_style_redraw_from_server", side_effect=_fake_style),
+        patch.object(bot, "_send_post_imagine_menu", new=AsyncMock()),
+        patch.object(bot.user_storage, "chat_dialog_upsert", lambda *a, **k: None),
+    ):
+        asyncio.run(
+            bot._handle_chat_imagine_style_batch(
+                _FakeUpdate(),
+                ctx,
+                user_id=1,
+                chat_id=9,
+                items=[(1, b"j")],
+                notes="",
+            ),
+        )
+
+    assert captured
+    assert captured[-1]["style_profile"] == image_gen.STYLE_PROFILE_COMIC

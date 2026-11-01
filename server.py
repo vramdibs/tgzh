@@ -732,6 +732,7 @@ class ImageGenerateRequest(BaseModel):
     mode: str = "prompt"
     source_image_b64: str | None = None
     size: str | None = None
+    style_profile: str | None = None
 
 
 @app.post("/image/generate")
@@ -779,10 +780,17 @@ async def image_generate(req: ImageGenerateRequest) -> Response:
                     image_gen.image_gen_model(),
                 )
                 source_bytes = image_gen.decode_source_image_b64(req.source_image_b64)
+                try:
+                    style_profile = image_gen.normalize_style_profile(
+                        req.style_profile,
+                    )
+                except image_gen.ImageGenBadPrompt as e:
+                    raise HTTPException(400, str(e)) from e
                 png_bytes = await image_gen.generate_image_style_redraw(
                     source_bytes,
                     extra_prompt=prompt,
                     size=size_override,
+                    style_profile=style_profile,
                 )
             elif mode == "image_edit":
                 if not (req.source_image_b64 or "").strip():

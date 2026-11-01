@@ -22,7 +22,7 @@ def test_chat_menu_active_contains_expected_buttons() -> None:
     assert markup is not None
     flat = _flatten(markup)
     callbacks = [c for _, c in flat]
-    assert "chat:list" in callbacks
+    assert "chat:list" not in callbacks
     assert "chat:model" in callbacks
     assert "chat:imagine" in callbacks
     assert "chat:purge" not in callbacks
@@ -30,9 +30,6 @@ def test_chat_menu_active_contains_expected_buttons() -> None:
     assert "chat:logout" not in callbacks
     assert "chat:back" not in callbacks
     assert not any(c.startswith("chat:mem_") for c in callbacks)
-    list_label = next(t for t, c in flat if c == "chat:list")
-    assert str(user_storage.CHAT_DIALOG_HISTORY_LIMIT) in list_label
-    assert "Мои чаты" in list_label
 
 
 def test_chat_menu_imagine_photo_button_states() -> None:

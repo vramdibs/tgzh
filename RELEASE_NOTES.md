@@ -4,6 +4,8 @@
 
 ### Changed
 
+- **Меню `/imagine`**: **Улучшайзер** (бывший живописный режим), **Рисунок из книги**, **Стиль комикса**, **Свой промпт**, **Пример и справка**; эталон книги - **`IMAGE_GEN_BOOK_STYLE_REFERENCE_PATH`**, **`style_profile=book`**
+- **Меню `/chat`**: кнопка **Мои чаты** убрана из главного inline-меню (история в **`chat_dialog`** по-прежнему сохраняется)
 - **Яркость перерисовки**: промпт style_redraw просит результат ярче исходного фото; bridge берет у эталона только кисть и палитру, без тусклого освещения
 - **Кнопка перерисовки**: в меню **Сгенерировать фото** подпись **👇 Перерисовать в стиле примера**
 - **Размер перерисовки**: при входе в **Перерисовать в стиле примера** (и с кнопки **Перерисовать новое фото**) сразу выбран **Оригинал до 1280**; **Свой промпт** и **По примеру** остаются на 1024×1024
@@ -19,6 +21,7 @@
 
 ### Added
 
+- **Стиль комикса в `/imagine`**: кнопка **Стиль комикса**, эталон **`IMAGE_GEN_COMIC_STYLE_REFERENCE_PATH`**, поле **`style_profile=comic`** в **`POST /image/generate`**
 - **Пачка style_redraw с диска**: **`scripts/batch_style_redraw.py`** - тот же `POST /image/generate` (`mode=style_redraw`, дефолт `original_max1280`), пропуск уже готовых PNG
 - **Image bridge pool (ops)**: `scripts/setup-image-bridge-instance.sh` и `scripts/smoke-image-gen-pool.sh` для дополнительных инстансов discourse-cursor-bridge и smoke FIFO без 429
 - **Gauge зеркала БД для Prometheus**: **`tgzh_llm_tokens_db_total`**, **`tgzh_llm_requests_db_total`** - синхронизация при старте **`tgzh-server`** и после каждого **`record_llm_spend`**

@@ -10,6 +10,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY server.py ai_checker.py image_gen.py photo_check.py photo_prepare.py preocr_client.py logging_config.py tgzh_metrics.py homework_check_status.py tgzh_httpx.py motok_jwt.py bot_stats.py tgzh_db.py chat_presentation.py chat_documents.py ./
 COPY images/imagine/style_reference.png /app/static/imagine/style_reference.png
+COPY images/imagine/comic_style_reference.png /app/static/imagine/comic_style_reference.png
+COPY images/imagine/book_style_reference.png /app/static/imagine/book_style_reference.png
 
 EXPOSE 8000
 

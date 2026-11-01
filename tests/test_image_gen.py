@@ -283,6 +283,96 @@ def test_generate_image_style_redraw_empty_notes_uses_default_prompt(
     assert "смазан" in image_gen.STYLE_REDRAW_DEFAULT_PROMPT
 
 
+def test_generate_image_style_redraw_comic_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    painterly = tmp_path / "book.png"
+    comic = tmp_path / "comic.png"
+    painterly.write_bytes(b"book-ref")
+    comic.write_bytes(b"comic-ref")
+    monkeypatch.setenv("IMAGE_GEN_STYLE_REFERENCE_PATH", str(painterly))
+    monkeypatch.setenv("IMAGE_GEN_COMIC_STYLE_REFERENCE_PATH", str(comic))
+    captured: dict = {}
+
+    class FakeHttpxClient:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args, **kwargs):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            captured["json"] = json
+            return SimpleNamespace(
+                status_code=200,
+                text="",
+                json=lambda: {"data": [{"b64_json": base64.b64encode(b"x").decode()}]},
+            )
+
+    with patch("httpx.AsyncClient", FakeHttpxClient):
+        asyncio.run(
+            image_gen.generate_image_style_redraw(
+                b"photo",
+                extra_prompt="",
+                style_profile=image_gen.STYLE_PROFILE_COMIC,
+            ),
+        )
+
+    assert captured["json"]["prompt"] == image_gen.STYLE_REDRAW_COMIC_DEFAULT_PROMPT
+    ref_b64 = captured["json"]["style_reference_b64"]
+    assert base64.b64decode(ref_b64) == b"comic-ref"
+
+
+def test_generate_image_style_redraw_book_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    book = tmp_path / "book.png"
+    book.write_bytes(b"book-ref")
+    monkeypatch.setenv("IMAGE_GEN_STYLE_REFERENCE_PATH", str(tmp_path / "p.png"))
+    (tmp_path / "p.png").write_bytes(b"p")
+    monkeypatch.setenv("IMAGE_GEN_BOOK_STYLE_REFERENCE_PATH", str(book))
+    captured: dict = {}
+
+    class FakeHttpxClient:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args, **kwargs):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            captured["json"] = json
+            return SimpleNamespace(
+                status_code=200,
+                text="",
+                json=lambda: {"data": [{"b64_json": base64.b64encode(b"x").decode()}]},
+            )
+
+    with patch("httpx.AsyncClient", FakeHttpxClient):
+        asyncio.run(
+            image_gen.generate_image_style_redraw(
+                b"photo",
+                extra_prompt="",
+                style_profile=image_gen.STYLE_PROFILE_BOOK,
+            ),
+        )
+
+    assert captured["json"]["prompt"] == image_gen.STYLE_REDRAW_BOOK_DEFAULT_PROMPT
+    assert base64.b64decode(captured["json"]["style_reference_b64"]) == b"book-ref"
+
+
 def test_image_gen_user_facing_label_auto(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("IMAGE_GEN_MODEL", "auto")
     monkeypatch.delenv("BRIDGE_IMAGE_CURSOR_MODEL", raising=False)

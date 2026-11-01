@@ -58,6 +58,18 @@ _TIMEOUT_LO: Final[float] = 10.0
 _TIMEOUT_HI: Final[float] = 600.0
 _MAX_SOURCE_IMAGE_BYTES: Final[int] = 8 * 1024 * 1024
 _DEFAULT_STYLE_REFERENCE_PATH: Final[str] = "/app/static/imagine/style_reference.png"
+_DEFAULT_COMIC_STYLE_REFERENCE_PATH: Final[str] = (
+    "/app/static/imagine/comic_style_reference.png"
+)
+_DEFAULT_BOOK_STYLE_REFERENCE_PATH: Final[str] = (
+    "/app/static/imagine/book_style_reference.png"
+)
+STYLE_PROFILE_PAINTERLY: Final[str] = "painterly"
+STYLE_PROFILE_BOOK: Final[str] = "book"
+STYLE_PROFILE_COMIC: Final[str] = "comic"
+_STYLE_PROFILES: Final[frozenset[str]] = frozenset(
+    {STYLE_PROFILE_PAINTERLY, STYLE_PROFILE_BOOK, STYLE_PROFILE_COMIC},
+)
 # Bridge OpenAI-совместимый API требует prompt min_length=1 даже для style_redraw.
 STYLE_REDRAW_DEFAULT_PROMPT: Final[str] = (
     "Перерисуй фото в живописном стиле эталона, сохрани сюжет и объекты на снимке. "
@@ -83,6 +95,22 @@ STYLE_REDRAW_DEFAULT_PROMPT: Final[str] = (
     "Эталон - только кисть и палитра. "
     "Сделай картинку ярче исходного фото: светлые тона, ясный дневной свет, "
     "без затемнения и мрачных теней."
+)
+STYLE_REDRAW_COMIC_DEFAULT_PROMPT: Final[str] = (
+    "Перерисуй фото в стиле комикса по эталону: жирные черные контуры, "
+    "cel-shading, halftone Ben-Day dots на фонах и градиентах, "
+    "эстетика graphic novel / ligne claire. "
+    "Сохрани сюжет, композицию и объекты с исходного снимка; "
+    "лицо узнаваемо, без смены эмоции и без копирования персонажей "
+    "или панелей с эталона. Эталон - только техника рисования и палитра."
+)
+STYLE_REDRAW_BOOK_DEFAULT_PROMPT: Final[str] = (
+    "Перерисуй фото как иллюстрацию из книги по эталону: мягкий живописный "
+    "digital illustration, видимые кисти, теплый дневной свет, уютная "
+    "book-illustration эстетика, детализированный painterly render. "
+    "Сохрани сюжет, композицию и объекты с исходного снимка; лицо узнаваемо, "
+    "эмоция как на фото. Не копируй купе, пейзаж за окном и персонажей "
+    "с эталона - только техника, палитра и настроение иллюстрации."
 )
 IMAGE_EDIT_DEFAULT_PROMPT: Final[str] = (
     "Внеси правки по инструкции пользователя, остальное на фото не меняй."
@@ -495,15 +523,48 @@ def _validate_optional_notes(notes: str) -> str:
     return p
 
 
-def image_gen_style_reference_path() -> Path:
+def normalize_style_profile(raw: str | None) -> str:
+    profile = (raw or STYLE_PROFILE_PAINTERLY).strip().lower()
+    if profile not in _STYLE_PROFILES:
+        raise ImageGenBadPrompt(
+            f"style_profile must be one of: {', '.join(sorted(_STYLE_PROFILES))}",
+        )
+    return profile
+
+
+def style_redraw_default_prompt(style_profile: str = STYLE_PROFILE_PAINTERLY) -> str:
+    profile = normalize_style_profile(style_profile)
+    if profile == STYLE_PROFILE_COMIC:
+        return STYLE_REDRAW_COMIC_DEFAULT_PROMPT
+    if profile == STYLE_PROFILE_BOOK:
+        return STYLE_REDRAW_BOOK_DEFAULT_PROMPT
+    return STYLE_REDRAW_DEFAULT_PROMPT
+
+
+def image_gen_style_reference_path(
+    style_profile: str = STYLE_PROFILE_PAINTERLY,
+) -> Path:
+    profile = normalize_style_profile(style_profile)
+    if profile == STYLE_PROFILE_COMIC:
+        raw = _strip_env("IMAGE_GEN_COMIC_STYLE_REFERENCE_PATH")
+        if raw:
+            return Path(raw)
+        return Path(_DEFAULT_COMIC_STYLE_REFERENCE_PATH)
+    if profile == STYLE_PROFILE_BOOK:
+        raw = _strip_env("IMAGE_GEN_BOOK_STYLE_REFERENCE_PATH")
+        if raw:
+            return Path(raw)
+        return Path(_DEFAULT_BOOK_STYLE_REFERENCE_PATH)
     raw = _strip_env("IMAGE_GEN_STYLE_REFERENCE_PATH")
     if raw:
         return Path(raw)
     return Path(_DEFAULT_STYLE_REFERENCE_PATH)
 
 
-def load_style_reference_bytes() -> bytes:
-    path = image_gen_style_reference_path()
+def load_style_reference_bytes(
+    style_profile: str = STYLE_PROFILE_PAINTERLY,
+) -> bytes:
+    path = image_gen_style_reference_path(style_profile)
     if not path.is_file():
         raise ImageGenStyleReferenceMissing(
             f"style reference not found: {path}",
@@ -746,17 +807,20 @@ async def generate_image_style_redraw(
     extra_prompt: str = "",
     *,
     size: str | None = None,
+    style_profile: str = STYLE_PROFILE_PAINTERLY,
 ) -> bytes:
     """Перерисовать исходное фото в стиле эталона (bridge style_redraw)."""
+    profile = normalize_style_profile(style_profile)
     raw = _validate_source_bytes(source_bytes)
     src = prepare_bridge_source_bytes(raw)
     notes = _validate_optional_notes(extra_prompt)
-    api_prompt = notes or STYLE_REDRAW_DEFAULT_PROMPT
+    default_prompt = style_redraw_default_prompt(profile)
+    api_prompt = notes or default_prompt
     if not is_image_gen_configured():
         raise ImageGenNotConfigured(
             "image generation backend not configured (IMAGE_GEN_BASE_URL/API_KEY)",
         )
-    style_bytes = load_style_reference_bytes()
+    style_bytes = load_style_reference_bytes(profile)
     model = image_gen_model()
     resolved_size = resolve_image_gen_size(size, source_bytes=raw)
     timeout = image_gen_multipart_timeout_sec()
@@ -769,7 +833,9 @@ async def generate_image_style_redraw(
         "style_reference_b64": base64.b64encode(style_bytes).decode("ascii"),
     }
     logger.info(
-        "image_gen style_redraw model=%s size=%s source_bytes=%s notes_chars=%s api_prompt_chars=%s",
+        "image_gen style_redraw profile=%s model=%s size=%s source_bytes=%s "
+        "notes_chars=%s api_prompt_chars=%s",
+        profile,
         model,
         resolved_size,
         len(src),
