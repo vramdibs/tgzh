@@ -7,6 +7,8 @@ import io
 import logging
 import os
 import re
+import xml.etree.ElementTree as ET
+import zipfile
 from dataclasses import dataclass
 from typing import Literal
 
@@ -19,6 +21,8 @@ import ai_checker
 ChatDocumentKind = Literal[
     "pdf",
     "text",
+    "spreadsheet",
+    "presentation",
     "office_unsupported",
     "image_as_document",
     "unsupported",
@@ -92,6 +96,16 @@ def resolve_chat_document_mime(data: bytes, content_type: str | None, filename: 
                 )
             else:
                 ct = "application/rtf"
+        elif ext in ("xlsx", "xlsm"):
+            ct = (
+                "application/vnd.openxmlformats-officedocument"
+                ".spreadsheetml.sheet"
+            )
+        elif ext == "pptx":
+            ct = (
+                "application/vnd.openxmlformats-officedocument"
+                ".presentationml.presentation"
+            )
     return ct
 
 
@@ -109,6 +123,14 @@ def classify_chat_document(mime: str, filename: str) -> ChatDocumentKind:
         return "office_unsupported"
     if ct == "application/pdf" or ext == "pdf":
         return "pdf"
+    if ext in ("xlsx", "xlsm") or ct == (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    ):
+        return "spreadsheet"
+    if ext == "pptx" or ct == (
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    ):
+        return "presentation"
     if ct in ("text/plain", "text/html", "text/markdown") or ext in (
         "txt",
         "html",
@@ -355,6 +377,90 @@ async def extract_chat_document_text_for_chat(
     )
 
 
+def _cell_to_str(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and value == int(value):
+        return str(int(value))
+    return str(value).strip()
+
+
+def extract_xlsx_text(data: bytes, *, max_rows_per_sheet: int = 200) -> str:
+    """Компактный текст из xlsx для промпта /chat."""
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        return ""
+    try:
+        wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    except Exception:
+        logger.debug("xlsx load failed", exc_info=True)
+        return ""
+    parts: list[str] = []
+    try:
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            lines: list[str] = [f"=== {sheet_name} ==="]
+            row_count = 0
+            for row in ws.iter_rows(values_only=True):
+                if row_count >= max_rows_per_sheet:
+                    lines.append("… (лист обрезан)")
+                    break
+                cells = [_cell_to_str(c) for c in row]
+                if any(cells):
+                    lines.append("\t".join(cells))
+                row_count += 1
+            if len(lines) > 1:
+                parts.append("\n".join(lines))
+    finally:
+        wb.close()
+    return "\n\n".join(parts).strip()
+
+
+_PPTX_TEXT_NS = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+
+
+def extract_pptx_text(data: bytes) -> str:
+    """Текст слайдов pptx для промпта /chat."""
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except Exception:
+        return ""
+    slide_names = sorted(
+        n
+        for n in zf.namelist()
+        if n.startswith("ppt/slides/slide") and n.endswith(".xml")
+    )
+    parts: list[str] = []
+    for idx, name in enumerate(slide_names, start=1):
+        try:
+            root = ET.fromstring(zf.read(name))
+        except Exception:
+            continue
+        texts = [
+            el.text.strip()
+            for el in root.iter(f"{_PPTX_TEXT_NS}t")
+            if el.text and el.text.strip()
+        ]
+        if texts:
+            parts.append(f"--- Слайд {idx} ---\n" + "\n".join(texts))
+    return "\n\n".join(parts).strip()
+
+
+def pptx_slide_count(data: bytes) -> int:
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except Exception:
+        return 0
+    return len(
+        [
+            n
+            for n in zf.namelist()
+            if n.startswith("ppt/slides/slide") and n.endswith(".xml")
+        ],
+    )
+
+
 def _extract_plain_text(data: bytes) -> str:
     try:
         return data.decode("utf-8")
@@ -374,6 +480,10 @@ def extract_chat_document_text(
         return _extract_pdf_text(data)
     if kind == "text":
         return _extract_plain_text(data)
+    if kind == "spreadsheet":
+        return extract_xlsx_text(data)
+    if kind == "presentation":
+        return extract_pptx_text(data)
     return ""
 
 

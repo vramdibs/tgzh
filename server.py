@@ -3,6 +3,7 @@ FastAPI-сервер: приём фото и вызов AI для проверк
 """
 
 import asyncio
+import json
 import os
 import time
 from contextlib import asynccontextmanager, suppress
@@ -22,16 +23,19 @@ import tgzh_metrics
 from motok_jwt import HubJwtError, verify_homework_jwt
 from ai_checker import (
     allowed_check_mime,
+    build_presentation_slides_json,
     check_homework,
     chat_default_system_prompt,
     chat_max_history_turns,
     chat_resolve_cursor_model,
     generate_check_quip,
+    presentation_fill_timeout_s,
     reset_completion_usage,
     stream_chat_via_cursor,
     summarize_check_parts,
     take_completion_usage,
 )
+import chat_presentation
 from photo_check import (
     ImageRole,
     PhotoCheckMode,
@@ -837,6 +841,108 @@ async def image_generate(req: ImageGenerateRequest) -> Response:
         )
         _record_llm_spend(kind="image_gen", user_id=req.user_id)
         return Response(content=png_bytes, media_type="image/png")
+
+
+@app.post("/presentation/fill")
+async def presentation_fill(
+    template: UploadFile = File(...),
+    instruction: str = Form(""),
+    regulation_text: str = Form(""),
+    xlsx_text: str = Form(""),
+    metrics_json: str = Form(""),
+    report_1fk: UploadFile | None = File(None),
+    regulation: UploadFile | None = File(None),
+):
+    """Собрать pptx: LLM заполняет слайды по регламенту и 1-ФК."""
+    tpl_bytes = await template.read()
+    if not tpl_bytes:
+        raise HTTPException(400, "empty template")
+    slide_count = chat_presentation.expected_slide_count(tpl_bytes)
+    if slide_count < 1:
+        raise HTTPException(400, "template has no slides")
+
+    metrics: dict = {}
+    if (metrics_json or "").strip():
+        try:
+            parsed = json.loads(metrics_json)
+            if isinstance(parsed, dict):
+                metrics = parsed
+        except json.JSONDecodeError as e:
+            raise HTTPException(400, f"invalid metrics_json: {e}") from e
+    elif report_1fk is not None:
+        fk_data = await report_1fk.read()
+        if fk_data:
+            metrics = chat_presentation.parse_1fk_workbook(fk_data)
+
+    reg_text = (regulation_text or "").strip()
+    if not reg_text and regulation is not None:
+        reg_bytes = await regulation.read()
+        if reg_bytes:
+            import chat_documents
+
+            reg_text = chat_documents.extract_pdf_text(reg_bytes)
+
+    template_text = chat_presentation.template_slide_text_summary(tpl_bytes)
+    metrics_summary = chat_presentation.format_appendix1_metrics(metrics)
+
+    timeout = presentation_fill_timeout_s()
+    try:
+        raw = await asyncio.wait_for(
+            build_presentation_slides_json(
+                instruction=instruction,
+                regulation_text=reg_text,
+                template_slide_text=template_text,
+                metrics_summary=metrics_summary,
+                slide_count=slide_count,
+                xlsx_excerpt=xlsx_text,
+            ),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError as e:
+        raise HTTPException(504, "presentation fill timeout") from e
+    except RuntimeError as e:
+        raise HTTPException(503, str(e)[:300]) from e
+    except Exception as e:
+        logger.exception("presentation fill llm failed")
+        raise HTTPException(502, f"llm error: {e}") from e
+
+    try:
+        slides = chat_presentation.parse_slides_json(raw)
+    except ValueError as e:
+        logger.warning("presentation fill bad json: %s raw_len=%s", e, len(raw))
+        raise HTTPException(502, f"invalid slides json: {e}") from e
+
+    if len(slides) != slide_count:
+        logger.info(
+            "presentation slides count mismatch want=%s got=%s",
+            slide_count,
+            len(slides),
+        )
+        if len(slides) > slide_count:
+            slides = slides[:slide_count]
+        while len(slides) < slide_count:
+            slides.append({"title": "", "bullets": []})
+
+    try:
+        out_bytes = chat_presentation.apply_slides_to_pptx(tpl_bytes, slides)
+    except Exception as e:
+        logger.exception("presentation apply pptx failed")
+        raise HTTPException(500, f"pptx apply failed: {e}") from e
+
+    filename = (template.filename or "presentation.pptx").strip()
+    if not filename.lower().endswith(".pptx"):
+        filename = "presentation.pptx"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+    }
+    return Response(
+        content=out_bytes,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument"
+            ".presentationml.presentation"
+        ),
+        headers=headers,
+    )
 
 
 @app.get("/health")

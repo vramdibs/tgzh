@@ -9,6 +9,20 @@ def test_classify_pdf_and_office() -> None:
     assert chat_documents.classify_chat_document("application/pdf", "a.pdf") == "pdf"
     assert (
         chat_documents.classify_chat_document(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "report.xlsx",
+        )
+        == "spreadsheet"
+    )
+    assert (
+        chat_documents.classify_chat_document(
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "deck.pptx",
+        )
+        == "presentation"
+    )
+    assert (
+        chat_documents.classify_chat_document(
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             "x.docx",
         )

@@ -1921,3 +1921,68 @@ def allowed_check_mime(content_type: str | None) -> bool:
         "application/rtf",
         "text/rtf",
     )
+
+
+def presentation_fill_timeout_s() -> float:
+    raw = (os.getenv("PRESENTATION_FILL_TIMEOUT_SEC") or "360").strip()
+    try:
+        val = float(raw)
+    except ValueError:
+        val = 360.0
+    return max(60.0, min(900.0, val))
+
+
+async def build_presentation_slides_json(
+    *,
+    instruction: str,
+    regulation_text: str,
+    template_slide_text: str,
+    metrics_summary: str,
+    slide_count: int,
+    xlsx_excerpt: str = "",
+) -> str:
+    """Один запрос к Cursor-bridge: JSON со слайдами презентации."""
+    reg = (regulation_text or "").strip()
+    if len(reg) > 24_000:
+        reg = reg[:23_900] + "…"
+    xlsx_part = (xlsx_excerpt or "").strip()
+    if len(xlsx_part) > 8_000:
+        xlsx_part = xlsx_part[:7_900] + "…"
+    draft = (template_slide_text or "").strip()
+    if len(draft) > 6_000:
+        draft = draft[:5_900] + "…"
+    instr = (instruction or "").strip() or (
+        "Собери компактную презентацию по приложениям 1 и 2 регламента конкурса."
+    )
+
+    system = (
+        "Ты помощник по подготовке презентации для конкурса "
+        "«Спортивный муниципалитет года» (Самарская область). "
+        f"В шаблоне ровно {slide_count} слайдов — верни JSON с тем же числом элементов в slides. "
+        "Ответ — только валидный JSON без markdown и пояснений до/после. "
+        'Формат: {"slides":[{"title":"...","bullets":["..."]}]}. '
+        "Текст компактный, по-русски, для слайдов PowerPoint. "
+        "Опирайся на регламент (приложения 1 и 2), черновик слайдов и метрики 1-ФК. "
+        "Показатель финансирования (п/п 1 приложения 1) — заглушка «[сумма позже]», не придумывай суммы. "
+        "Спортивные цифры — только из metrics_summary и xlsx; если данных нет — прочерк. "
+        "Сохраняй тематику и факты из черновика, где они не противоречат данным."
+    )
+    user = (
+        f"Задание пользователя:\n{instr}\n\n"
+        f"Метрики 1-ФК:\n{metrics_summary}\n\n"
+        f"Черновик слайдов:\n{draft or '—'}\n\n"
+        f"Фрагмент регламента:\n{reg or '—'}\n\n"
+    )
+    if xlsx_part:
+        user += f"Выдержка из таблицы 1-ФК:\n{xlsx_part}\n\n"
+    user += f"Верни JSON ровно на {slide_count} слайдов."
+
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+
+    async def _noop(_piece: str) -> None:
+        return None
+
+    return await stream_chat_via_cursor(messages, on_delta=_noop)

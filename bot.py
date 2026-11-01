@@ -167,6 +167,7 @@ from telegram.request import HTTPXRequest
 import bot_stats
 import ai_checker
 import chat_documents
+import chat_presentation
 import chat_urls
 import feedback_tei
 import image_gen
@@ -297,6 +298,47 @@ def _check_request_timeout_s(engine: str) -> float:
         logger.warning("invalid %s=%r, falling back to %s s", env_key, raw, default_s)
         return default_s
     return v if v > 0 else default_s
+
+
+def _presentation_fill_timeout_s() -> float:
+    raw = (os.getenv("BOT_PRESENTATION_FILL_TIMEOUT_SEC") or "360").strip()
+    try:
+        v = float(raw)
+    except ValueError:
+        v = 360.0
+    return v if v > 0 else 360.0
+
+
+def _chat_append_exchange(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user_id: int,
+    user_content: str,
+    assistant_content: str,
+) -> None:
+    history: list[dict[str, str]] = list(context.user_data.get(_CHAT_HISTORY) or [])
+    history.append({"role": "user", "content": user_content.strip()})
+    history.append({"role": "assistant", "content": assistant_content.strip()})
+    if len(history) > _CHAT_HISTORY_RUNTIME_CAP:
+        history = history[-_CHAT_HISTORY_RUNTIME_CAP:]
+    context.user_data[_CHAT_HISTORY] = history
+    dialog_id = context.user_data.get(_CHAT_DIALOG_ID)
+    try:
+        saved_id = await asyncio.to_thread(
+            user_storage.chat_dialog_upsert,
+            USER_DB_PATH,
+            user_id,
+            dialog_id if isinstance(dialog_id, int) else None,
+            history,
+        )
+        if saved_id is not None:
+            context.user_data[_CHAT_DIALOG_ID] = saved_id
+    except Exception:
+        logger.warning(
+            "chat_dialog_upsert failed user_id=%s after presentation",
+            user_id,
+            exc_info=True,
+        )
 
 
 _FEEDBACK_STAFF_WAIT = "feedback_staff_wait"
@@ -5528,6 +5570,158 @@ async def _chat_file_download_bytes(
     return bytes(await tg_file.download_as_bytearray())
 
 
+async def _chat_presentation_fill(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user_id: int,
+    chat_id: int,
+    instruction: str,
+    blobs: list[dict[str, object]],
+) -> None:
+    """POST /presentation/fill и отправка pptx пользователю."""
+    if not update.message:
+        return
+    pptx_blob: dict[str, object] | None = None
+    pdf_blob: dict[str, object] | None = None
+    xlsx_blob: dict[str, object] | None = None
+    names: list[str] = []
+    for b in blobs:
+        fn = str(b.get("filename") or "file")
+        names.append(fn)
+        kind = b.get("kind")
+        if kind == "presentation" and pptx_blob is None:
+            pptx_blob = b
+        elif kind == "pdf" and pdf_blob is None:
+            pdf_blob = b
+        elif kind == "spreadsheet" and xlsx_blob is None:
+            xlsx_blob = b
+
+    if pptx_blob is None:
+        await update.message.reply_text("В буфере нет файла .pptx (шаблон презентации).")
+        return
+
+    pptx_name = str(pptx_blob.get("filename") or "presentation.pptx")
+    pptx_bytes = pptx_blob.get("data")
+    if not isinstance(pptx_bytes, bytes) or not pptx_bytes:
+        await update.message.reply_text("Не удалось прочитать шаблон презентации.")
+        return
+
+    reg_text = ""
+    if pdf_blob and isinstance(pdf_blob.get("text"), str):
+        reg_text = str(pdf_blob["text"])
+
+    xlsx_text = ""
+    metrics: dict = {}
+    if xlsx_blob:
+        if isinstance(xlsx_blob.get("text"), str):
+            xlsx_text = str(xlsx_blob["text"])
+        xdata = xlsx_blob.get("data")
+        if isinstance(xdata, bytes) and xdata:
+            metrics = chat_presentation.parse_1fk_workbook(xdata)
+
+    status = await update.message.reply_text("Собираю презентацию…")
+    await context.bot.send_chat_action(chat_id, ChatAction.UPLOAD_DOCUMENT)
+
+    multipart_files: list[tuple[str, tuple[str, bytes, str]]] = [
+        (
+            "template",
+            (
+                pptx_name,
+                pptx_bytes,
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            ),
+        ),
+    ]
+    if pdf_blob and isinstance(pdf_blob.get("data"), bytes):
+        pdf_name = str(pdf_blob.get("filename") or "regulation.pdf")
+        multipart_files.append(
+            ("regulation", (pdf_name, pdf_blob["data"], "application/pdf")),
+        )
+    if xlsx_blob and isinstance(xlsx_blob.get("data"), bytes):
+        xlsx_name = str(xlsx_blob.get("filename") or "report.xlsx")
+        multipart_files.append(
+            (
+                "report_1fk",
+                (
+                    xlsx_name,
+                    xlsx_blob["data"],
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                ),
+            ),
+        )
+
+    form = {
+        "instruction": instruction,
+        "regulation_text": reg_text[:24_000],
+        "xlsx_text": xlsx_text[:8_000],
+        "metrics_json": json.dumps(metrics, ensure_ascii=False),
+    }
+    url = f"{SERVER_URL.rstrip('/')}/presentation/fill"
+    timeout = httpx.Timeout(_presentation_fill_timeout_s())
+    try:
+        async with httpx.AsyncClient(
+            transport=async_http_transport_ipv4_lookup(),
+            timeout=timeout,
+        ) as client:
+            resp = await client.post(url, data=form, files=multipart_files)
+    except httpx.TimeoutException:
+        await status.edit_text(
+            "Сервер не успел собрать презентацию (таймаут). Попробуйте позже.",
+        )
+        return
+    except Exception as e:
+        logger.exception("presentation fill request failed user_id=%s", user_id)
+        await status.edit_text(f"Ошибка связи с сервером: {e}")
+        return
+
+    if resp.status_code != 200:
+        detail = resp.text[:500] if resp.text else resp.reason_phrase
+        await status.edit_text(f"Не удалось собрать презентацию: {detail}")
+        return
+
+    out_name = pptx_name if pptx_name.lower().endswith(".pptx") else "presentation.pptx"
+    disp = resp.headers.get("content-disposition") or ""
+    m = re.search(r'filename="?([^";\n]+)"?', disp)
+    if m:
+        out_name = m.group(1).strip()
+
+    metrics_note = chat_presentation.format_appendix1_metrics(metrics)
+    caption = (
+        "Готовый файл презентации. Сверьте вёрстку в PowerPoint.\n"
+        "Финансирование (п/п 1 приложения 1): заглушка [сумма позже].\n"
+        f"{metrics_note.splitlines()[0] if metrics_note else ''}"
+    )
+    try:
+        await context.bot.send_document(
+            chat_id,
+            document=InputFile(io.BytesIO(resp.content), filename=out_name),
+            caption=caption[:1024],
+        )
+    except Exception:
+        logger.exception("send presentation document failed user_id=%s", user_id)
+        await status.edit_text("Файл собран, но не удалось отправить в Telegram.")
+        return
+
+    with suppress(Exception):
+        await status.delete()
+
+    instr_short = (instruction or "").strip()
+    if len(instr_short) > 120:
+        instr_short = instr_short[:117] + "…"
+    names_s = ", ".join(names)
+    user_ph = f"[файлы: {names_s} | презентация: обновлённый pptx"
+    if instr_short:
+        user_ph += f" | {instr_short}"
+    user_ph += "]"
+    await _chat_append_exchange(
+        context,
+        user_id=user_id,
+        user_content=user_ph,
+        assistant_content=caption,
+    )
+
+
 async def _chat_sources_flush_with_instruction(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -5547,6 +5741,7 @@ async def _chat_sources_flush_with_instruction(
 
     extracts: list[chat_documents.ChatFileExtract] = []
     filenames: list[str] = []
+    file_blobs: list[dict[str, object]] = []
     per_file_cap = chat_documents.chat_file_extract_max_chars_per_file()
 
     for ent in entries:
@@ -5587,7 +5782,7 @@ async def _chat_sources_flush_with_instruction(
         if kind == "unsupported":
             await update.message.reply_text(
                 "Этот тип файла в чате не поддерживается. "
-                "Можно PDF или текст (.txt, .html, .md).",
+                "Можно PDF, текст (.txt, .html, .md), таблицу (.xlsx) или презентацию (.pptx).",
             )
             return True
         text = await chat_documents.extract_chat_document_text_for_chat(
@@ -5597,6 +5792,14 @@ async def _chat_sources_flush_with_instruction(
         )
         truncated = len(text) > per_file_cap
         body = text[: per_file_cap - 1] + "…" if truncated else text
+        file_blobs.append(
+            {
+                "filename": filename,
+                "data": data,
+                "kind": kind,
+                "text": body,
+            },
+        )
         extracts.append(
             chat_documents.ChatFileExtract(
                 filename=filename,
@@ -5605,6 +5808,23 @@ async def _chat_sources_flush_with_instruction(
             ),
         )
         filenames.append(filename)
+
+    if any(b.get("kind") == "presentation" for b in file_blobs):
+        if url_list:
+            await update.message.reply_text(
+                "Сборка презентации: пришлите файлы без ссылок в том же задании "
+                "(или очистите буфер и отправьте только документы).",
+            )
+            return True
+        await _chat_presentation_fill(
+            update,
+            context,
+            user_id=user_id,
+            chat_id=chat_id,
+            instruction=instruction,
+            blobs=file_blobs,
+        )
+        return True
 
     url_extracts: list[chat_urls.ChatUrlExtract] = []
     if url_list:
