@@ -32,12 +32,23 @@ def test_chat_menu_active_contains_expected_buttons() -> None:
     assert not any(c.startswith("chat:mem_") for c in callbacks)
 
 
-def test_chat_menu_body_html_uses_italic_model_line() -> None:
-    html = bot._chat_menu_body_html("Grok 4.7")
-    assert "надиктуй голосом" in html
-    assert "переделать презентацию" in html
-    assert "<i>Модель чата: Grok 4.7 (reasoning Low, без Fast)</i>" in html
-    assert "Чат:" not in html
+def test_chat_menu_body_html_same_intro_for_each_catalog_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CHAT_CURSOR_MODELS", raising=False)
+    ai_checker._CHAT_LIVE_CATALOG = None
+    intro = (
+        "Напиши или надиктуй голосом. Можно прислать фото для его прочтения.\n\n"
+        "Перетащив/приложив пример pptx и несколько вспомогательных файлов, "
+        "можно попросить бота переделать презентацию."
+    )
+    for _slug, label in ai_checker.chat_cursor_model_catalog():
+        html = bot._chat_menu_body_html(label)
+        assert html.startswith(intro)
+        assert html.endswith(
+            f"<i>Модель чата: {label} (reasoning Low, без Fast)</i>",
+        )
+        assert "Чат:" not in html
 
 
 def test_chat_imagine_compact_keyboard_has_one_redraw_button() -> None:
