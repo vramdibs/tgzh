@@ -35,7 +35,7 @@ def test_chat_menu_active_contains_expected_buttons() -> None:
 def test_chat_menu_body_html_uses_italic_model_line() -> None:
     html = bot._chat_menu_body_html("Grok 4.7")
     assert "надиктуй голосом" in html
-    assert "передалать презентацию" in html
+    assert "переделать презентацию" in html
     assert "<i>Модель чата: Grok 4.7 (reasoning Low, без Fast)</i>" in html
     assert "Чат:" not in html
 
