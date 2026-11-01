@@ -52,7 +52,7 @@ def chat_file_max_bytes() -> int:
 
 
 def chat_file_max_count() -> int:
-    return _int_env("CHAT_FILE_MAX_COUNT", 5, 1, 10)
+    return _int_env("CHAT_FILE_MAX_COUNT", 10, 1, 10)
 
 
 def chat_file_extract_max_chars_per_file() -> int:

@@ -48,3 +48,11 @@ def test_apply_slides_to_pptx() -> None:
     text = chat_documents.extract_pptx_text(out)
     assert "New title" in text
     assert "Line 1" in text
+
+
+def test_attachment_content_disposition_cyrillic() -> None:
+    disp = chat_presentation.attachment_content_disposition("Презентация кск.pptx")
+    disp.encode("latin-1")
+    assert 'filename="presentation.pptx"' in disp
+    assert "filename*=UTF-8''" in disp
+    assert "%D0%" in disp

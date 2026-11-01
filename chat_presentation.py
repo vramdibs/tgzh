@@ -7,6 +7,7 @@ import json
 import logging
 import re
 from typing import Any
+from urllib.parse import quote
 
 from chat_documents import extract_pptx_text, pptx_slide_count
 
@@ -257,3 +258,16 @@ def template_slide_text_summary(template_bytes: bytes) -> str:
 
 def expected_slide_count(template_bytes: bytes) -> int:
     return pptx_slide_count(template_bytes)
+
+
+def attachment_content_disposition(filename: str) -> str:
+    """Content-Disposition safe for Starlette (latin-1 headers) with UTF-8 filename."""
+    name = (filename or "presentation.pptx").strip()
+    if not name.lower().endswith(".pptx"):
+        name = "presentation.pptx"
+    ascii_fallback = "presentation.pptx"
+    encoded = quote(name, safe="")
+    return (
+        f'attachment; filename="{ascii_fallback}"; '
+        f"filename*=UTF-8''{encoded}"
+    )

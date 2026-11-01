@@ -113,7 +113,7 @@ async def test_append_with_caption_schedules_debounce_not_instant_flush(
 
 
 @pytest.mark.asyncio
-async def test_multi_file_debounce_triggers_presentation_fill(
+async def test_multi_file_debounce_waits_for_build_trigger(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ctx = _FakeContext()
@@ -161,6 +161,51 @@ async def test_multi_file_debounce_triggers_presentation_fill(
     assert task is not None
     await task
 
+    presentation.assert_not_awaited()
+    ctx.bot.send_message.assert_awaited()
+    assert (
+        ctx.user_data.get(bot._CHAT_FILE_PENDING_INSTRUCTION)
+        == "задание презентации"
+    )
+
+    trigger_msg = _FakeMessage()
+    trigger_upd = _FakeUpdate(trigger_msg)
+    handled = await bot._chat_sources_try_handle(
+        trigger_upd,
+        ctx,
+        user_id=42,
+        chat_id=1,
+        text="готово",
+    )
+    assert handled is True
     presentation.assert_awaited_once()
     chat_msg.assert_not_awaited()
     assert presentation.await_args.kwargs["instruction"] == "задание презентации"
+
+
+@pytest.mark.asyncio
+async def test_presentation_instruction_text_without_trigger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = _FakeContext()
+    presentation = AsyncMock()
+    monkeypatch.setattr(bot, "_chat_presentation_fill", presentation)
+    ctx.user_data[bot._CHAT_FILE_BUFFER] = [
+        {"file_id": "f1", "filename": "t.pptx", "mime": None, "size": 10},
+    ]
+    msg = _FakeMessage()
+    upd = _FakeUpdate(msg)
+    handled = await bot._chat_sources_try_handle(
+        upd,
+        ctx,
+        user_id=42,
+        chat_id=1,
+        text="Сделай компактно по приложению 1",
+    )
+    assert handled is True
+    presentation.assert_not_awaited()
+    msg.reply_text.assert_awaited()
+    assert (
+        ctx.user_data.get(bot._CHAT_FILE_PENDING_INSTRUCTION)
+        == "Сделай компактно по приложению 1"
+    )

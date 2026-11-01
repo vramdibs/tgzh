@@ -938,10 +938,10 @@ async def presentation_fill(
         raise HTTPException(500, f"pptx apply failed: {e}") from e
 
     filename = (template.filename or "presentation.pptx").strip()
-    if not filename.lower().endswith(".pptx"):
-        filename = "presentation.pptx"
     headers = {
-        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Content-Disposition": chat_presentation.attachment_content_disposition(
+            filename,
+        ),
     }
     return Response(
         content=out_bytes,

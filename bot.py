@@ -20,7 +20,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import httpx
 from dotenv import load_dotenv
@@ -307,6 +307,33 @@ def _presentation_fill_timeout_s() -> float:
     except ValueError:
         v = 360.0
     return v if v > 0 else 360.0
+
+
+def _httpx_response_error_detail(resp: httpx.Response, *, max_len: int = 500) -> str:
+    """Текст ошибки API: FastAPI JSON detail или тело ответа."""
+    try:
+        payload = resp.json()
+        if isinstance(payload, dict) and "detail" in payload:
+            detail = payload["detail"]
+            if isinstance(detail, str):
+                return detail[:max_len]
+            if isinstance(detail, list):
+                parts: list[str] = []
+                for item in detail:
+                    if isinstance(item, dict):
+                        msg = item.get("msg") or item.get("message")
+                        if msg:
+                            parts.append(str(msg))
+                    else:
+                        parts.append(str(item))
+                if parts:
+                    return "; ".join(parts)[:max_len]
+            return str(detail)[:max_len]
+    except Exception:
+        pass
+    if resp.text:
+        return resp.text[:max_len]
+    return resp.reason_phrase or f"HTTP {resp.status_code}"
 
 
 def _chat_file_batch_debounce_sec() -> float:
@@ -2754,6 +2781,16 @@ async def _handle_chat_callback(
             chat_id,
             user_id=user_id,
             context=context,
+        )
+        return
+    if action == "pres" and len(parts) > 2 and parts[2] == "build":
+        await _answer_query_once(query, "Собираю…")
+        upd = Update(update_id=0, message=query.message)
+        await _chat_presentation_try_start_build(
+            upd,
+            context,
+            user_id=user_id,
+            chat_id=chat_id,
         )
         return
     if action == "list":
@@ -5856,15 +5893,21 @@ async def _chat_presentation_fill(
         return
 
     if resp.status_code != 200:
-        detail = resp.text[:500] if resp.text else resp.reason_phrase
+        detail = _httpx_response_error_detail(resp)
         await status.edit_text(f"Не удалось собрать презентацию: {detail}")
         return
 
     out_name = pptx_name if pptx_name.lower().endswith(".pptx") else "presentation.pptx"
     disp = resp.headers.get("content-disposition") or ""
-    m = re.search(r'filename="?([^";\n]+)"?', disp)
-    if m:
-        out_name = m.group(1).strip()
+    m_star = re.search(r"filename\*=UTF-8''([^;\n]+)", disp, re.IGNORECASE)
+    if m_star:
+        out_name = unquote(m_star.group(1).strip())
+    else:
+        m = re.search(r'filename="?([^";\n]+)"?', disp)
+        if m:
+            cand = m.group(1).strip()
+            if cand.lower().endswith(".pptx"):
+                out_name = cand
 
     metrics_note = chat_presentation.format_appendix1_metrics(metrics)
     caption = (
@@ -6093,6 +6136,23 @@ async def _chat_sources_try_handle(
             context.user_data.get(_CHAT_FILE_PENDING_INSTRUCTION) or ""
         ).strip()
         instr = instruction or pending_file_instr
+        if file_buf and _chat_file_buffer_has_pptx(file_buf) and not merged:
+            if instr:
+                if _chat_presentation_is_build_trigger(instr):
+                    return await _chat_presentation_try_start_build(
+                        update,
+                        context,
+                        user_id=user_id,
+                        chat_id=chat_id,
+                    )
+                return await _chat_presentation_handle_pending_text(
+                    update,
+                    context,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    instruction=instr,
+                    file_buf=file_buf,
+                )
         if instr or file_buf:
             return await _chat_sources_flush_with_instruction(
                 update,
@@ -6110,6 +6170,15 @@ async def _chat_sources_try_handle(
     if url_buf or file_buf:
         if not instruction:
             return False
+        if file_buf and _chat_file_buffer_has_pptx(file_buf) and not url_buf:
+            return await _chat_presentation_handle_pending_text(
+                update,
+                context,
+                user_id=user_id,
+                chat_id=chat_id,
+                instruction=instruction,
+                file_buf=file_buf,
+            )
         return await _chat_sources_flush_with_instruction(
             update,
             context,
@@ -6118,6 +6187,122 @@ async def _chat_sources_try_handle(
             instruction=instruction,
         )
     return False
+
+
+_CHAT_PRESENTATION_BUILD_TRIGGERS = frozenset(
+    {
+        "собери",
+        "готово",
+        "собери презентацию",
+        "собрать",
+    },
+)
+
+
+def _chat_presentation_is_build_trigger(text: str) -> bool:
+    norm = (text or "").strip().lower()
+    return bool(norm) and norm in _CHAT_PRESENTATION_BUILD_TRIGGERS
+
+
+def _chat_presentation_build_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "Собрать презентацию",
+                    callback_data="chat:pres:build",
+                ),
+            ],
+        ],
+    )
+
+
+async def _chat_presentation_send_ready_hint(
+    bot: object,
+    chat_id: int,
+    *,
+    file_count: int,
+    has_instruction: bool,
+) -> None:
+    if has_instruction:
+        instr_note = " Задание уже сохранено. Можете приложить еще файлы."
+    else:
+        instr_note = " Отправьте текст задания отдельным сообщением."
+    await bot.send_message(
+        chat_id,
+        f"Принято файлов: {file_count}.{instr_note} "
+        "Когда готовы - напишите «собери» или «готово», "
+        "или нажмите кнопку ниже.",
+        reply_markup=_chat_presentation_build_keyboard(),
+    )
+
+
+async def _chat_presentation_try_start_build(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user_id: int,
+    chat_id: int,
+) -> bool:
+    """Запуск POST /presentation/fill из буфера. True если обработано."""
+    entries = _chat_file_buffer_entries(context)
+    if not entries or not _chat_file_buffer_has_pptx(entries):
+        if update.message:
+            await update.message.reply_text(
+                "В очереди нет шаблона .pptx. Сначала отправьте файлы презентации.",
+            )
+        elif update.callback_query and update.callback_query.message:
+            await context.bot.send_message(
+                chat_id,
+                "В очереди нет шаблона .pptx. Сначала отправьте файлы презентации.",
+            )
+        return True
+    msg = update.message
+    if msg is None:
+        last = context.user_data.get(_CHAT_FILE_LAST_MESSAGE)
+        if last is not None:
+            msg = last
+    if msg is None:
+        await context.bot.send_message(chat_id, "Не удалось определить чат для сборки.")
+        return True
+    instr = (context.user_data.get(_CHAT_FILE_PENDING_INSTRUCTION) or "").strip()
+    upd = update if update.message is msg else _chat_update_from_message(msg)
+    await _chat_sources_flush_with_instruction(
+        upd,
+        context,
+        user_id=user_id,
+        chat_id=chat_id,
+        instruction=instr,
+    )
+    return True
+
+
+async def _chat_presentation_handle_pending_text(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user_id: int,
+    chat_id: int,
+    instruction: str,
+    file_buf: list[dict],
+) -> bool:
+    """Текст при pptx в буфере: триггер сборки или сохранение задания."""
+    if _chat_presentation_is_build_trigger(instruction):
+        return await _chat_presentation_try_start_build(
+            update,
+            context,
+            user_id=user_id,
+            chat_id=chat_id,
+        )
+    context.user_data[_CHAT_FILE_PENDING_INSTRUCTION] = instruction
+    n = len(file_buf)
+    await update.message.reply_text(
+        f"Задание сохранено. Файлов: {n}. "
+        "Когда готовы — напишите «собери» или «готово», "
+        "или нажмите кнопку ниже.",
+        reply_markup=_chat_presentation_build_keyboard(),
+    )
+    return True
 
 
 def _chat_file_buffer_has_pptx(entries: list[dict]) -> bool:
@@ -6146,6 +6331,14 @@ async def _chat_file_after_batch_debounce(
             return
         instr = (context.user_data.get(_CHAT_FILE_PENDING_INSTRUCTION) or "").strip()
         n = len(entries)
+        if _chat_file_buffer_has_pptx(entries):
+            await _chat_presentation_send_ready_hint(
+                context.bot,
+                chat_id,
+                file_count=n,
+                has_instruction=bool(instr),
+            )
+            return
         if instr and last_msg is not None:
             upd = _chat_update_from_message(last_msg)
             await _chat_sources_flush_with_instruction(
@@ -6154,14 +6347,6 @@ async def _chat_file_after_batch_debounce(
                 user_id=user_id,
                 chat_id=chat_id,
                 instruction=instr,
-            )
-            return
-        if _chat_file_buffer_has_pptx(entries):
-            await context.bot.send_message(
-                chat_id,
-                f"Шаблон презентации принят вместе с {n} файлами. "
-                "Напишите задание отдельным сообщением "
-                "(или добавьте подпись к альбому до 1024 символов).",
             )
             return
         url_n = len(_chat_url_buffer_list(context))
