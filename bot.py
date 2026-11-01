@@ -309,6 +309,15 @@ def _presentation_fill_timeout_s() -> float:
     return v if v > 0 else 360.0
 
 
+def _chat_file_batch_debounce_sec() -> float:
+    raw = (os.getenv("CHAT_FILE_BATCH_DEBOUNCE_SEC") or "1.5").strip()
+    try:
+        v = float(raw)
+    except ValueError:
+        v = 1.5
+    return max(0.5, min(5.0, v))
+
+
 async def _chat_append_exchange(
     context: ContextTypes.DEFAULT_TYPE,
     *,
@@ -388,6 +397,7 @@ _CHAT_FILE_BATCH_TASK = "chat_file_batch_task"
 _CHAT_FILE_PENDING_INSTRUCTION = "chat_file_pending_instruction"
 _CHAT_FILE_TTL_TASK = "chat_file_ttl_task"
 _CHAT_FILE_LAST_MESSAGE = "chat_file_last_message"
+_CHAT_FILE_BATCH_ACK_SENT = "chat_file_batch_ack_sent"
 _CHAT_URL_BUFFER = "chat_url_buffer"
 _CHAT_URL_TTL_TASK = "chat_url_ttl_task"
 _CHAT_SOURCES_TTL_TASK = "chat_sources_ttl_task"
@@ -401,23 +411,35 @@ def _clear_chat_url_buffer(context: ContextTypes.DEFAULT_TYPE) -> None:
         t.cancel()
 
 
-def _clear_chat_pending_sources(context: ContextTypes.DEFAULT_TYPE) -> None:
-    _clear_chat_file_buffer(context)
+def _clear_chat_pending_sources(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    cancel_pending_batch: bool = True,
+) -> None:
+    _clear_chat_file_buffer(context, cancel_pending_batch=cancel_pending_batch)
     _clear_chat_url_buffer(context)
     t = context.user_data.pop(_CHAT_SOURCES_TTL_TASK, None)
     if t is not None and not t.done():
         t.cancel()
 
 
-def _clear_chat_file_buffer(context: ContextTypes.DEFAULT_TYPE) -> None:
-    batch_t = context.user_data.pop(_CHAT_FILE_BATCH_TASK, None)
-    if batch_t is not None and not batch_t.done():
-        batch_t.cancel()
+def _clear_chat_file_buffer(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    cancel_pending_batch: bool = True,
+) -> None:
+    if cancel_pending_batch:
+        batch_t = context.user_data.pop(_CHAT_FILE_BATCH_TASK, None)
+        if batch_t is not None and not batch_t.done():
+            batch_t.cancel()
+    else:
+        context.user_data.pop(_CHAT_FILE_BATCH_TASK, None)
     context.user_data.pop(_CHAT_FILE_BUFFER, None)
     context.user_data.pop(_CHAT_FILE_BUFFER_AT, None)
     context.user_data.pop(_CHAT_FILE_BATCH_GID, None)
     context.user_data.pop(_CHAT_FILE_PENDING_INSTRUCTION, None)
     context.user_data.pop(_CHAT_FILE_LAST_MESSAGE, None)
+    context.user_data.pop(_CHAT_FILE_BATCH_ACK_SENT, None)
 
 
 def _clear_chat_imagine_style_batch(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -5895,7 +5917,7 @@ async def _chat_sources_flush_with_instruction(
         return False
     if not update.message:
         return False
-    _clear_chat_pending_sources(context)
+    _clear_chat_pending_sources(context, cancel_pending_batch=False)
 
     extracts: list[chat_documents.ChatFileExtract] = []
     filenames: list[str] = []
@@ -6098,42 +6120,98 @@ async def _chat_sources_try_handle(
     return False
 
 
+def _chat_file_buffer_has_pptx(entries: list[dict]) -> bool:
+    for ent in entries:
+        fn = str(ent.get("filename") or "").lower()
+        if fn.endswith(".pptx"):
+            return True
+    return False
+
+
+def _chat_update_from_message(message: object) -> Update:
+    return Update(update_id=0, message=message)
+
+
 async def _chat_file_after_batch_debounce(
     context: ContextTypes.DEFAULT_TYPE,
     *,
     chat_id: int,
     user_id: int,
 ) -> None:
-    await asyncio.sleep(_PHOTO_DEBOUNCE_ALBUM_SEC)
-    last_msg = context.user_data.get(_CHAT_FILE_LAST_MESSAGE)
-    entries = _chat_file_buffer_entries(context)
-    if not entries:
-        return
-    instr = (context.user_data.get(_CHAT_FILE_PENDING_INSTRUCTION) or "").strip()
-    if instr and last_msg is not None:
-        upd = Update(update_id=0, message=last_msg)
-        await _chat_sources_flush_with_instruction(
-            upd,
+    try:
+        await asyncio.sleep(_chat_file_batch_debounce_sec())
+        last_msg = context.user_data.get(_CHAT_FILE_LAST_MESSAGE)
+        entries = _chat_file_buffer_entries(context)
+        if not entries:
+            return
+        instr = (context.user_data.get(_CHAT_FILE_PENDING_INSTRUCTION) or "").strip()
+        n = len(entries)
+        if instr and last_msg is not None:
+            upd = _chat_update_from_message(last_msg)
+            await _chat_sources_flush_with_instruction(
+                upd,
+                context,
+                user_id=user_id,
+                chat_id=chat_id,
+                instruction=instr,
+            )
+            return
+        if _chat_file_buffer_has_pptx(entries):
+            await context.bot.send_message(
+                chat_id,
+                f"Шаблон презентации принят вместе с {n} файлами. "
+                "Напишите задание отдельным сообщением "
+                "(или добавьте подпись к альбому до 1024 символов).",
+            )
+            return
+        url_n = len(_chat_url_buffer_list(context))
+        if url_n:
+            await context.bot.send_message(
+                chat_id,
+                f"Принято файлов: {n}, ссылок в очереди: {url_n}. "
+                "Напиши, что сделать (например, сравни тарифы).",
+            )
+        else:
+            await context.bot.send_message(
+                chat_id,
+                f"Принято файлов: {n}. Напиши, что с ними сделать "
+                "(например, сравни тарифы и предложи лучший).",
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.exception(
+            "chat file batch debounce failed user_id=%s chat_id=%s",
+            user_id,
+            chat_id,
+        )
+        with suppress(Exception):
+            await context.bot.send_message(
+                chat_id,
+                f"Не удалось обработать файлы: {e}",
+            )
+    finally:
+        context.user_data.pop(_CHAT_FILE_BATCH_ACK_SENT, None)
+
+
+def _chat_file_schedule_batch_debounce(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    chat_id: int,
+    user_id: int,
+    batch_key: str,
+) -> None:
+    if context.user_data.get(_CHAT_FILE_BATCH_GID) != batch_key:
+        _chat_file_cancel_batch_task(context)
+        context.user_data[_CHAT_FILE_BATCH_GID] = batch_key
+    _chat_file_cancel_batch_task(context)
+    context.user_data[_CHAT_FILE_BATCH_TASK] = asyncio.create_task(
+        _chat_file_after_batch_debounce(
             context,
-            user_id=user_id,
             chat_id=chat_id,
-            instruction=instr,
-        )
-        return
-    n = len(entries)
-    url_n = len(_chat_url_buffer_list(context))
-    if url_n:
-        await context.bot.send_message(
-            chat_id,
-            f"Принято файлов: {n}, ссылок в очереди: {url_n}. "
-            "Напиши, что сделать (например, сравни тарифы).",
-        )
-    else:
-        await context.bot.send_message(
-            chat_id,
-            f"Принято файлов: {n}. Напиши, что с ними сделать "
-            "(например, сравни тарифы и предложи лучший).",
-        )
+            user_id=user_id,
+        ),
+    )
 
 
 async def _chat_file_buffer_append(
@@ -6174,34 +6252,18 @@ async def _chat_file_buffer_append(
     if cap and not context.user_data.get(_CHAT_FILE_PENDING_INSTRUCTION):
         context.user_data[_CHAT_FILE_PENDING_INSTRUCTION] = cap
 
-    if media_group_id is not None:
-        gid_key = str(media_group_id)
-        if context.user_data.get(_CHAT_FILE_BATCH_GID) != gid_key:
-            _chat_file_cancel_batch_task(context)
-            context.user_data[_CHAT_FILE_BATCH_GID] = gid_key
-        _chat_file_cancel_batch_task(context)
-        context.user_data[_CHAT_FILE_BATCH_TASK] = asyncio.create_task(
-            _chat_file_after_batch_debounce(
-                context,
-                chat_id=chat_id,
-                user_id=user_id,
-            ),
-        )
-        return
+    if len(buf) == 1 and not context.user_data.get(_CHAT_FILE_BATCH_ACK_SENT):
+        context.user_data[_CHAT_FILE_BATCH_ACK_SENT] = True
+        await update.message.reply_text("Принимаю файлы…")
 
-    pending = (context.user_data.get(_CHAT_FILE_PENDING_INSTRUCTION) or "").strip()
-    if pending and len(buf) == 1:
-        await _chat_file_flush_with_instruction(
-            update,
-            context,
-            user_id=user_id,
-            chat_id=chat_id,
-            instruction=pending,
-        )
-        return
-    n = len(buf)
-    await update.message.reply_text(
-        f"Файл принят ({n}). Пришли ещё документы или напиши, что с ними сделать.",
+    batch_key = (
+        str(media_group_id) if media_group_id is not None else "doc_batch"
+    )
+    _chat_file_schedule_batch_debounce(
+        context,
+        chat_id=chat_id,
+        user_id=user_id,
+        batch_key=batch_key,
     )
 
 
