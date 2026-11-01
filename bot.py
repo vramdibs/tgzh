@@ -515,9 +515,11 @@ def _chat_imagine_size_label(size: str, active: bool) -> str:
 
 def _chat_imagine_size_keyboard_rows(
     context: ContextTypes.DEFAULT_TYPE,
+    *,
+    include_original: bool = True,
 ) -> list[list[InlineKeyboardButton]]:
     current = _chat_imagine_pick_size(context)
-    return [
+    rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
                 _chat_imagine_size_label("1024x1024", current == "1024x1024"),
@@ -528,16 +530,20 @@ def _chat_imagine_size_keyboard_rows(
                 callback_data="chat:imagine:size:256x256",
             ),
         ],
-        [
-            InlineKeyboardButton(
-                _chat_imagine_size_label(
-                    image_gen.CHAT_IMAGINE_SIZE_ORIGINAL,
-                    current == image_gen.CHAT_IMAGINE_SIZE_ORIGINAL,
-                ),
-                callback_data=f"chat:imagine:size:{image_gen.CHAT_IMAGINE_SIZE_ORIGINAL}",
-            ),
-        ],
     ]
+    if include_original:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    _chat_imagine_size_label(
+                        image_gen.CHAT_IMAGINE_SIZE_ORIGINAL,
+                        current == image_gen.CHAT_IMAGINE_SIZE_ORIGINAL,
+                    ),
+                    callback_data=f"chat:imagine:size:{image_gen.CHAT_IMAGINE_SIZE_ORIGINAL}",
+                ),
+            ],
+        )
+    return rows
 
 
 def _activate_chat_imagine_session(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2321,16 +2327,10 @@ def _chat_imagine_choice_help_html() -> str:
     return (
         "<b>Сгенерировать фото</b>\n\n"
         "Выбери вариант:\n"
-        "• <b>Улучшайзер</b> — пришли фото; живописная перерисовка с сохранением "
-        "сюжета и лица (как раньше). Подпись — по желанию\n"
-        "• <b>Рисунок из книги</b> — иллюстрация в мягком painterly-стиле "
-        "эталона, сюжет с твоего снимка\n"
-        "• <b>Стиль комикса</b> — контуры, halftone и палитра "
-        "как у эталона комикса\n"
-        "• <b>Свой промпт</b> — опишешь картинку одним сообщением "
-        f"(до {image_gen.PROMPT_MAX_LEN} символов)\n"
-        "• <b>Пример и справка</b> — текст примера и генерация по купе поезда\n\n"
-        "Команда <code>/imagine</code> без текста открывает это же меню."
+        "• <b>Улучшайзер</b> - слегка живописная перерисовка твоего фото\n"
+        "• <b>Рисунок из книги</b> - иллюстрация в мягком painterly-стиле\n"
+        "• <b>Стиль комикса</b> - контуры, halftone и палитра как у комикса\n"
+        "• <b>Свой промпт</b> - опишешь картинку одним сообщением"
     )
 
 
@@ -2338,7 +2338,7 @@ def _chat_imagine_example_help_html() -> str:
     example = _h(_CHAT_IMAGINE_EXAMPLE_PROMPT)
     return (
         "<b>Пример и справка</b>\n\n"
-        "Кнопка <b>Сгенерировать по примеру</b> ниже запустит картинку "
+        "Кнопка <b>👉 Сгенерировать пример</b> ниже запустит картинку "
         "по готовому промпту (купе поезда, 1024×1024).\n\n"
         "<b>Текст примера</b> (можно скопировать):\n"
         f"<pre>{example}</pre>"
@@ -2350,7 +2350,7 @@ def _chat_imagine_example_help_keyboard() -> InlineKeyboardMarkup:
         [
             [
                 InlineKeyboardButton(
-                    "Сгенерировать по примеру",
+                    "👉 Сгенерировать пример",
                     callback_data="chat:imagine:example_run",
                 ),
             ],
@@ -2370,7 +2370,7 @@ def _chat_imagine_wait_keyboard(
                 callback_data="chat:imagine:example_info",
             ),
         ],
-        *_chat_imagine_size_keyboard_rows(context),
+        *_chat_imagine_size_keyboard_rows(context, include_original=False),
         [InlineKeyboardButton("Назад к выбору", callback_data="chat:imagine")],
     ]
     return InlineKeyboardMarkup(rows)
@@ -2378,10 +2378,8 @@ def _chat_imagine_wait_keyboard(
 
 def _chat_imagine_custom_prompt_help_html() -> str:
     return (
-        "<b>Свой промпт</b> — пришли описание картинки одним сообщением "
-        f"(до {image_gen.PROMPT_MAX_LEN} символов).\n"
-        "Размер кадра — кнопками ниже (256×256, 1024×1024 или оригинальные "
-        "пропорции, длинная сторона до 1280)."
+        "Напиши или надиктуй голосом описание картинки одним сообщением "
+        f"(до {image_gen.PROMPT_MAX_LEN} символов)."
     )
 
 
@@ -2450,15 +2448,12 @@ def _chat_imagine_style_enhancer_help_html() -> str:
     n = image_gen.image_gen_style_album_limit()
     return (
         "<b>Улучшайзер</b>\n\n"
-        f"Пришли от <b>1 до {n} фото</b> - бот перерисует их в мягком живописном стиле "
-        "эталона, сохранив сюжет и черты лица. "
-        "Сцену купе и персонажей из эталона копировать не будет.\n\n"
-        "Одно фото: подпись может быть подробной, с деталями правки.\n"
+        f"Пришли до {n} фото - бот перерисует их в мягком живописном стиле "
+        "эталона, сохранив сюжет и черты лица.\n\n"
+        "Если одно фото: подпись может быть подробной, с деталями правки.\n"
         "Несколько фото: одна подпись на все и только короткое общее уточнение, "
-        "например «сделай ярче».\n"
-        "Размер кадра - кнопками ниже; <b>Оригинал до 1280</b> сохраняет пропорции "
-        "снимка (длинная сторона не больше 1280).\n\n"
-        "После результата можно править картинку текстом (например «убери провода») "
+        "например «сделай ярче».\n\n"
+        "Последнее фото можно изменить (например «убери провода») "
         "без повторной загрузки фото."
     )
 
@@ -2467,15 +2462,13 @@ def _chat_imagine_style_book_help_html() -> str:
     n = image_gen.image_gen_style_album_limit()
     return (
         "<b>Рисунок из книги</b>\n\n"
-        f"Пришли от <b>1 до {n} фото</b> - бот перерисует их как book-illustration "
-        "в мягком painterly-стиле эталона, сохранив сюжет с твоего снимка. "
-        "Купе, пейзаж за окном и героев с эталона не копирует.\n\n"
-        "Одно фото: подпись может быть подробной.\n"
+        f"Пришли до {n} фото - бот перерисует их как book-illustration "
+        "в мягком painterly-стиле эталона, сохранив сюжет с твоего снимка.\n\n"
+        "Если одно фото: подпись может быть подробной.\n"
         "Несколько фото: одна короткая общая подпись на все, "
-        "например «сделай ярче».\n"
-        "Размер кадра - кнопками ниже; <b>Оригинал до 1280</b> сохраняет пропорции "
-        "снимка (длинная сторона не больше 1280).\n\n"
-        "После результата можно править картинку текстом без повторной загрузки фото."
+        "например «сделай ярче».\n\n"
+        "Последнее фото можно править через описание текстом "
+        "(без повторной загрузки фото)."
     )
 
 
@@ -2488,15 +2481,13 @@ def _chat_imagine_style_comic_help_html() -> str:
     n = image_gen.image_gen_style_album_limit()
     return (
         "<b>Стиль комикса</b>\n\n"
-        f"Пришли от <b>1 до {n} фото</b> - бот перерисует их в стиле комикса "
-        "(контуры, halftone, cel-shading по эталону), сохранив сюжет с твоего снимка. "
-        "Панели и персонажей с эталона копировать не будет.\n\n"
-        "Одно фото: подпись может быть подробной.\n"
+        f"Прикрепи до {n} фото - бот перерисует их в стиле комикса "
+        "(контуры, halftone, cel-shading по эталону), сохранив сюжет с твоего снимка.\n\n"
+        "Если одно фото: подпись может быть подробной.\n"
         "Несколько фото: одна короткая общая подпись на все, "
-        "например «сделай ярче».\n"
-        "Размер кадра - кнопками ниже; <b>Оригинал до 1280</b> сохраняет пропорции "
-        "снимка (длинная сторона не больше 1280).\n\n"
-        "После результата можно править картинку текстом без повторной загрузки фото."
+        "например «сделай ярче».\n\n"
+        "После результата можно поправить последнюю картинку текстом "
+        "без повторной загрузки."
     )
 
 
@@ -2966,6 +2957,11 @@ async def _handle_chat_callback(
                 return
             context.user_data.pop(_CHAT_IMAGINE_STYLE_PHOTO_WAIT, None)
             context.user_data.pop(_CHAT_IMAGINE_STYLE_PROFILE, None)
+            if _chat_imagine_pick_size(context) == image_gen.CHAT_IMAGINE_SIZE_ORIGINAL:
+                _set_chat_imagine_pick_size(
+                    context,
+                    image_gen.CHAT_IMAGINE_DEFAULT_PICK_SIZE,
+                )
             context.user_data[_CHAT_IMG_PROMPT_WAIT] = True
             await _answer_query_once(query, "Жду описание картинки.")
             with suppress(BadRequest, Exception):

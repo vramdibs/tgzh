@@ -280,7 +280,7 @@ def test_chat_imagine_wait_keyboard_includes_example_and_back() -> None:
     assert "chat:imagine" in callbacks
     assert "chat:imagine:size:256x256" in callbacks
     assert "chat:imagine:size:1024x1024" in callbacks
-    assert f"chat:imagine:size:{image_gen.CHAT_IMAGINE_SIZE_ORIGINAL}" in callbacks
+    assert f"chat:imagine:size:{image_gen.CHAT_IMAGINE_SIZE_ORIGINAL}" not in callbacks
     assert "chat:list" not in callbacks
     assert "chat:model" not in callbacks
 
@@ -511,7 +511,7 @@ def test_style_album_limit_ten_when_pool_is_twelve(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(image_gen, "image_gen_max_concurrent", lambda: 12)
     assert image_gen.image_gen_style_album_limit() == 10
     assert "1 до 10" in bot._chat_imagine_style_wait_text_reply()
-    assert "<b>1 до 10 фото</b>" in bot._chat_imagine_style_photo_help_html()
+    assert "Пришли до 10 фото" in bot._chat_imagine_style_photo_help_html()
     assert bot._style_batch_gate("", 10) is None
     assert "не больше 10" in (bot._style_batch_gate("", 11) or "")
 
