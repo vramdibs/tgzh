@@ -3039,12 +3039,13 @@ async def _handle_chat_callback(
         current = await asyncio.to_thread(
             user_storage.chat_model_get, USER_DB_PATH, user_id,
         )
+        current_label = ai_checker.chat_cursor_model_label(current)
         names = ", ".join(label for _, label in ai_checker.chat_cursor_model_catalog())
         body = (
-            "<b>Модель Cursor</b>\n"
-            "Composer и Grok, без Fast, reasoning - Low.\n"
-            f"Доступны: {_h(names)}.\n"
-            f"Сейчас: <b>{_h(ai_checker.chat_cursor_model_label(current))}</b>"
+            _chat_menu_body_html(current_label)
+            + "\n\n<b>Модель Cursor</b>\n"
+            + "Composer и Grok, без Fast, reasoning - Low.\n"
+            + f"Доступны: {_h(names)}."
         )
         with suppress(BadRequest, Exception):
             await query.edit_message_text(
@@ -3058,15 +3059,11 @@ async def _handle_chat_callback(
         saved = await asyncio.to_thread(
             user_storage.chat_model_set, USER_DB_PATH, user_id, slug,
         )
-        await _answer_query_once(
-            query, f"Модель: {ai_checker.chat_cursor_model_label(saved)}",
-        )
+        saved_label = ai_checker.chat_cursor_model_label(saved)
+        await _answer_query_once(query, f"Модель: {saved_label}")
         with suppress(BadRequest, Exception):
             await query.edit_message_text(
-                (
-                    "<b>Модель Cursor</b>\n"
-                    f"Выбрано: <b>{_h(ai_checker.chat_cursor_model_label(saved))}</b>"
-                ),
+                _chat_menu_body_html(saved_label),
                 reply_markup=_chat_model_keyboard(saved),
                 parse_mode=ParseMode.HTML,
             )
