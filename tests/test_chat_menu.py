@@ -52,11 +52,33 @@ def test_chat_menu_body_html_same_intro_for_each_catalog_model(
 
 
 def test_chat_imagine_compact_keyboard_has_one_redraw_button() -> None:
-    flat = _flatten(bot._chat_imagine_compact_keyboard())
+    flat = _flatten(bot._chat_imagine_compact_keyboard_redraw())
     callbacks = [c for _, c in flat]
     labels = [t for t, _ in flat]
     assert callbacks == ["chat:imagine:style_photo"]
     assert labels == ["Перерисовать новое фото"]
+
+
+def test_chat_imagine_compact_keyboard_custom_prompt_buttons() -> None:
+    flat = _flatten(bot._chat_imagine_compact_keyboard_custom())
+    callbacks = [c for _, c in flat]
+    labels = [t for t, _ in flat]
+    assert callbacks == ["chat:imagine:again", "chat:imagine:custom"]
+    assert labels == ["Сгенерировать еще", "Новый промпт"]
+
+
+def test_chat_imagine_compact_keyboard_uses_post_kb_flag() -> None:
+    class _Ctx:
+        def __init__(self) -> None:
+            self.user_data: dict = {}
+
+    ctx = _Ctx()
+    assert _flatten(bot._chat_imagine_compact_keyboard(ctx))[0][1] == "chat:imagine:style_photo"
+    ctx.user_data[bot._CHAT_IMAGINE_POST_KB] = bot._CHAT_IMAGINE_POST_KB_CUSTOM
+    assert [c for _, c in _flatten(bot._chat_imagine_compact_keyboard(ctx))] == [
+        "chat:imagine:again",
+        "chat:imagine:custom",
+    ]
 
 
 def test_chat_model_keyboard_lists_available_composer_grok(

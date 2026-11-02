@@ -413,6 +413,13 @@ _CHAT_IMAGINE_LAST_PNG_MAX_BYTES = 6 * 1024 * 1024
 # После успешной генерации - урезанное меню режима фото (auto_compact).
 _CHAT_IMAGINE_UI_COMPACT = "chat_imagine_ui_compact"
 _CHAT_IMAGINE_SIZE = "chat_imagine_size"
+# Последняя успешная генерация «Свой промпт» (кнопка «Сгенерировать еще»).
+_CHAT_IMAGINE_LAST_PROMPT = "chat_imagine_last_prompt"
+_CHAT_IMAGINE_LAST_GEN_SIZE = "chat_imagine_last_gen_size"
+_CHAT_IMAGINE_POST_KB = "chat_imagine_post_kb"
+_CHAT_IMAGINE_REPEAT_SAME = "chat_imagine_repeat_same"
+_CHAT_IMAGINE_POST_KB_CUSTOM = "custom"
+_CHAT_IMAGINE_POST_KB_REDRAW = "redraw"
 _CHAT_IMAGINE_GENERATE_PLACEHOLDER = "Генерирую изображение, это займет пару минут.."
 _CHAT_IMAGINE_STYLE_REDRAW_PLACEHOLDER = "Перерисовываю фото, это займет пару минут.."
 _CHAT_IMAGINE_EDIT_PLACEHOLDER = "Правлю последнюю картинку, это займет пару минут.."
@@ -491,6 +498,10 @@ def _clear_chat_imagine_session(context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop(_CHAT_IMAGINE_SESSION, None)
     context.user_data.pop(_CHAT_IMAGINE_LAST_PNG, None)
     context.user_data.pop(_CHAT_IMAGINE_UI_COMPACT, None)
+    context.user_data.pop(_CHAT_IMAGINE_LAST_PROMPT, None)
+    context.user_data.pop(_CHAT_IMAGINE_LAST_GEN_SIZE, None)
+    context.user_data.pop(_CHAT_IMAGINE_POST_KB, None)
+    context.user_data.pop(_CHAT_IMAGINE_REPEAT_SAME, None)
 
 
 def _chat_imagine_pick_size(context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -2258,7 +2269,7 @@ def _chat_menu_keyboard(
     return InlineKeyboardMarkup(rows)
 
 
-def _chat_imagine_compact_keyboard() -> InlineKeyboardMarkup:
+def _chat_imagine_compact_keyboard_redraw() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
@@ -2269,6 +2280,32 @@ def _chat_imagine_compact_keyboard() -> InlineKeyboardMarkup:
             ],
         ],
     )
+
+
+def _chat_imagine_compact_keyboard_custom() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "Сгенерировать еще",
+                    callback_data="chat:imagine:again",
+                ),
+                InlineKeyboardButton(
+                    "Новый промпт",
+                    callback_data="chat:imagine:custom",
+                ),
+            ],
+        ],
+    )
+
+
+def _chat_imagine_compact_keyboard(
+    context: ContextTypes.DEFAULT_TYPE,
+) -> InlineKeyboardMarkup:
+    mode = context.user_data.get(_CHAT_IMAGINE_POST_KB)
+    if mode == _CHAT_IMAGINE_POST_KB_CUSTOM:
+        return _chat_imagine_compact_keyboard_custom()
+    return _chat_imagine_compact_keyboard_redraw()
 
 
 def _chat_imagine_style_profile(context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -2951,6 +2988,37 @@ async def _handle_chat_callback(
                 chat_id=chat_id,
                 prompt=_CHAT_IMAGINE_EXAMPLE_PROMPT,
                 size=image_gen.CHAT_IMAGINE_DEFAULT_PICK_SIZE,
+            )
+            return
+        if sub == "again":
+            if not _is_image_gen_enabled():
+                await _answer_query_once(query, "Генерация изображений не настроена.")
+                return
+            stored = context.user_data.get(_CHAT_IMAGINE_LAST_PROMPT)
+            if not isinstance(stored, str) or not stored.strip():
+                await _answer_query_once(
+                    query,
+                    "Сначала сгенерируй картинку по своему промпту.",
+                )
+                return
+            if context.user_data.get(_CHAT_BUSY):
+                await _answer_query_once(query, "Подожди, идет предыдущая генерация.")
+                return
+            await _answer_query_once(query, "Генерирую еще раз…")
+            if query.message is None:
+                return
+            gen_size = context.user_data.get(_CHAT_IMAGINE_LAST_GEN_SIZE)
+            if not isinstance(gen_size, str) or gen_size not in image_gen.CHAT_IMAGINE_PICK_SIZES:
+                gen_size = _chat_imagine_pick_size(context)
+            context.user_data[_CHAT_IMAGINE_REPEAT_SAME] = True
+            upd = Update(update_id=0, message=query.message)
+            await _handle_chat_imagine_request(
+                upd,
+                context,
+                user_id=user_id,
+                chat_id=chat_id,
+                prompt=stored.strip(),
+                size=gen_size,
             )
             return
         if sub == "custom":
@@ -5004,6 +5072,7 @@ async def _handle_chat_imagine_request(
 ) -> None:
     """Сгенерировать одну картинку и отправить как Telegram-фото."""
     was_awaiting_custom_prompt = bool(context.user_data.get(_CHAT_IMG_PROMPT_WAIT))
+    repeat_same_prompt = bool(context.user_data.pop(_CHAT_IMAGINE_REPEAT_SAME, None))
     context.user_data.pop(_CHAT_IMAGINE_STYLE_PHOTO_WAIT, None)
     msg = update.message
     if msg is None:
@@ -5083,12 +5152,18 @@ async def _handle_chat_imagine_request(
                     chat_id=chat_id,
                     message_id=placeholder.message_id,
                 )
+        if was_awaiting_custom_prompt or repeat_same_prompt:
+            context.user_data[_CHAT_IMAGINE_LAST_PROMPT] = p
+            context.user_data[_CHAT_IMAGINE_LAST_GEN_SIZE] = gen_size
+            context.user_data[_CHAT_IMAGINE_POST_KB] = _CHAT_IMAGINE_POST_KB_CUSTOM
+        else:
+            context.user_data[_CHAT_IMAGINE_POST_KB] = _CHAT_IMAGINE_POST_KB_REDRAW
         _activate_chat_imagine_compact_ui(context)
         try:
             await context.bot.send_photo(
                 chat_id,
                 photo=png_bytes,
-                reply_markup=_chat_imagine_compact_keyboard(),
+                reply_markup=_chat_imagine_compact_keyboard(context),
             )
         except Exception:
             logger.exception("chat imagine send_photo failed user_id=%s", user_id)
@@ -5378,11 +5453,12 @@ async def _handle_chat_imagine_style_batch(
                     message_id,
                 )
                 return str(e)
+            context.user_data[_CHAT_IMAGINE_POST_KB] = _CHAT_IMAGINE_POST_KB_REDRAW
             try:
                 await context.bot.send_photo(
                     chat_id,
                     photo=png_bytes,
-                    reply_markup=_chat_imagine_compact_keyboard(),
+                    reply_markup=_chat_imagine_compact_keyboard(context),
                 )
             except Exception:
                 logger.exception(
@@ -5558,12 +5634,13 @@ async def _handle_chat_imagine_edit(
                     chat_id=chat_id,
                     message_id=placeholder.message_id,
                 )
+        context.user_data[_CHAT_IMAGINE_POST_KB] = _CHAT_IMAGINE_POST_KB_REDRAW
         _activate_chat_imagine_compact_ui(context)
         try:
             await context.bot.send_photo(
                 chat_id,
                 photo=png_bytes,
-                reply_markup=_chat_imagine_compact_keyboard(),
+                reply_markup=_chat_imagine_compact_keyboard(context),
             )
         except Exception:
             logger.exception("chat imagine image_edit send_photo failed user_id=%s", user_id)

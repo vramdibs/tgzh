@@ -43,8 +43,8 @@ class _FakeBot:
         m.message_id = self._next_message_id
         return m
 
-    async def send_photo(self, chat_id, photo, caption=None, **_kw):
-        self.sent_photos.append((chat_id, photo, caption or ""))
+    async def send_photo(self, chat_id, photo, caption=None, reply_markup=None, **_kw):
+        self.sent_photos.append((chat_id, photo, caption or "", reply_markup))
         return None
 
     async def delete_message(self, chat_id, message_id):
@@ -148,6 +148,7 @@ def test_handle_chat_imagine_request_sends_photo_and_records_history(
     monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
     update = _FakeUpdate()
     ctx = _FakeContext()
+    ctx.user_data[bot._CHAT_IMG_PROMPT_WAIT] = True
     png = b"\x89PNG-bytes-from-server"
 
     async def _fake_request(*, user_id, prompt, size=None):
@@ -169,10 +170,19 @@ def test_handle_chat_imagine_request_sends_photo_and_records_history(
         )
 
     assert len(ctx.bot.sent_photos) == 1
-    chat_id, sent_bytes, caption = ctx.bot.sent_photos[0]
+    chat_id, sent_bytes, caption, markup = ctx.bot.sent_photos[0]
     assert chat_id == 7
     assert sent_bytes == png
     assert caption == ""
+    flat = [
+        b.callback_data
+        for row in markup.inline_keyboard
+        for b in row
+    ]
+    assert flat == ["chat:imagine:again", "chat:imagine:custom"]
+    assert ctx.user_data[bot._CHAT_IMAGINE_LAST_PROMPT] == "кот в шапке"
+    assert ctx.user_data[bot._CHAT_IMAGINE_LAST_GEN_SIZE] == "1024x1024"
+    assert ctx.user_data[bot._CHAT_IMAGINE_POST_KB] == bot._CHAT_IMAGINE_POST_KB_CUSTOM
 
     # История содержит парные плейсхолдеры (user / assistant).
     history = ctx.user_data[bot._CHAT_HISTORY]
@@ -211,7 +221,7 @@ def test_handle_chat_imagine_request_sends_photo_without_caption(monkeypatch) ->
             )
         )
 
-    _, _, caption = ctx.bot.sent_photos[0]
+    _, _, caption, _markup = ctx.bot.sent_photos[0]
     assert caption == ""
 
 
@@ -553,6 +563,31 @@ def test_style_batch_shares_short_note_and_deletes_sources(monkeypatch) -> None:
     assert (9, 55) in ctx.bot.deleted
     assert bot._CHAT_IMAGINE_STYLE_PHOTO_WAIT not in ctx.user_data
     assert all(photo[2] == "" for photo in ctx.bot.sent_photos)
+
+
+def test_imagine_again_callback_reruns_stored_prompt(monkeypatch) -> None:
+    monkeypatch.setenv("IMAGE_GEN_BASE_URL", "https://api.example/v1")
+    monkeypatch.setenv("IMAGE_GEN_API_KEY", "k")
+    ctx = _FakeContext()
+    ctx.user_data[bot._CHAT_IMAGINE_LAST_PROMPT] = "космос"
+    ctx.user_data[bot._CHAT_IMAGINE_LAST_GEN_SIZE] = "256x256"
+    msg = _FakeCallbackMessage(1, photo=False)
+    query = _FakeCallbackQuery(msg)
+    captured: list[dict] = []
+
+    async def _fake_handle(*args, **kwargs):
+        captured.append(kwargs)
+
+    with (
+        patch.object(bot, "_answer_query_once", new=AsyncMock()),
+        patch.object(bot, "_handle_chat_imagine_request", side_effect=_fake_handle),
+    ):
+        asyncio.run(bot._handle_chat_callback(query, ctx, "chat:imagine:again"))
+
+    assert len(captured) == 1
+    assert captured[0]["prompt"] == "космос"
+    assert captured[0]["size"] == "256x256"
+    assert ctx.user_data.get(bot._CHAT_IMAGINE_REPEAT_SAME) is True
 
 
 class _FakeCallbackMessage:
