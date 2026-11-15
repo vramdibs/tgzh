@@ -1,0 +1,8 @@
+---
+description: Stub - канон сети и Cursor в stabilnoitochka bench-lan-never-default.mdc
+alwaysApply: false
+---
+
+# cursor-route-on-vpn stub
+
+Не дублировать в чат. Канон: **stabilnoitochka** `.cursor/rules/bench-lan-never-default.mdc`, приоритет **`project-rules-precedence.mdc`**.

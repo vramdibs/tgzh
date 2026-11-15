@@ -4972,6 +4972,11 @@ def _image_gen_server_user_error(status_code: int, body: str) -> str:
             "Сейчас все слоты генерации заняты. "
             "Подождите пару минут и попробуйте снова."
         )
+    if status_code == 504 or "image generation timeout" in (body or "").lower():
+        return (
+            "Генерация не уложилась в лимит времени (часто 3-5 минут на bridge). "
+            "Попробуйте еще раз через минуту или выберите размер 256×256."
+        )
     snippet = (body or "").strip()
     if len(snippet) > 200:
         snippet = snippet[:200] + "…"
