@@ -467,7 +467,9 @@ def test_resolve_original_max1280_from_image_bytes() -> None:
         image_gen.CHAT_IMAGINE_SIZE_ORIGINAL,
         source_bytes=buf.getvalue(),
     )
-    assert out == "1280x640"
+    assert out.startswith("1280x640 ")
+    assert "do not stretch" in out
+    assert out != "1280x640"
 
 
 def test_is_api_client_image_size_accepts_original_token() -> None:
@@ -627,6 +629,7 @@ def test_style_redraw_original_size_from_unshrunk_source(
             ),
         )
 
-    assert captured["json"]["size"] == "1280x640"
+    assert captured["json"]["size"].startswith("1280x640 ")
+    assert "do not stretch" in captured["json"]["size"]
     sent = Image.open(io.BytesIO(base64.b64decode(captured["json"]["source_image_b64"])))
     assert sent.size == (768, 384)

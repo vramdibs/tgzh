@@ -323,6 +323,14 @@ def size_from_image_bytes_max_long_side(
     return f"{w}x{h}"
 
 
+def size_hint_keep_source_aspect(wxh: str) -> str:
+    """Подсказка пропорций для bridge: не цель неравномерного ресайза под WxH."""
+    return (
+        f"{wxh} source aspect only; do not stretch or squash; "
+        "if the tool cannot emit this exact size, use the closest aspect and pad"
+    )
+
+
 def is_api_client_image_size(size: str) -> bool:
     """Допустимое значение поля size в POST /image/generate."""
     s = (size or "").strip()
@@ -346,7 +354,9 @@ def resolve_image_gen_size(
     raw = (override or "").strip()
     if raw == CHAT_IMAGINE_SIZE_ORIGINAL:
         if source_bytes:
-            return size_from_image_bytes_max_long_side(source_bytes)
+            return size_hint_keep_source_aspect(
+                size_from_image_bytes_max_long_side(source_bytes),
+            )
         return _ORIGINAL_PROMPT_SIZE_HINT
     if raw and is_api_client_image_size(raw) and raw != CHAT_IMAGINE_SIZE_ORIGINAL:
         if raw in _ALLOWED_SIZES:
