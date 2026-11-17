@@ -449,6 +449,14 @@ def test_nudge_imagine_when_edit_request_in_plain_chat(
         {"role": "user", "content": "[фото: x]"},
     ]
     assert bot._should_nudge_imagine_for_edit_in_chat(ctx, "убери провода с фото")
+    assert not bot._should_nudge_imagine_for_edit_in_chat(
+        ctx,
+        "почему тогда под пролетом обломки? они на передней части снимка",
+    )
+    assert not bot._should_nudge_imagine_for_edit_in_chat(
+        ctx,
+        "на снимке опоры светлые, обломки всегда за ними",
+    )
 
 
 def test_handle_chat_imagine_edit_calls_server(monkeypatch) -> None:

@@ -707,8 +707,15 @@ def _should_route_chat_text_to_imagine_edit(
 
 
 def _text_looks_like_image_edit_request(text: str) -> bool:
+    """Просьба править картинку, а не разбор уже присланного фото.
+
+    Одного слова «снимок» / «фото» мало: в `/chat` им обсуждают кадр.
+    Вопрос («почему ... на снимке») тоже идет в модель, даже если рядом глагол.
+    """
     t = (text or "").strip().lower()
     if not t or t.startswith("/"):
+        return False
+    if _text_looks_like_chat_question(t):
         return False
     edit_verbs = (
         "убер",
@@ -725,10 +732,7 @@ def _text_looks_like_image_edit_request(text: str) -> bool:
         "remove ",
         "erase ",
     )
-    if any(v in t for v in edit_verbs):
-        return True
-    photo_refs = ("фото", "сним", "картин", "изображен", "на фото", "с фото")
-    return any(p in t for p in photo_refs) and len(t) < 500
+    return any(v in t for v in edit_verbs)
 
 
 def _should_nudge_imagine_for_edit_in_chat(
