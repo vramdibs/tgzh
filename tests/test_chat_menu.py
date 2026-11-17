@@ -170,6 +170,7 @@ def test_chat_cmd_opens_without_password(monkeypatch: pytest.MonkeyPatch) -> Non
                         "content": "[перерисовано фото в стиле примера: x]",
                     },
                 ],
+                bot._CHAT_DIALOG_ID: 77,
             }
             self.bot = object()
 
@@ -191,6 +192,8 @@ def test_chat_cmd_opens_without_password(monkeypatch: pytest.MonkeyPatch) -> Non
     assert bot._CHAT_IMAGINE_SESSION not in ctx.user_data
     assert bot._CHAT_IMAGINE_LAST_PNG not in ctx.user_data
     assert bot._CHAT_IMAGINE_UI_COMPACT not in ctx.user_data
+    assert bot._CHAT_HISTORY not in ctx.user_data
+    assert bot._CHAT_DIALOG_ID not in ctx.user_data
     assert not bot._should_route_chat_text_to_imagine_edit(
         ctx,
         "Покажи листинг директории",

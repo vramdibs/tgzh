@@ -90,6 +90,63 @@ class _FakeUpdate:
         self.message = _FakeMessage()
 
 
+def test_history_without_prior_photo_turns_drops_image_pair() -> None:
+    history = [
+        {"role": "user", "content": "привет"},
+        {"role": "assistant", "content": "здравствуй"},
+        {"role": "user", "content": "[фото без подписи]"},
+        {"role": "assistant", "content": "это дорожный знак"},
+        {"role": "user", "content": "[/imagine style] [фото: ярче]"},
+        {"role": "assistant", "content": "[перерисовано фото в стиле примера: ярче]"},
+    ]
+    kept = bot._history_without_prior_photo_turns(history)
+    assert kept == [
+        {"role": "user", "content": "привет"},
+        {"role": "assistant", "content": "здравствуй"},
+    ]
+
+
+def test_new_photo_does_not_send_prior_photo_turns_to_model() -> None:
+    update = _FakeUpdate()
+    ctx = _FakeContext()
+    ctx.user_data[bot._CHAT_HISTORY] = [
+        {"role": "user", "content": "[фото: знак]"},
+        {"role": "assistant", "content": "Верхняя Грязнуха"},
+        {"role": "user", "content": "а это что?"},
+        {"role": "assistant", "content": "не знаю"},
+    ]
+    seen: dict = {}
+
+    async def _fake_stream(*_a, **kw):
+        seen["history"] = kw.get("history")
+        return "вакансия"
+
+    with (
+        patch.object(bot, "_stream_chat_response", side_effect=_fake_stream),
+        patch.object(bot.user_storage, "chat_dialog_upsert", return_value=7),
+    ):
+        asyncio.run(
+            bot._handle_chat_user_message(
+                update,
+                ctx,
+                user_id=1,
+                chat_id=1,
+                text="Что на фото?\n\nРазбери только это вложение.",
+                image_b64="NEW",
+                image_mime="image/jpeg",
+                history_text="[фото без подписи]",
+            ),
+        )
+
+    assert seen["history"] == [
+        {"role": "user", "content": "а это что?"},
+        {"role": "assistant", "content": "не знаю"},
+    ]
+    stored = ctx.user_data[bot._CHAT_HISTORY]
+    assert stored[0]["content"] == "[фото: знак]"
+    assert stored[-2]["content"] == "[фото без подписи]"
+
+
 def test_handle_chat_user_message_with_image_stores_placeholder_history() -> None:
     """С картинкой история не должна содержать base64 — только текст-плейсхолдер."""
     update = _FakeUpdate()

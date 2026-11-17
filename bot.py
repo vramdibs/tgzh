@@ -586,6 +586,36 @@ def _strip_imagine_command_prefix(text: str) -> str:
     return t
 
 
+def _user_turn_is_prior_photo(content: str) -> bool:
+    """Реплика про уже разобранный снимок или /imagine, не обычный текст чата."""
+    c = content or ""
+    return "[фото:" in c or "[фото без подписи]" in c or "[/imagine" in c
+
+
+def _history_without_prior_photo_turns(
+    history: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """Убрать из запроса к модели прошлые фото и следующий за ними ответ.
+
+    В RAM история не меняется: выкидывается только копия для текущего снимка,
+    чтобы удаленное в Telegram фото не описывалось снова.
+    """
+    out: list[dict[str, str]] = []
+    skip_next_assistant = False
+    for msg in history:
+        role = str(msg.get("role") or "")
+        content = str(msg.get("content") or "")
+        if skip_next_assistant and role == "assistant":
+            skip_next_assistant = False
+            continue
+        skip_next_assistant = False
+        if role == "user" and _user_turn_is_prior_photo(content):
+            skip_next_assistant = True
+            continue
+        out.append(msg)
+    return out
+
+
 def _chat_history_has_recent_imagine(history: list[dict[str, str]] | None) -> bool:
     for m in (history or [])[-8:]:
         c = str(m.get("content") or "")
@@ -2753,7 +2783,7 @@ async def chat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
     await asyncio.to_thread(user_storage.chat_session_login, USER_DB_PATH, user_id)
-    _activate_chat_session_ram(context, fresh=False)
+    _activate_chat_session_ram(context, fresh=True)
     _clear_chat_imagine_session(context)
     await ai_checker.chat_cursor_refresh_live_catalog()
     await _send_chat_menu(context.bot, chat_id, user_id=user_id, context=context)
@@ -5750,6 +5780,9 @@ async def _handle_chat_user_message(
     history: list[dict[str, str]] = list(context.user_data.get(_CHAT_HISTORY) or [])
     if len(history) > _CHAT_HISTORY_RUNTIME_CAP:
         history = history[-_CHAT_HISTORY_RUNTIME_CAP:]
+    history_for_model = (
+        _history_without_prior_photo_turns(history) if has_image else history
+    )
 
     context.user_data[_CHAT_BUSY] = True
     logger.info(
@@ -5764,7 +5797,7 @@ async def _handle_chat_user_message(
             context,
             chat_id=chat_id,
             user_id=user_id,
-            history=history,
+            history=history_for_model,
             user_text=text,
             image_b64=image_b64,
             image_mime=image_mime,
@@ -6658,6 +6691,10 @@ async def _handle_chat_photo(
 
     image_b64 = base64.b64encode(photo_jpeg).decode("ascii")
     text_for_llm = caption or _CHAT_PHOTO_DEFAULT_CAPTION
+    text_for_llm = (
+        f"{text_for_llm}\n\n"
+        "Разбери только это вложение. Предыдущие картинки не описывай."
+    )
     history_text = (
         f"[фото: {caption}]" if caption else "[фото без подписи]"
     )
