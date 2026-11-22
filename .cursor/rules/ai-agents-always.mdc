@@ -1,0 +1,6 @@
+---
+description: Always include repository agent guide
+alwaysApply: true
+---
+
+@AGENTS.md

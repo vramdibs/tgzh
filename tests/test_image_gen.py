@@ -365,6 +365,9 @@ def test_generate_image_style_redraw_book_profile(
         )
 
     assert captured["json"]["prompt"] == image_gen.STYLE_REDRAW_BOOK_DEFAULT_PROMPT
+    assert "Не добавляй" in image_gen.STYLE_REDRAW_BOOK_DEFAULT_PROMPT
+    assert "купе" not in image_gen.STYLE_REDRAW_BOOK_DEFAULT_PROMPT
+    assert "лицо" not in image_gen.STYLE_REDRAW_BOOK_DEFAULT_PROMPT
     assert base64.b64decode(captured["json"]["style_reference_b64"]) == b"book-ref"
 
 
